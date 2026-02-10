@@ -20,6 +20,8 @@ int main(int argc, char* argv[]) {
         std::string arg = argv[i];
         if (arg == "--no-editor") {
             config.enableEditor = false;
+        } else if (arg == "--editor-gui" || arg == "--gui") {
+            config.enableEditorGUI = true;
         } else if (arg == "--api-key" && i + 1 < argc) {
             config.geminiAPIKey = argv[++i];
         } else if (arg == "--width" && i + 1 < argc) {
@@ -29,6 +31,7 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--help" || arg == "-h") {
             std::cout << "GameVoid Engine v0.1.0\n"
                       << "Usage: GameVoid [options]\n"
+                      << "  --editor-gui, --gui  Graphical editor (Dear ImGui)\n"
                       << "  --no-editor          Run real-time loop (skip CLI editor)\n"
                       << "  --api-key <KEY>      Set Google Gemini API key\n"
                       << "  --width <W>          Window width  (default 1280)\n"

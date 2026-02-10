@@ -62,6 +62,19 @@ PFN_glDisableVertexAttribArray glDisableVertexAttribArray = nullptr;
 PFN_glActiveTexture          glActiveTexture          = nullptr;
 PFN_glGenerateMipmap         glGenerateMipmap         = nullptr;
 
+// Framebuffer
+PFN_glGenFramebuffers          glGenFramebuffers          = nullptr;
+PFN_glDeleteFramebuffers       glDeleteFramebuffers       = nullptr;
+PFN_glBindFramebuffer          glBindFramebuffer          = nullptr;
+PFN_glFramebufferTexture2D     glFramebufferTexture2D     = nullptr;
+PFN_glCheckFramebufferStatus   glCheckFramebufferStatus   = nullptr;
+PFN_glGenRenderbuffers         glGenRenderbuffers         = nullptr;
+PFN_glDeleteRenderbuffers      glDeleteRenderbuffers      = nullptr;
+PFN_glBindRenderbuffer         glBindRenderbuffer         = nullptr;
+PFN_glRenderbufferStorage      glRenderbufferStorage      = nullptr;
+PFN_glFramebufferRenderbuffer  glFramebufferRenderbuffer  = nullptr;
+PFN_glBlitFramebuffer          glBlitFramebuffer          = nullptr;
+
 // ── Loader implementation ──────────────────────────────────────────────────
 
 #define GV_LOAD(name) \
@@ -120,6 +133,19 @@ bool gvLoadGL() {
     // Texture
     GV_LOAD(glActiveTexture);
     GV_LOAD(glGenerateMipmap);
+
+    // Framebuffer
+    GV_LOAD(glGenFramebuffers);
+    GV_LOAD(glDeleteFramebuffers);
+    GV_LOAD(glBindFramebuffer);
+    GV_LOAD(glFramebufferTexture2D);
+    GV_LOAD(glCheckFramebufferStatus);
+    GV_LOAD(glGenRenderbuffers);
+    GV_LOAD(glDeleteRenderbuffers);
+    GV_LOAD(glBindRenderbuffer);
+    GV_LOAD(glRenderbufferStorage);
+    GV_LOAD(glFramebufferRenderbuffer);
+    GV_LOAD(glBlitFramebuffer);
 
     return ok;
 }

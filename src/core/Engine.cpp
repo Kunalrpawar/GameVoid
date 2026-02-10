@@ -2,9 +2,16 @@
 // GameVoid Engine — Engine Bootstrap Implementation
 // ============================================================================
 #include "core/Engine.h"
+#include "core/FPSCamera.h"
+#include "physics/Physics.h"
 #include "renderer/Camera.h"
 #include "renderer/Lighting.h"
+#include "renderer/MeshRenderer.h"
+#ifdef GV_HAS_GLFW
+#include "core/GLDefs.h"
+#endif
 #include <chrono>
+#include <cstdlib>   // rand()
 
 namespace gv {
 
@@ -14,8 +21,8 @@ bool Engine::Init(const EngineConfig& config) {
     GV_LOG_INFO("  GameVoid Engine v0.1.0 — Initialising");
     GV_LOG_INFO("========================================");
 
-    // ── Window (only in non-editor / window mode) ────────────────────────────────
-    if (!config.enableEditor) {
+    // ── Window (only in non-editor / window mode, or GUI editor) ───────────────
+    if (!config.enableEditor || config.enableEditorGUI) {
         if (!m_Window.Init(config.windowWidth, config.windowHeight, config.windowTitle)) {
             GV_LOG_FATAL("Failed to create window.");
             return false;
@@ -38,21 +45,67 @@ bool Engine::Init(const EngineConfig& config) {
 
     // Create a default camera
     auto* camObj = defaultScene->CreateGameObject("MainCamera");
-    camObj->GetTransform().SetPosition(0, 2, 10);
+    camObj->GetTransform().SetPosition(0, 1.5f, 5);   // slightly above, 5 units back
     auto* cam = camObj->AddComponent<Camera>();
     cam->SetPerspective(60.0f,
         static_cast<f32>(config.windowWidth) / static_cast<f32>(config.windowHeight),
         0.1f, 1000.0f);
     defaultScene->SetActiveCamera(cam);
+    camObj->AddComponent<FPSCameraController>();   // FPS movement + mouse-look
+    GV_LOG_INFO("[StartupScene] Camera at (0, 1.5, 5) with FPSCameraController.");
 
     // Create a default directional light
     auto* lightObj = defaultScene->CreateGameObject("DirectionalLight");
-    lightObj->GetTransform().SetEulerDeg(-45.0f, -30.0f, 0.0f);
-    lightObj->AddComponent<DirectionalLight>();
+    auto* dirLight = lightObj->AddComponent<DirectionalLight>();
+    dirLight->direction = Vec3(-0.3f, -1.0f, -0.5f);  // from upper-right-front
+    dirLight->intensity = 0.9f;
 
     // Ambient light
     auto* ambientObj = defaultScene->CreateGameObject("AmbientLight");
     ambientObj->AddComponent<AmbientLight>();
+
+    // ── Default visible objects (so the user sees something immediately) ────
+    // 1. A coloured cube that falls from height
+    auto* cubeObj = defaultScene->CreateGameObject("DefaultCube");
+    cubeObj->GetTransform().SetPosition(0.0f, 3.0f, 0.0f);
+    auto* cubeMR = cubeObj->AddComponent<MeshRenderer>();
+    cubeMR->primitiveType = PrimitiveType::Cube;
+    cubeMR->color = Vec4(0.25f, 0.6f, 1.0f, 1.0f);   // sky-blue
+    auto* cubeRB = cubeObj->AddComponent<RigidBody>();
+    cubeRB->useGravity = true;
+    cubeObj->AddComponent<Collider>()->type = ColliderType::Box;
+    m_Physics.RegisterBody(cubeRB);
+    GV_LOG_INFO("[StartupScene] Created 'DefaultCube' at (0, 3, 0) with RigidBody.");
+
+    // 2. A flat triangle offset to the left
+    auto* triObj = defaultScene->CreateGameObject("DefaultTriangle");
+    triObj->GetTransform().SetPosition(-2.5f, 0.0f, 0.0f);
+    auto* triMR = triObj->AddComponent<MeshRenderer>();
+    triMR->primitiveType = PrimitiveType::Triangle;
+    triMR->color = Vec4(1.0f, 0.4f, 0.1f, 1.0f);     // orange
+    GV_LOG_INFO("[StartupScene] Created 'DefaultTriangle' at (-2.5, 0, 0) (orange).");
+
+    // 3. A second cube that falls from even higher (near the first to collide)
+    auto* cube2Obj = defaultScene->CreateGameObject("RotatedCube");
+    cube2Obj->GetTransform().SetPosition(0.3f, 6.0f, 0.0f);
+    cube2Obj->GetTransform().SetScale(0.75f);
+    auto* cube2MR = cube2Obj->AddComponent<MeshRenderer>();
+    cube2MR->primitiveType = PrimitiveType::Cube;
+    cube2MR->color = Vec4(0.2f, 0.9f, 0.3f, 1.0f);   // green
+    auto* cube2RB = cube2Obj->AddComponent<RigidBody>();
+    cube2RB->useGravity = true;
+    cube2Obj->AddComponent<Collider>()->type = ColliderType::Box;
+    m_Physics.RegisterBody(cube2RB);
+    GV_LOG_INFO("[StartupScene] Created 'RotatedCube' at (0.3, 6, 0) with RigidBody.");
+
+    // 4. Ground plane (visual only — floor constraint is Y=0 in physics)
+    auto* floorObj = defaultScene->CreateGameObject("Floor");
+    floorObj->GetTransform().SetPosition(0.0f, -0.05f, 0.0f);
+    floorObj->GetTransform().SetScale(20.0f, 0.1f, 20.0f);
+    auto* floorMR = floorObj->AddComponent<MeshRenderer>();
+    floorMR->primitiveType = PrimitiveType::Cube;
+    floorMR->color = Vec4(0.35f, 0.35f, 0.4f, 1.0f);   // dark grey
+    GV_LOG_INFO("[StartupScene] Created ground plane.");
 
     // ── Physics ────────────────────────────────────────────────────────────
     if (config.enablePhysics) {
@@ -76,12 +129,29 @@ bool Engine::Init(const EngineConfig& config) {
     m_Audio.Init();
 
     // ── Editor ─────────────────────────────────────────────────────────────
-    if (config.enableEditor) {
+    if (config.enableEditor && !config.enableEditorGUI) {
         m_Editor.Init(defaultScene, &m_Physics, &m_AI, &m_Scripting, &m_Assets);
     }
 
+#ifdef GV_HAS_GLFW
+    // ── GUI Editor (ImGui) ────────────────────────────────────────────────
+    if (config.enableEditorGUI) {
+        auto* glr = static_cast<OpenGLRenderer*>(m_Renderer.get());
+        m_EditorUI.Init(&m_Window, glr, defaultScene,
+                        &m_Physics, &m_AI, &m_Scripting, &m_Assets);
+    }
+#endif
+
     GV_LOG_INFO("Engine initialisation complete.\n");
     m_Running = true;
+
+    // Capture mouse for FPS-style look (Tab to toggle later)
+    // In GUI editor mode, leave cursor free for ImGui interaction
+    if (m_Window.IsInitialised() && !config.enableEditorGUI) {
+        m_Window.SetCursorCaptured(true);
+        GV_LOG_INFO("Cursor captured for FPS camera. Press Tab to toggle.");
+    }
+
     return true;
 }
 
@@ -100,11 +170,71 @@ void Engine::Run() {
     // Start all objects once
     scene->Start();
 
-    // If editor mode, run the CLI instead of a real-time loop
-    if (m_Config.enableEditor) {
+    // If CLI editor mode, run the CLI instead of a real-time loop
+    if (m_Config.enableEditor && !m_Config.enableEditorGUI) {
         m_Editor.Run();
         return;
     }
+
+#ifdef GV_HAS_GLFW
+    // ── GUI Editor loop (ImGui) ────────────────────────────────────────────
+    if (m_Config.enableEditorGUI) {
+        using Clock = std::chrono::high_resolution_clock;
+        auto lastTime = Clock::now();
+
+        GV_LOG_INFO("Entering GUI editor loop.  Use panels to interact.");
+
+        while (m_Running && !m_Window.ShouldClose()) {
+            auto now = Clock::now();
+            f32 dt = std::chrono::duration<f32>(now - lastTime).count();
+            lastTime = now;
+            if (dt > 0.1f) dt = 0.1f;   // clamp stalls
+
+            // ── Input ──────────────────────────────────────────────────
+            m_Window.BeginFrame();
+            m_Window.PollEvents();
+            m_Input.Update();
+
+            if (m_Window.IsKeyDown(GVKey::Escape)) { m_Window.SetShouldClose(true); break; }
+
+            // FPS camera only when ImGui doesn't want keyboard/mouse
+            bool imguiKeyboard = m_EditorUI.WantsCaptureKeyboard();
+            bool imguiMouse    = m_EditorUI.WantsCaptureMouse();
+
+            Camera* activeCam = scene->GetActiveCamera();
+            if (activeCam && m_Window.IsCursorCaptured()) {
+                auto* fps = activeCam->GetOwner()->GetComponent<FPSCameraController>();
+                if (fps && !imguiKeyboard) fps->UpdateFromInput(m_Window, dt);
+            }
+
+            // Tab toggles cursor capture (for FPS navigation in viewport)
+            if (m_Window.IsKeyPressed(GVKey::Tab)) {
+                bool next = !m_Window.IsCursorCaptured();
+                m_Window.SetCursorCaptured(next);
+            }
+
+            // Physics (when playing)
+            if (m_Config.enablePhysics && m_EditorUI.IsPlaying())
+                m_Physics.Step(dt);
+
+            scene->Update(dt);
+
+            // ── ImGui frame (scene is rendered to FBO inside DrawViewport) ──
+            m_EditorUI.BeginFrame();
+            m_EditorUI.Render(dt);
+            m_EditorUI.EndFrame();
+
+            // ── Present ────────────────────────────────────────────────
+            // Restore default framebuffer viewport to full window before swap
+            glViewport(0, 0, static_cast<GLsizei>(m_Window.GetWidth()),
+                               static_cast<GLsizei>(m_Window.GetHeight()));
+            m_Window.SwapBuffers();
+        }
+
+        m_EditorUI.Shutdown();
+        return;
+    }
+#endif
 
     // ── Real-time game loop (window mode) ──────────────────────────────────
     using Clock = std::chrono::high_resolution_clock;
@@ -115,7 +245,10 @@ void Engine::Run() {
     // Background colour (adjustable with arrow keys)
     f32 bgR = 0.10f, bgG = 0.10f, bgB = 0.14f;
 
-    GV_LOG_INFO("Entering window loop.  Escape=quit, Arrows=change bg colour.");
+    // Cube-spawn counter
+    i32 spawnCount = 0;
+
+    GV_LOG_INFO("Entering window loop.  WASD=move  Mouse=look  E=spawn  L=light  Tab=cursor  Esc=quit");
 
     while (m_Running && !m_Window.ShouldClose()) {
         auto now = Clock::now();
@@ -133,6 +266,22 @@ void Engine::Run() {
             break;
         }
 
+        // Tab toggles cursor capture (so you can Alt-Tab / use the OS)
+        if (m_Window.IsKeyPressed(GVKey::Tab)) {
+            bool next = !m_Window.IsCursorCaptured();
+            m_Window.SetCursorCaptured(next);
+            GV_LOG_INFO(next ? "Cursor captured." : "Cursor released.");
+        }
+
+        // L toggles Phong lighting
+        if (m_Window.IsKeyPressed(GVKey::L)) {
+#ifdef GV_HAS_GLFW
+            auto* glr = static_cast<OpenGLRenderer*>(m_Renderer.get());
+            glr->SetLightingEnabled(!glr->IsLightingEnabled());
+            GV_LOG_INFO(glr->IsLightingEnabled() ? "Lighting ON." : "Lighting OFF.");
+#endif
+        }
+
         // Arrow keys adjust background colour
         const f32 speed = 0.5f * dt;
         if (m_Window.IsKeyDown(GVKey::Up))    bgG += speed;
@@ -143,6 +292,44 @@ void Engine::Run() {
         if (bgR < 0) bgR = 0; if (bgR > 1) bgR = 1;
         if (bgG < 0) bgG = 0; if (bgG > 1) bgG = 1;
         if (bgB < 0) bgB = 0; if (bgB > 1) bgB = 1;
+
+        // ── FPS Camera update ──────────────────────────────────────────
+        Camera* activeCam = scene->GetActiveCamera();
+        if (activeCam) {
+            auto* fps = activeCam->GetOwner()->GetComponent<FPSCameraController>();
+            if (fps) fps->UpdateFromInput(m_Window, dt);
+        }
+
+        // ── E-key: spawn a cube at camera position ─────────────────────
+        if (m_Window.IsKeyPressed(GVKey::E) && activeCam) {
+            spawnCount++;
+            Vec3 pos = activeCam->GetOwner()->GetTransform().position;
+
+            std::string name = "SpawnedCube_" + std::to_string(spawnCount);
+            auto* obj = scene->CreateGameObject(name);
+            obj->GetTransform().SetPosition(pos.x, pos.y, pos.z);
+            obj->GetTransform().SetScale(0.5f);        // half-size cubes
+
+            auto* mr = obj->AddComponent<MeshRenderer>();
+            mr->primitiveType = PrimitiveType::Cube;
+            // Random colour per cube
+            mr->color = Vec4(
+                0.3f + static_cast<f32>(std::rand() % 70) / 100.0f,
+                0.3f + static_cast<f32>(std::rand() % 70) / 100.0f,
+                0.3f + static_cast<f32>(std::rand() % 70) / 100.0f,
+                1.0f);
+
+            // Physics — spawned cube falls and collides
+            auto* spawnRB = obj->AddComponent<RigidBody>();
+            spawnRB->useGravity = true;
+            obj->AddComponent<Collider>()->type = ColliderType::Box;
+            m_Physics.RegisterBody(spawnRB);
+
+            GV_LOG_INFO("[Spawn] " + name + " at ("
+                + std::to_string(pos.x) + ", "
+                + std::to_string(pos.y) + ", "
+                + std::to_string(pos.z) + ")");
+        }
 
         // ── Physics ────────────────────────────────────────────────────
         if (m_Config.enablePhysics) m_Physics.Step(dt);

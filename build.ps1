@@ -17,6 +17,7 @@ $ErrorActionPreference = "Stop"
 $commonSources = @(
     "src/main.cpp",
     "src/core/Engine.cpp",
+    "src/core/FPSCamera.cpp",
     "src/renderer/Renderer.cpp",
     "src/renderer/Camera.cpp",
     "src/physics/Physics.cpp",
@@ -42,9 +43,22 @@ if ($CliOnly) {
     }
 
     Write-Host "=== Building GameVoid Engine (Window Mode) ===" -ForegroundColor Cyan
-    $windowSources = @("src/core/Window.cpp", "src/core/GLLoader.cpp")
-    $srcList = ($commonSources + $windowSources) -join " "
-    $cmd = "g++ -std=c++17 -DGV_HAS_GLFW -O2 -Iinclude -Ideps/glfw/include -Ldeps/glfw/lib -o GameVoid.exe $srcList -lglfw3 -lopengl32 -lgdi32"
+    $windowSources = @(
+        "src/core/Window.cpp",
+        "src/core/GLLoader.cpp",
+        "src/editor/EditorUI.cpp"
+    )
+    $imguiSources = @(
+        "deps/imgui/imgui.cpp",
+        "deps/imgui/imgui_draw.cpp",
+        "deps/imgui/imgui_tables.cpp",
+        "deps/imgui/imgui_widgets.cpp",
+        "deps/imgui/imgui_demo.cpp",
+        "deps/imgui/imgui_impl_glfw.cpp",
+        "deps/imgui/imgui_impl_opengl3.cpp"
+    )
+    $srcList = ($commonSources + $windowSources + $imguiSources) -join " "
+    $cmd = "g++ -std=c++17 -DGV_HAS_GLFW -DIMGUI_DISABLE_WIN32_FUNCTIONS -O2 -Iinclude -Ideps/glfw/include -Ideps/imgui -Ldeps/glfw/lib -o GameVoid.exe $srcList -lglfw3 -lopengl32 -lgdi32"
     Write-Host $cmd
     Invoke-Expression $cmd
 }
@@ -53,7 +67,8 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host ""
     Write-Host "Build successful!" -ForegroundColor Green
     if (-not $CliOnly) {
-        Write-Host "  .\GameVoid.exe --no-editor    Window mode"
+        Write-Host "  .\GameVoid.exe --editor-gui    GUI editor (Dear ImGui)"
+        Write-Host "  .\GameVoid.exe --no-editor     Window mode (game loop)"
     }
     Write-Host "  .\GameVoid.exe                 CLI editor mode"
 } else {

@@ -218,6 +218,14 @@ struct Quaternion {
         f32 l = std::sqrt(x*x + y*y + z*z + w*w);
         return (l > 0) ? Quaternion{ x/l, y/l, z/l, w/l } : Quaternion{};
     }
+
+    /// Rotate a Vec3 by this quaternion (q * v * q^-1).
+    Vec3 RotateVec3(const Vec3& v) const {
+        // Optimised formula: result = v + 2w*(qxyz x v) + 2*(qxyz x (qxyz x v))
+        Vec3 q(x, y, z);
+        Vec3 t = q.Cross(v) * 2.0f;
+        return v + t * w + q.Cross(t);
+    }
 };
 
 } // namespace gv

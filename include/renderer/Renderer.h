@@ -111,18 +111,36 @@ public:
     void RenderDemo(f32 dt);
 #endif
 
+    // ── Lighting toggle ──────────────────────────────────────────────────────
+    void SetLightingEnabled(bool e) { m_LightingEnabled = e; }
+    bool IsLightingEnabled() const  { return m_LightingEnabled; }
+
 private:
     u32  m_Width  = 0;
     u32  m_Height = 0;
     bool m_Initialised = false;
+    bool m_LightingEnabled = true;
     Window* m_Window = nullptr;
 
 #ifdef GV_HAS_GLFW
+    // Built-in demo triangle (proves GL context works)
     u32 m_DemoVAO    = 0;
     u32 m_DemoVBO    = 0;
     u32 m_DemoShader = 0;
     void InitDemo();
     void CleanupDemo();
+
+    // ── Scene-rendering resources ──────────────────────────────────────────
+    u32 m_SceneShader = 0;   // flat-colour MVP shader program
+
+    // Built-in primitives (triangle + cube):
+    u32 m_TriVAO = 0, m_TriVBO = 0;
+    u32 m_CubeVAO = 0, m_CubeVBO = 0, m_CubeEBO = 0;
+    i32 m_CubeIndexCount = 0;
+
+    void InitSceneShader();
+    void InitPrimitives();
+    void CleanupScene();
 #endif
 };
 
@@ -146,8 +164,10 @@ public:
     void SetFloat(const std::string& name, f32 value);
     void SetInt(const std::string& name, i32 value);
     void SetVec3(const std::string& name, const Vec3& value);
+    void SetVec4(const std::string& name, const Vec4& value);
     void SetMat4(const std::string& name, const Mat4& value);
 
+    u32 GetProgramID() const { return m_ProgramID; }
     const std::string& GetName() const { return m_Name; }
 
 private:

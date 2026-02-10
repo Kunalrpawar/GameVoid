@@ -144,6 +144,21 @@ void Window::SetTitle(const std::string& title) {
     if (m_Window) glfwSetWindowTitle(m_Window, title.c_str());
 }
 
+void Window::SetCursorCaptured(bool captured) {
+    m_CursorCaptured = captured;
+    if (m_Window) {
+        if (captured) {
+            glfwSetInputMode(m_Window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            // Reset deltas so the first frame doesn't have a huge jump
+            glfwGetCursorPos(m_Window, &m_MouseX, &m_MouseY);
+            m_LastMouseX = m_MouseX;
+            m_LastMouseY = m_MouseY;
+        } else {
+            glfwSetInputMode(m_Window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        }
+    }
+}
+
 // ── GLFW Callbacks (static) ────────────────────────────────────────────────
 
 void Window::KeyCallback(GLFWwindow* w, int key, int /*scancode*/, int action, int /*mods*/) {
@@ -211,6 +226,7 @@ Vec2 Window::GetMouseDelta() const          { return {}; }
 f32  Window::GetScrollDelta() const         { return 0; }
 bool Window::IsInitialised() const          { return false; }
 void Window::SetTitle(const std::string&)   {}
+void Window::SetCursorCaptured(bool)         {}
 
 } // namespace gv
 

@@ -90,6 +90,12 @@ public:
     Vec2 GetMouseDelta() const;
     f32  GetScrollDelta() const;
 
+    // ── Cursor control ─────────────────────────────────────────────────────
+    /// When captured the cursor is hidden and locked to the centre of the
+    /// window — this is what FPS games use for mouse-look.
+    void SetCursorCaptured(bool captured);
+    bool IsCursorCaptured() const { return m_CursorCaptured; }
+
     // ── Accessors ──────────────────────────────────────────────────────────
     u32  GetWidth()  const { return m_Width; }
     u32  GetHeight() const { return m_Height; }
@@ -125,6 +131,7 @@ private:
 
     u32  m_Width  = 0;
     u32  m_Height = 0;
+    bool m_CursorCaptured = false;
 };
 
 } // namespace gv

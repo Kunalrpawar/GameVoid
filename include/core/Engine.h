@@ -13,6 +13,9 @@
 #include "ai/AIManager.h"
 #include "scripting/ScriptEngine.h"
 #include "editor/CLIEditor.h"
+#ifdef GV_HAS_GLFW
+#include "editor/EditorUI.h"
+#endif
 #include "core/Window.h"
 #include "future/Placeholders.h"
 #include <string>
@@ -25,6 +28,7 @@ struct EngineConfig {
     u32 windowWidth  = 1280;
     u32 windowHeight = 720;
     bool enableEditor    = true;
+    bool enableEditorGUI = false;   // --editor-gui: Dear ImGui graphical editor
     bool enablePhysics   = true;
     bool enableScripting = true;
     bool enableAI        = true;
@@ -75,6 +79,9 @@ private:
     AIManager         m_AI;
     ScriptEngine      m_Scripting;
     CLIEditor         m_Editor;
+#ifdef GV_HAS_GLFW
+    EditorUI          m_EditorUI;
+#endif
     Window            m_Window;
     InputManager      m_Input;
     AudioEngine       m_Audio;

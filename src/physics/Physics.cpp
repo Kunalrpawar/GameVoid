@@ -76,6 +76,19 @@ void PhysicsWorld::IntegrateBodies(f32 dt) {
         // Integrate position
         t.position = t.position + rb->velocity * dt;
 
+        // Floor constraint (Y = 0 plane)
+        Collider* col = rb->GetOwner()->GetComponent<Collider>();
+        if (col && col->type == ColliderType::Box) {
+            f32 halfY = col->boxHalfExtents.y * t.scale.y;
+            if (t.position.y - halfY < 0.0f) {
+                t.position.y = halfY;
+                if (rb->velocity.y < 0.0f) {
+                    rb->velocity.y = -rb->velocity.y * rb->restitution;
+                    if (rb->velocity.y < 0.1f) rb->velocity.y = 0.0f;
+                }
+            }
+        }
+
         // Clear forces for next frame
         rb->force  = Vec3::Zero();
         rb->torque = Vec3::Zero();
@@ -84,69 +97,123 @@ void PhysicsWorld::IntegrateBodies(f32 dt) {
 
 void PhysicsWorld::DetectCollisions() {
     m_Collisions.clear();
-    // Broad phase: check every pair of registered bodies that have Colliders
-    // on their owning GameObjects.  N^2 for the skeleton; swap with spatial
-    // partitioning (octree / grid) in production.
+
     for (size_t i = 0; i < m_Bodies.size(); ++i) {
         for (size_t j = i + 1; j < m_Bodies.size(); ++j) {
             RigidBody* a = m_Bodies[i];
             RigidBody* b = m_Bodies[j];
             if (!a->GetOwner() || !b->GetOwner()) continue;
 
+            // Skip static-static pairs
+            if (a->bodyType == RigidBodyType::Static &&
+                b->bodyType == RigidBodyType::Static) continue;
+
             Collider* colA = a->GetOwner()->GetComponent<Collider>();
             Collider* colB = b->GetOwner()->GetComponent<Collider>();
             if (!colA || !colB) continue;
 
+            // Only AABB-AABB (Box) for now
+            if (colA->type != ColliderType::Box ||
+                colB->type != ColliderType::Box) continue;
+
             Vec3 posA = a->GetOwner()->GetTransform().position;
             Vec3 posB = b->GetOwner()->GetTransform().position;
+            Vec3 sclA = a->GetOwner()->GetTransform().scale;
+            Vec3 sclB = b->GetOwner()->GetTransform().scale;
 
-            bool hit = false;
+            // Effective half-extents (collider half-size × transform scale)
+            Vec3 halfA(colA->boxHalfExtents.x * sclA.x,
+                       colA->boxHalfExtents.y * sclA.y,
+                       colA->boxHalfExtents.z * sclA.z);
+            Vec3 halfB(colB->boxHalfExtents.x * sclB.x,
+                       colB->boxHalfExtents.y * sclB.y,
+                       colB->boxHalfExtents.z * sclB.z);
 
-            // Sphere-Sphere
-            if (colA->type == ColliderType::Sphere && colB->type == ColliderType::Sphere) {
-                hit = TestSphereSphere(posA, colA->radius, posB, colB->radius);
-            }
-            // Box-Box (AABB)
-            else if (colA->type == ColliderType::Box && colB->type == ColliderType::Box) {
-                Vec3 minA = posA - colA->boxHalfExtents;
-                Vec3 maxA = posA + colA->boxHalfExtents;
-                Vec3 minB = posB - colB->boxHalfExtents;
-                Vec3 maxB = posB + colB->boxHalfExtents;
-                hit = TestAABB(minA, maxA, minB, maxB);
-            }
-            // Sphere-Box
-            else if (colA->type == ColliderType::Sphere && colB->type == ColliderType::Box) {
-                Vec3 minB = posB - colB->boxHalfExtents;
-                Vec3 maxB = posB + colB->boxHalfExtents;
-                hit = TestSphereAABB(posA, colA->radius, minB, maxB);
-            }
-            else if (colA->type == ColliderType::Box && colB->type == ColliderType::Sphere) {
-                Vec3 minA = posA - colA->boxHalfExtents;
-                Vec3 maxA = posA + colA->boxHalfExtents;
-                hit = TestSphereAABB(posB, colB->radius, minA, maxA);
-            }
+            f32 dx = posB.x - posA.x;
+            f32 dy = posB.y - posA.y;
+            f32 dz = posB.z - posA.z;
+            f32 overlapX = (halfA.x + halfB.x) - std::fabs(dx);
+            f32 overlapY = (halfA.y + halfB.y) - std::fabs(dy);
+            f32 overlapZ = (halfA.z + halfB.z) - std::fabs(dz);
 
-            if (hit) {
+            if (overlapX > 0 && overlapY > 0 && overlapZ > 0) {
                 CollisionInfo info;
                 info.objectA = a->GetOwner();
                 info.objectB = b->GetOwner();
-                info.contactNormal = (posB - posA).Normalized();
-                info.contactPoint  = posA + info.contactNormal * colA->radius;
+
+                // Resolve along axis of least penetration
+                if (overlapX <= overlapY && overlapX <= overlapZ) {
+                    info.contactNormal = Vec3(dx > 0 ? 1.0f : -1.0f, 0, 0);
+                    info.penetrationDepth = overlapX;
+                } else if (overlapY <= overlapX && overlapY <= overlapZ) {
+                    info.contactNormal = Vec3(0, dy > 0 ? 1.0f : -1.0f, 0);
+                    info.penetrationDepth = overlapY;
+                } else {
+                    info.contactNormal = Vec3(0, 0, dz > 0 ? 1.0f : -1.0f);
+                    info.penetrationDepth = overlapZ;
+                }
+                info.contactPoint = Vec3(
+                    (posA.x + posB.x) * 0.5f,
+                    (posA.y + posB.y) * 0.5f,
+                    (posA.z + posB.z) * 0.5f);
                 m_Collisions.push_back(info);
             }
         }
     }
+
+    // Debug log — throttled (once per ~60 calls ≈ once per second)
+    static i32 colLogThrottle = 0;
+    if (!m_Collisions.empty() && (colLogThrottle % 60 == 0)) {
+        for (auto& c : m_Collisions) {
+            GV_LOG_DEBUG("[Physics] Collision: '" + c.objectA->GetName() +
+                         "' <-> '" + c.objectB->GetName() + "'");
+        }
+    }
+    colLogThrottle++;
 }
 
 void PhysicsWorld::ResolveCollisions() {
-    for (auto& col : m_Collisions) {
-        // Impulse-based collision response:
-        // 1. Compute relative velocity along the contact normal
-        // 2. Compute impulse scalar using restitution (bounciness)
-        // 3. Apply equal and opposite impulses to each body
-        // 4. Apply positional correction to fix penetration
-        // Placeholder -- details omitted in skeleton.
-        (void)col;
+    for (auto& c : m_Collisions) {
+        if (!c.objectA || !c.objectB) continue;
+
+        RigidBody* rbA = c.objectA->GetComponent<RigidBody>();
+        RigidBody* rbB = c.objectB->GetComponent<RigidBody>();
+        if (!rbA || !rbB) continue;
+
+        bool dynA = (rbA->bodyType == RigidBodyType::Dynamic);
+        bool dynB = (rbB->bodyType == RigidBodyType::Dynamic);
+        if (!dynA && !dynB) continue;
+
+        Transform& tA = c.objectA->GetTransform();
+        Transform& tB = c.objectB->GetTransform();
+        Vec3 normal = c.contactNormal;
+        f32  depth  = c.penetrationDepth;
+
+        // 1. Positional correction — push objects apart
+        if (dynA && dynB) {
+            tA.position = tA.position - normal * (depth * 0.5f);
+            tB.position = tB.position + normal * (depth * 0.5f);
+        } else if (dynA) {
+            tA.position = tA.position - normal * depth;
+        } else {
+            tB.position = tB.position + normal * depth;
+        }
+
+        // 2. Impulse-based velocity response
+        Vec3 relVel = rbB->velocity - rbA->velocity;
+        f32  velAlongNormal = relVel.Dot(normal);
+        if (velAlongNormal > 0.0f) continue; // already separating
+
+        f32 e = (rbA->restitution < rbB->restitution)
+                    ? rbA->restitution : rbB->restitution;
+        f32 invMassA = dynA ? (1.0f / rbA->mass) : 0.0f;
+        f32 invMassB = dynB ? (1.0f / rbB->mass) : 0.0f;
+
+        f32 j = -(1.0f + e) * velAlongNormal / (invMassA + invMassB);
+        Vec3 impulse = normal * j;
+
+        if (dynA) rbA->velocity = rbA->velocity - impulse * invMassA;
+        if (dynB) rbB->velocity = rbB->velocity + impulse * invMassB;
     }
 }
 

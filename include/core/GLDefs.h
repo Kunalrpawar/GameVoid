@@ -169,7 +169,14 @@ typedef ptrdiff_t      GLintptr;
 #define GL_RENDERBUFFER             0x8D41
 #define GL_COLOR_ATTACHMENT0        0x8CE0
 #define GL_DEPTH_ATTACHMENT         0x8D00
+#define GL_DEPTH_STENCIL_ATTACHMENT 0x821A
 #define GL_FRAMEBUFFER_COMPLETE     0x8CD5
+#define GL_DEPTH_COMPONENT24        0x81A6
+#define GL_DEPTH24_STENCIL8         0x88F0
+#define GL_DEPTH_STENCIL            0x84F9
+#define GL_UNSIGNED_INT_24_8        0x84FA
+#define GL_READ_FRAMEBUFFER         0x8CA8
+#define GL_DRAW_FRAMEBUFFER         0x8CA9
 
 // ============================================================================
 // GL 1.1 Functions  (linked from opengl32.lib — no runtime loading needed)
@@ -207,6 +214,7 @@ extern "C" {
                                                  GLenum format, GLenum type, void* pixels);
     GV_GL_IMPORT void     APIENTRY glFinish(void);
     GV_GL_IMPORT void     APIENTRY glFlush(void);
+    GV_GL_IMPORT GLboolean APIENTRY glIsEnabled(GLenum cap);
 }
 
 // ============================================================================
@@ -272,6 +280,24 @@ typedef void   (APIENTRY *PFN_glDisableVertexAttribArray)(GLuint index);
 typedef void   (APIENTRY *PFN_glActiveTexture)(GLenum texture);
 typedef void   (APIENTRY *PFN_glGenerateMipmap)(GLenum target);
 
+// Framebuffer objects (GL 3.0)
+typedef void   (APIENTRY *PFN_glGenFramebuffers)(GLsizei n, GLuint* ids);
+typedef void   (APIENTRY *PFN_glDeleteFramebuffers)(GLsizei n, const GLuint* ids);
+typedef void   (APIENTRY *PFN_glBindFramebuffer)(GLenum target, GLuint framebuffer);
+typedef void   (APIENTRY *PFN_glFramebufferTexture2D)(GLenum target, GLenum attachment,
+                                                       GLenum textarget, GLuint texture, GLint level);
+typedef GLenum (APIENTRY *PFN_glCheckFramebufferStatus)(GLenum target);
+typedef void   (APIENTRY *PFN_glGenRenderbuffers)(GLsizei n, GLuint* renderbuffers);
+typedef void   (APIENTRY *PFN_glDeleteRenderbuffers)(GLsizei n, const GLuint* renderbuffers);
+typedef void   (APIENTRY *PFN_glBindRenderbuffer)(GLenum target, GLuint renderbuffer);
+typedef void   (APIENTRY *PFN_glRenderbufferStorage)(GLenum target, GLenum internalformat,
+                                                      GLsizei width, GLsizei height);
+typedef void   (APIENTRY *PFN_glFramebufferRenderbuffer)(GLenum target, GLenum attachment,
+                                                          GLenum renderbuffertarget, GLuint renderbuffer);
+typedef void   (APIENTRY *PFN_glBlitFramebuffer)(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
+                                                  GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
+                                                  GLbitfield mask, GLenum filter);
+
 // ── Extern function pointers ───────────────────────────────────────────────
 
 // Shaders
@@ -323,6 +349,19 @@ extern PFN_glDisableVertexAttribArray glDisableVertexAttribArray;
 // Texture
 extern PFN_glActiveTexture          glActiveTexture;
 extern PFN_glGenerateMipmap         glGenerateMipmap;
+
+// Framebuffer
+extern PFN_glGenFramebuffers          glGenFramebuffers;
+extern PFN_glDeleteFramebuffers       glDeleteFramebuffers;
+extern PFN_glBindFramebuffer          glBindFramebuffer;
+extern PFN_glFramebufferTexture2D     glFramebufferTexture2D;
+extern PFN_glCheckFramebufferStatus   glCheckFramebufferStatus;
+extern PFN_glGenRenderbuffers         glGenRenderbuffers;
+extern PFN_glDeleteRenderbuffers      glDeleteRenderbuffers;
+extern PFN_glBindRenderbuffer         glBindRenderbuffer;
+extern PFN_glRenderbufferStorage      glRenderbufferStorage;
+extern PFN_glFramebufferRenderbuffer  glFramebufferRenderbuffer;
+extern PFN_glBlitFramebuffer          glBlitFramebuffer;
 
 // ── Loader ─────────────────────────────────────────────────────────────────
 /// Load all GL 2.0+ / 3.3 function pointers.
