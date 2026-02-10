@@ -117,4 +117,59 @@ void AIManager::SendPromptAsync(const std::string& prompt, ResponseCallback cb) 
     if (cb) cb(resp);
 }
 
+// == generateObjectFromPrompt ================================================
+// The primary AI->game-world entry-point.
+
+GameObject* AIManager::GenerateObjectFromPrompt(const std::string& prompt, Scene& scene) const {
+    GV_LOG_INFO("AIManager::GenerateObjectFromPrompt -- \"" + prompt + "\"");
+
+    // 1. Ask Gemini to describe a single game object in JSON
+    std::string aiPrompt =
+        "You are a game engine assistant. Given the following description, produce "
+        "a single JSON object with fields: name (string), meshType (cube|sphere|plane), "
+        "position [x,y,z], rotation [x,y,z] (degrees), scale [x,y,z], "
+        "materialName (string), hasPhysics (bool), scriptSnippet (string, Lua code or empty). "
+        "Only output JSON, nothing else.\n\nDescription: " + prompt;
+
+    AIResponse resp = SendPrompt(aiPrompt);
+
+    // 2. Parse AI response into an ObjectBlueprint.
+    //    In production: use nlohmann::json to parse resp.text.
+    //    Skeleton: create a sensible default so the function still works.
+    ObjectBlueprint bp;
+    if (resp.success) {
+        // TODO: JSON parse resp.text -> bp fields
+        GV_LOG_INFO("AI returned object description (parse not implemented in skeleton).");
+    } else {
+        GV_LOG_WARN("AI call failed (" + resp.errorMessage + "), using defaults.");
+    }
+
+    // Fallback defaults derived from the prompt keywords
+    if (bp.name.empty())     bp.name = "AI_Object";
+    if (bp.meshType.empty()) {
+        if (prompt.find("sphere") != std::string::npos || prompt.find("ball") != std::string::npos)
+            bp.meshType = "sphere";
+        else if (prompt.find("plane") != std::string::npos || prompt.find("floor") != std::string::npos)
+            bp.meshType = "plane";
+        else
+            bp.meshType = "cube";
+    }
+
+    // 3. Instantiate in the scene
+    GameObject* obj = scene.CreateGameObject(bp.name);
+    obj->GetTransform().SetPosition(bp.position.x, bp.position.y, bp.position.z);
+    obj->GetTransform().SetEulerDeg(bp.rotation.x, bp.rotation.y, bp.rotation.z);
+    obj->GetTransform().SetScale(bp.scale.x, bp.scale.y, bp.scale.z);
+
+    // Attach a MeshRenderer
+    obj->AddComponent<MeshRenderer>();
+    // In production:
+    //   if (bp.meshType == "cube")   mr->SetMesh(Mesh::CreateCube());
+    //   if (bp.meshType == "sphere") mr->SetMesh(Mesh::CreateSphere());
+    //   if (bp.meshType == "plane")  mr->SetMesh(Mesh::CreatePlane());
+
+    GV_LOG_INFO("Generated object '" + bp.name + "' (" + bp.meshType + ") from AI prompt.");
+    return obj;
+}
+
 } // namespace gv

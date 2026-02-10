@@ -62,8 +62,12 @@ private:
     void CmdPhysicsStep(const std::vector<std::string>& args);
     void CmdAIPrompt(const std::vector<std::string>& args);
     void CmdAIGenLevel(const std::vector<std::string>& args);
+    void CmdAIGenObject(const std::vector<std::string>& args);
     void CmdRunScript(const std::vector<std::string>& args);
     void CmdDump(const std::vector<std::string>& args);
+    void CmdAddPhysics(const std::vector<std::string>& args);
+    void CmdCount(const std::vector<std::string>& args);
+    void CmdRename(const std::vector<std::string>& args);
 
     /// Tokenise a raw input line into command + arguments.
     static std::vector<std::string> Tokenise(const std::string& input);

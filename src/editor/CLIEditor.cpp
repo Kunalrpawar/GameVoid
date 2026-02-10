@@ -64,6 +64,14 @@ void CLIEditor::Init(Scene* scene, PhysicsWorld* physics, AIManager* ai,
         [this](Args a){ CmdRunScript(a); });
     RegisterCommand("dump",      "Dump scene hierarchy",
         [this](Args a){ CmdDump(a); });
+    RegisterCommand("aigenerate","aigenerate <prompt>  — AI-generate an object from text",
+        [this](Args a){ CmdAIGenObject(a); });
+    RegisterCommand("addphysics","addphysics <name> [mass]  — add RigidBody+Collider to object",
+        [this](Args a){ CmdAddPhysics(a); });
+    RegisterCommand("count",     "Count all objects in the scene",
+        [this](Args a){ CmdCount(a); });
+    RegisterCommand("rename",    "rename <old> <new>  — rename an object",
+        [this](Args a){ CmdRename(a); });
 
     GV_LOG_INFO("CLIEditor initialised — type 'help' for commands.");
 }
@@ -232,6 +240,49 @@ void CLIEditor::CmdRunScript(const std::vector<std::string>& args) {
 void CLIEditor::CmdDump(const std::vector<std::string>& /*args*/) {
     if (!m_Scene) { std::cout << "No active scene.\n"; return; }
     m_Scene->DumpHierarchy();
+}
+
+// ── New debug commands ─────────────────────────────────────────────────────
+
+void CLIEditor::CmdAIGenObject(const std::vector<std::string>& args) {
+    if (!m_AI || !m_Scene) { std::cout << "AI or scene not available.\n"; return; }
+    if (args.empty()) { std::cout << "Usage: aigenerate <prompt text...>\n"; return; }
+    std::string prompt;
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (i > 0) prompt += " ";
+        prompt += args[i];
+    }
+    auto* obj = m_AI->GenerateObjectFromPrompt(prompt, *m_Scene);
+    if (obj)
+        std::cout << "AI generated object '" << obj->GetName() << "'.\n";
+    else
+        std::cout << "AI failed to generate object.\n";
+}
+
+void CLIEditor::CmdAddPhysics(const std::vector<std::string>& args) {
+    if (!m_Scene) { std::cout << "No active scene.\n"; return; }
+    if (args.empty()) { std::cout << "Usage: addphysics <name> [mass]\n"; return; }
+    auto* obj = m_Scene->FindByName(args[0]);
+    if (!obj) { std::cout << "Object '" << args[0] << "' not found.\n"; return; }
+
+    f32 mass = (args.size() >= 2) ? std::stof(args[1]) : 1.0f;
+    PhysicsWorld::AddPhysicsComponents(obj, RigidBodyType::Dynamic,
+                                       ColliderType::Box, mass);
+    std::cout << "Added RigidBody (mass=" << mass << ") + Collider to '" << args[0] << "'.\n";
+}
+
+void CLIEditor::CmdCount(const std::vector<std::string>& /*args*/) {
+    if (!m_Scene) { std::cout << "No active scene.\n"; return; }
+    std::cout << "Scene '" << m_Scene->GetName() << "' has "
+              << m_Scene->GetAllObjects().size() << " object(s).\n";
+}
+
+void CLIEditor::CmdRename(const std::vector<std::string>& args) {
+    if (!m_Scene || args.size() < 2) { std::cout << "Usage: rename <old> <new>\n"; return; }
+    auto* obj = m_Scene->FindByName(args[0]);
+    if (!obj) { std::cout << "Object '" << args[0] << "' not found.\n"; return; }
+    obj->SetName(args[1]);
+    std::cout << "Renamed to '" << args[1] << "'.\n";
 }
 
 } // namespace gv

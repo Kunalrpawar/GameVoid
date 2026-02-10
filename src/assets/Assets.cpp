@@ -134,4 +134,70 @@ void AssetManager::Clear() {
     GV_LOG_INFO("AssetManager — all cached resources released.");
 }
 
+// ── AssetLoader ────────────────────────────────────────────────────────────
+
+AssetLoader::FileType AssetLoader::DetectFileType(const std::string& path) {
+    auto dot = path.rfind('.');
+    if (dot == std::string::npos) return FileType::Unknown;
+    std::string ext = path.substr(dot);
+    // lowercase
+    for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
+        ext == ".bmp" || ext == ".tga" || ext == ".hdr")
+        return FileType::Texture;
+    if (ext == ".obj" || ext == ".fbx" || ext == ".gltf" || ext == ".glb")
+        return FileType::Model;
+    if (ext == ".lua" || ext == ".py" || ext == ".js")
+        return FileType::Script;
+    if (ext == ".wav" || ext == ".mp3" || ext == ".ogg" || ext == ".flac")
+        return FileType::Audio;
+    return FileType::Unknown;
+}
+
+bool AssetLoader::LoadAsset(AssetManager& mgr, const std::string& path) {
+    FileType ft = DetectFileType(path);
+    switch (ft) {
+        case FileType::Texture: {
+            auto tex = mgr.LoadTexture(path);
+            GV_LOG_INFO("AssetLoader — loaded texture: " + path);
+            return tex != nullptr;
+        }
+        case FileType::Model: {
+            auto mesh = mgr.LoadMesh(path);
+            GV_LOG_INFO("AssetLoader — loaded model: " + path);
+            return mesh != nullptr;
+        }
+        default:
+            GV_LOG_WARN("AssetLoader — unsupported or unknown file type: " + path);
+            return false;
+    }
+}
+
+Shared<Texture> AssetLoader::LoadTexture(const std::string& path) {
+    auto tex = MakeShared<Texture>(path);
+    if (!tex->Load(path)) {
+        GV_LOG_WARN("AssetLoader — failed to load texture: " + path);
+        return nullptr;
+    }
+    GV_LOG_INFO("AssetLoader — texture loaded (no cache): " + path);
+    return tex;
+}
+
+Shared<Mesh> AssetLoader::LoadModel(const std::string& path) {
+    auto mesh = MakeShared<Mesh>(path);
+    if (!mesh->LoadFromFile(path)) {
+        GV_LOG_WARN("AssetLoader — failed to load model: " + path);
+        return nullptr;
+    }
+    GV_LOG_INFO("AssetLoader — model loaded (no cache): " + path);
+    return mesh;
+}
+
+Shared<Texture> AssetLoader::LoadSprite(const std::string& path) {
+    // Sprite loading is essentially texture loading with future metadata support
+    GV_LOG_INFO("AssetLoader — sprite load (delegates to texture): " + path);
+    return LoadTexture(path);
+}
+
 } // namespace gv

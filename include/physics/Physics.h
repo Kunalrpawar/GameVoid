@@ -120,6 +120,24 @@ public:
     void RegisterBody(RigidBody* body);
     void UnregisterBody(RigidBody* body);
 
+    // ── Collision geometry tests ────────────────────────────────────────
+    /// Test two axis-aligned bounding boxes for overlap.
+    static bool TestAABB(const Vec3& minA, const Vec3& maxA,
+                         const Vec3& minB, const Vec3& maxB);
+
+    /// Test two spheres for overlap.
+    static bool TestSphereSphere(const Vec3& posA, f32 radiusA,
+                                 const Vec3& posB, f32 radiusB);
+
+    /// Test a sphere against an AABB.
+    static bool TestSphereAABB(const Vec3& spherePos, f32 radius,
+                               const Vec3& boxMin, const Vec3& boxMax);
+
+    // ── Convenience: attach physics to a GameObject ────────────────────────
+    /// Helper that adds both a RigidBody and a Collider to the given object.
+    static void AddPhysicsComponents(GameObject* obj, RigidBodyType bodyType,
+                                     ColliderType colliderType, f32 mass = 1.0f);
+
 private:
     void IntegrateBodies(f32 dt);
     void DetectCollisions();

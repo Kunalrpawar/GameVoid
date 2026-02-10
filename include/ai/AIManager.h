@@ -93,6 +93,13 @@ public:
     /// Instantiate the blueprints from GenerateLevel() into a live Scene.
     void PopulateScene(Scene& scene, const std::vector<ObjectBlueprint>& blueprints) const;
 
+    // ── Object generation from prompt ─────────────────────────────────────
+    /// The primary AI-to-game-world function: takes a natural language prompt
+    /// (e.g. "a red barrel with physics") and creates a fully configured
+    /// GameObject in the given Scene, attaching mesh, material, physics, and
+    /// an optional AI-generated script.  Returns the new object pointer.
+    GameObject* GenerateObjectFromPrompt(const std::string& prompt, Scene& scene) const;
+
     // ── Async variant (callback-based; placeholder) ────────────────────────
     using ResponseCallback = std::function<void(const AIResponse&)>;
     void SendPromptAsync(const std::string& prompt, ResponseCallback cb) const;

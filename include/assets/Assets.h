@@ -145,4 +145,32 @@ private:
     std::unordered_map<std::string, Shared<Material>> m_Materials;
 };
 
+// ============================================================================
+// Asset Loader  (convenience facade)
+// ============================================================================
+/// Stateless utility that wraps common load-from-disk patterns.
+/// Use AssetManager for caching; use AssetLoader for one-shot loads and
+/// format detection.
+class AssetLoader {
+public:
+    /// Detect the asset type from a file extension and load via AssetManager.
+    /// Supported extensions:  .png .jpg .bmp .tga  -> Texture
+    ///                        .obj .fbx .gltf .glb -> Mesh
+    /// Returns true on success.
+    static bool LoadAsset(AssetManager& mgr, const std::string& path);
+
+    /// Load a texture and return it directly (bypasses cache).
+    static Shared<Texture> LoadTexture(const std::string& path);
+
+    /// Load a 3D model and return it directly (bypasses cache).
+    static Shared<Mesh> LoadModel(const std::string& path);
+
+    /// Load a sprite sheet (texture + metadata).  Placeholder for future use.
+    static Shared<Texture> LoadSprite(const std::string& path);
+
+    /// Determine the file type from extension.
+    enum class FileType { Unknown, Texture, Model, Script, Audio };
+    static FileType DetectFileType(const std::string& path);
+};
+
 } // namespace gv

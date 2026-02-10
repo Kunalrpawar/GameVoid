@@ -40,6 +40,33 @@ public:
     /// Draw the entire scene from the perspective of the given camera.
     virtual void RenderScene(Scene& scene, Camera& camera) = 0;
 
+    // ── Drawing primitives (2D & 3D) ───────────────────────────────────────
+    /// Draw a 2D rectangle (screen-space).  Used for UI overlays, sprites.
+    virtual void DrawRect(f32 x, f32 y, f32 w, f32 h, const Vec4& colour) {
+        (void)x; (void)y; (void)w; (void)h; (void)colour;
+    }
+
+    /// Draw a 2D textured quad.
+    virtual void DrawTexture(u32 textureID, f32 x, f32 y, f32 w, f32 h) {
+        (void)textureID; (void)x; (void)y; (void)w; (void)h;
+    }
+
+    /// Draw a wireframe / solid 3D shape for debugging (box, sphere).
+    virtual void DrawDebugBox(const Vec3& center, const Vec3& halfExtents, const Vec4& colour) {
+        (void)center; (void)halfExtents; (void)colour;
+    }
+    virtual void DrawDebugSphere(const Vec3& center, f32 radius, const Vec4& colour) {
+        (void)center; (void)radius; (void)colour;
+    }
+    virtual void DrawDebugLine(const Vec3& from, const Vec3& to, const Vec4& colour) {
+        (void)from; (void)to; (void)colour;
+    }
+
+    // ── Lighting pass ──────────────────────────────────────────────────────
+    /// Collect all light components from the scene and upload their data to
+    /// the active shader as uniforms.  Called internally by RenderScene().
+    virtual void ApplyLighting(Scene& scene) { (void)scene; }
+
     /// Check whether the window should close.
     virtual bool WindowShouldClose() const = 0;
 
@@ -65,6 +92,7 @@ public:
     void BeginFrame() override;
     void EndFrame() override;
     void RenderScene(Scene& scene, Camera& camera) override;
+    void ApplyLighting(Scene& scene) override;
     bool WindowShouldClose() const override;
     void PollEvents() override;
     u32  GetWidth()  const override { return m_Width; }
