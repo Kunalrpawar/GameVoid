@@ -14,8 +14,20 @@ bool Engine::Init(const EngineConfig& config) {
     GV_LOG_INFO("  GameVoid Engine v0.1.0 — Initialising");
     GV_LOG_INFO("========================================");
 
-    // ── Renderer ───────────────────────────────────────────────────────────
+    // ── Window (only in non-editor / window mode) ────────────────────────────────
+    if (!config.enableEditor) {
+        if (!m_Window.Init(config.windowWidth, config.windowHeight, config.windowTitle)) {
+            GV_LOG_FATAL("Failed to create window.");
+            return false;
+        }
+    }
+
+    // ── Renderer ─────────────────────────────────────────────────────────────────────
     m_Renderer = MakeUnique<OpenGLRenderer>();
+    // Give the renderer access to the Window (it needs the GL context)
+    if (m_Window.IsInitialised()) {
+        static_cast<OpenGLRenderer*>(m_Renderer.get())->SetWindow(&m_Window);
+    }
     if (!m_Renderer->Init(config.windowWidth, config.windowHeight, config.windowTitle)) {
         GV_LOG_FATAL("Failed to initialise renderer.");
         return false;
@@ -94,32 +106,73 @@ void Engine::Run() {
         return;
     }
 
-    // ── Real-time game loop ────────────────────────────────────────────────
+    // ── Real-time game loop (window mode) ──────────────────────────────────
     using Clock = std::chrono::high_resolution_clock;
-    auto lastTime = Clock::now();
+    auto lastTime  = Clock::now();
+    f32  fpsTimer  = 0.0f;
+    i32  fpsCount  = 0;
 
-    while (m_Running && !m_Renderer->WindowShouldClose()) {
+    // Background colour (adjustable with arrow keys)
+    f32 bgR = 0.10f, bgG = 0.10f, bgB = 0.14f;
+
+    GV_LOG_INFO("Entering window loop.  Escape=quit, Arrows=change bg colour.");
+
+    while (m_Running && !m_Window.ShouldClose()) {
         auto now = Clock::now();
         f32 dt = std::chrono::duration<f32>(now - lastTime).count();
         lastTime = now;
 
-        // Input
-        m_Renderer->PollEvents();
+        // ── Input ──────────────────────────────────────────────────────
+        m_Window.BeginFrame();
+        m_Window.PollEvents();
         m_Input.Update();
 
-        // Physics
+        // Escape to close
+        if (m_Window.IsKeyDown(GVKey::Escape)) {
+            m_Window.SetShouldClose(true);
+            break;
+        }
+
+        // Arrow keys adjust background colour
+        const f32 speed = 0.5f * dt;
+        if (m_Window.IsKeyDown(GVKey::Up))    bgG += speed;
+        if (m_Window.IsKeyDown(GVKey::Down))  bgG -= speed;
+        if (m_Window.IsKeyDown(GVKey::Right)) bgR += speed;
+        if (m_Window.IsKeyDown(GVKey::Left))  bgB += speed;
+        if (m_Window.IsKeyPressed(GVKey::Space)) { bgR = 0.10f; bgG = 0.10f; bgB = 0.14f; }
+        if (bgR < 0) bgR = 0; if (bgR > 1) bgR = 1;
+        if (bgG < 0) bgG = 0; if (bgG > 1) bgG = 1;
+        if (bgB < 0) bgB = 0; if (bgB > 1) bgB = 1;
+
+        // ── Physics ────────────────────────────────────────────────────
         if (m_Config.enablePhysics) m_Physics.Step(dt);
 
-        // Logic
+        // ── Logic ──────────────────────────────────────────────────────
         scene->Update(dt);
 
-        // Render
-        m_Renderer->Clear(0.1f, 0.1f, 0.12f, 1.0f);
+        // ── Render ─────────────────────────────────────────────────────
+        m_Renderer->Clear(bgR, bgG, bgB, 1.0f);
         m_Renderer->BeginFrame();
+
+        // Draw built-in demo triangle (proves GL works)
+#ifdef GV_HAS_GLFW
+        static_cast<OpenGLRenderer*>(m_Renderer.get())->RenderDemo(dt);
+#endif
+
         if (scene->GetActiveCamera())
             m_Renderer->RenderScene(*scene, *scene->GetActiveCamera());
         scene->Render();
         m_Renderer->EndFrame();
+
+        // ── FPS counter in title bar ───────────────────────────────────
+        fpsCount++;
+        fpsTimer += dt;
+        if (fpsTimer >= 1.0f) {
+            std::string title = "GameVoid Engine — " + std::to_string(fpsCount) + " FPS";
+            m_Window.SetTitle(title);
+            fpsCount = 0;
+            fpsTimer = 0.0f;
+        }
     }
 }
 
@@ -131,6 +184,7 @@ void Engine::Shutdown() {
     m_Audio.Shutdown();
     m_Assets.Clear();
     if (m_Renderer) m_Renderer->Shutdown();
+    m_Window.Shutdown();
 
     m_Running = false;
     GV_LOG_INFO("Engine shut down successfully.");

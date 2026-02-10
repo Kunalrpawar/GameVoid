@@ -1,0 +1,10 @@
+# GameVoid Engine
+deps/
+*.exe
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.pdb
+*.ilk

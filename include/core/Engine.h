@@ -13,6 +13,7 @@
 #include "ai/AIManager.h"
 #include "scripting/ScriptEngine.h"
 #include "editor/CLIEditor.h"
+#include "core/Window.h"
 #include "future/Placeholders.h"
 #include <string>
 
@@ -55,6 +56,7 @@ public:
     AIManager&     GetAI()           { return m_AI; }
     ScriptEngine&  GetScripting()    { return m_Scripting; }
     CLIEditor&     GetEditor()       { return m_Editor; }
+    Window&        GetWindow()       { return m_Window; }
     InputManager&  GetInput()        { return m_Input; }
     AudioEngine&   GetAudio()        { return m_Audio; }
 
@@ -73,6 +75,7 @@ private:
     AIManager         m_AI;
     ScriptEngine      m_Scripting;
     CLIEditor         m_Editor;
+    Window            m_Window;
     InputManager      m_Input;
     AudioEngine       m_Audio;
 

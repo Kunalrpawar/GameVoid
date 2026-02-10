@@ -11,11 +11,16 @@
 #include "core/Math.h"
 #include <string>
 
+#ifdef GV_HAS_GLFW
+class Window;  // avoid including Window.h here
+#endif
+
 namespace gv {
 
 // Forward declarations
 class Camera;
 class Scene;
+class Window;
 
 /// Abstract rendering API.
 class IRenderer {
@@ -86,6 +91,9 @@ public:
     OpenGLRenderer() = default;
     ~OpenGLRenderer() override { Shutdown(); }
 
+    /// Provide the Window that owns the GL context (call before Init).
+    void SetWindow(Window* window) { m_Window = window; }
+
     bool Init(u32 width, u32 height, const std::string& title) override;
     void Shutdown() override;
     void Clear(f32 r, f32 g, f32 b, f32 a) override;
@@ -98,13 +106,24 @@ public:
     u32  GetWidth()  const override { return m_Width; }
     u32  GetHeight() const override { return m_Height; }
 
+#ifdef GV_HAS_GLFW
+    /// Draw the built-in demo triangle (call from Engine game loop).
+    void RenderDemo(f32 dt);
+#endif
+
 private:
     u32  m_Width  = 0;
     u32  m_Height = 0;
     bool m_Initialised = false;
+    Window* m_Window = nullptr;
 
-    // In a real build this would store a GLFWwindow*, shader programs, etc.
-    // void* m_Window = nullptr;
+#ifdef GV_HAS_GLFW
+    u32 m_DemoVAO    = 0;
+    u32 m_DemoVBO    = 0;
+    u32 m_DemoShader = 0;
+    void InitDemo();
+    void CleanupDemo();
+#endif
 };
 
 // ============================================================================
