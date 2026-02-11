@@ -22,6 +22,12 @@ class Camera;
 class Scene;
 class Window;
 
+/// Gizmo modes (shared between editor and renderer).
+enum class GizmoMode { Translate, Rotate, Scale };
+
+/// Built-in primitive type used by MeshRenderer (also declared in MeshRenderer.h).
+enum class PrimitiveType : int;
+
 /// Abstract rendering API.
 class IRenderer {
 public:
@@ -133,14 +139,45 @@ private:
     // ── Scene-rendering resources ──────────────────────────────────────────
     u32 m_SceneShader = 0;   // flat-colour MVP shader program
 
-    // Built-in primitives (triangle + cube):
+    // Built-in primitives (triangle + cube + plane):
     u32 m_TriVAO = 0, m_TriVBO = 0;
     u32 m_CubeVAO = 0, m_CubeVBO = 0, m_CubeEBO = 0;
     i32 m_CubeIndexCount = 0;
+    u32 m_PlaneVAO = 0, m_PlaneVBO = 0, m_PlaneEBO = 0;
+    i32 m_PlaneIndexCount = 0;
+
+    // ── Skybox ─────────────────────────────────────────────────────────────
+    u32 m_SkyShader = 0;
+    u32 m_SkyVAO = 0, m_SkyVBO = 0;
+    f32 m_SkyRotation = 0.0f;
+
+    // ── Line / gizmo shader ────────────────────────────────────────────────
+    u32 m_LineShader = 0;
+    u32 m_LineVAO = 0, m_LineVBO = 0;
+
+    // ── Selection highlight ────────────────────────────────────────────────
+    u32 m_HighlightShader = 0;
+
+    // ── Grid ───────────────────────────────────────────────────────────────
+    u32 m_GridVAO = 0, m_GridVBO = 0;
+    i32 m_GridVertCount = 0;
 
     void InitSceneShader();
     void InitPrimitives();
+    void InitSkybox();
+    void InitLineShader();
+    void InitGrid();
     void CleanupScene();
+
+public:
+    // ── Additional rendering methods ───────────────────────────────────────
+    void RenderSkybox(Camera& camera, f32 dt);
+    void RenderGrid(Camera& camera);
+    void RenderGizmo(Camera& camera, const Vec3& position, GizmoMode mode, i32 activeAxis = -1);
+    void RenderHighlight(Camera& camera, const Mat4& model, PrimitiveType type);
+
+    /// Get scene shader for external uniform uploads.
+    u32 GetSceneShader() const { return m_SceneShader; }
 #endif
 };
 

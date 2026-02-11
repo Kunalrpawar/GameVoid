@@ -12,6 +12,7 @@
 #include "core/GLDefs.h"
 #include "core/Window.h"
 #include <cmath>
+#include <vector>
 #endif
 
 namespace gv {
@@ -46,7 +47,10 @@ bool OpenGLRenderer::Init(u32 width, u32 height, const std::string& title) {
 
         InitDemo();          // spinning demo triangle
         InitSceneShader();   // flat-colour MVP shader
-        InitPrimitives();    // built-in triangle & cube VAOs
+        InitPrimitives();    // built-in triangle & cube & plane VAOs
+        InitSkybox();        // procedural skybox shader
+        InitLineShader();    // line/gizmo + highlight shaders
+        InitGrid();          // grid VAO
     }
 #endif
 
@@ -164,19 +168,23 @@ void OpenGLRenderer::RenderScene(Scene& scene, Camera& camera) {
                 glDrawElements(GL_TRIANGLES, m_CubeIndexCount, GL_UNSIGNED_INT,
                                reinterpret_cast<void*>(0));
                 glBindVertexArray(0);
+            } else if (mr->primitiveType == PrimitiveType::Plane) {
+                glBindVertexArray(m_PlaneVAO);
+                glDrawElements(GL_TRIANGLES, m_PlaneIndexCount, GL_UNSIGNED_INT,
+                               reinterpret_cast<void*>(0));
+                glBindVertexArray(0);
             }
             drawCount++;
         }
 
         glUseProgram(0);
 
-        // Periodic log — once per second (controlled by caller via dt, but
-        // for simplicity we log only the first frame and then every 300 frames).
-        static i32 frameNum = 0;
-        if (frameNum == 0 || frameNum == 300) {
+        // Log draw count once on first frame only.
+        static bool loggedOnce = false;
+        if (!loggedOnce) {
             GV_LOG_INFO("RenderScene: drew " + std::to_string(drawCount) + " object(s).");
+            loggedOnce = true;
         }
-        frameNum = (frameNum + 1) % 301;
 
         return;
     }
@@ -542,15 +550,354 @@ void OpenGLRenderer::InitPrimitives() {
     glBindVertexArray(0);
 
     GV_LOG_INFO("Built-in cube primitive created (24 verts, 36 indices).");
+
+    // ── Plane (XZ, 1×1 centred at origin, faces +Y) ───────────────────────
+    float planeVerts[] = {
+        // positions           normals
+        -0.5f, 0.0f, -0.5f,   0, 1, 0,
+         0.5f, 0.0f, -0.5f,   0, 1, 0,
+         0.5f, 0.0f,  0.5f,   0, 1, 0,
+        -0.5f, 0.0f,  0.5f,   0, 1, 0,
+    };
+    unsigned int planeIdx[] = { 0, 1, 2, 2, 3, 0 };
+    m_PlaneIndexCount = 6;
+
+    glGenVertexArrays(1, &m_PlaneVAO);
+    glGenBuffers(1, &m_PlaneVBO);
+    glGenBuffers(1, &m_PlaneEBO);
+    glBindVertexArray(m_PlaneVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_PlaneVBO);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(sizeof(planeVerts)),
+                 planeVerts, GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_PlaneEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(sizeof(planeIdx)),
+                 planeIdx, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+                          reinterpret_cast<void*>(0));
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+                          reinterpret_cast<void*>(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+    glBindVertexArray(0);
+
+    GV_LOG_INFO("Built-in plane primitive created.");
 }
 
 void OpenGLRenderer::CleanupScene() {
-    if (m_TriVAO)      { glDeleteVertexArrays(1, &m_TriVAO);  m_TriVAO = 0; }
-    if (m_TriVBO)      { glDeleteBuffers(1, &m_TriVBO);        m_TriVBO = 0; }
-    if (m_CubeVAO)     { glDeleteVertexArrays(1, &m_CubeVAO); m_CubeVAO = 0; }
-    if (m_CubeVBO)     { glDeleteBuffers(1, &m_CubeVBO);       m_CubeVBO = 0; }
-    if (m_CubeEBO)     { glDeleteBuffers(1, &m_CubeEBO);       m_CubeEBO = 0; }
+    if (m_TriVAO)      { glDeleteVertexArrays(1, &m_TriVAO);   m_TriVAO = 0; }
+    if (m_TriVBO)      { glDeleteBuffers(1, &m_TriVBO);         m_TriVBO = 0; }
+    if (m_CubeVAO)     { glDeleteVertexArrays(1, &m_CubeVAO);  m_CubeVAO = 0; }
+    if (m_CubeVBO)     { glDeleteBuffers(1, &m_CubeVBO);        m_CubeVBO = 0; }
+    if (m_CubeEBO)     { glDeleteBuffers(1, &m_CubeEBO);        m_CubeEBO = 0; }
+    if (m_PlaneVAO)    { glDeleteVertexArrays(1, &m_PlaneVAO); m_PlaneVAO = 0; }
+    if (m_PlaneVBO)    { glDeleteBuffers(1, &m_PlaneVBO);       m_PlaneVBO = 0; }
+    if (m_PlaneEBO)    { glDeleteBuffers(1, &m_PlaneEBO);       m_PlaneEBO = 0; }
     if (m_SceneShader) { glDeleteProgram(m_SceneShader);        m_SceneShader = 0; }
+    if (m_SkyShader)   { glDeleteProgram(m_SkyShader);          m_SkyShader = 0; }
+    if (m_SkyVAO)      { glDeleteVertexArrays(1, &m_SkyVAO);   m_SkyVAO = 0; }
+    if (m_SkyVBO)      { glDeleteBuffers(1, &m_SkyVBO);         m_SkyVBO = 0; }
+    if (m_LineShader)  { glDeleteProgram(m_LineShader);          m_LineShader = 0; }
+    if (m_LineVAO)     { glDeleteVertexArrays(1, &m_LineVAO);   m_LineVAO = 0; }
+    if (m_LineVBO)     { glDeleteBuffers(1, &m_LineVBO);         m_LineVBO = 0; }
+    if (m_GridVAO)     { glDeleteVertexArrays(1, &m_GridVAO);   m_GridVAO = 0; }
+    if (m_GridVBO)     { glDeleteBuffers(1, &m_GridVBO);         m_GridVBO = 0; }
+    if (m_HighlightShader) { glDeleteProgram(m_HighlightShader); m_HighlightShader = 0; }
+}
+
+// ── Procedural Skybox ──────────────────────────────────────────────────────
+
+static const char* s_SkyVertSrc =
+    "#version 330 core\n"
+    "layout(location = 0) in vec3 aPos;\n"
+    "uniform mat4 u_VP;\n"
+    "out vec3 vDir;\n"
+    "void main() {\n"
+    "    vDir = aPos;\n"
+    "    vec4 pos = u_VP * vec4(aPos, 1.0);\n"
+    "    gl_Position = pos.xyww;\n"  // depth = 1.0 (behind everything)
+    "}\n";
+
+static const char* s_SkyFragSrc =
+    "#version 330 core\n"
+    "in vec3 vDir;\n"
+    "out vec4 FragColor;\n"
+    "uniform float u_Time;\n"
+    "void main() {\n"
+    "    vec3 dir = normalize(vDir);\n"
+    "    float t = dir.y * 0.5 + 0.5;\n"                     // 0 at horizon, 1 at zenith
+    "    vec3 horizonCol = vec3(0.7, 0.82, 0.92);\n"
+    "    vec3 zenithCol  = vec3(0.2, 0.35, 0.75);\n"
+    "    vec3 groundCol  = vec3(0.25, 0.22, 0.2);\n"
+    "    vec3 sky = mix(horizonCol, zenithCol, clamp(t, 0.0, 1.0));\n"
+    "    if (dir.y < 0.0) sky = mix(horizonCol, groundCol, clamp(-dir.y*4.0, 0.0, 1.0));\n"
+    // simple sun disc
+    "    float sunAngle = u_Time * 0.02;\n"
+    "    vec3 sunDir = normalize(vec3(cos(sunAngle)*0.4, 0.8, sin(sunAngle)*0.4));\n"
+    "    float sunDot = max(dot(dir, sunDir), 0.0);\n"
+    "    sky += vec3(1.0, 0.9, 0.7) * pow(sunDot, 256.0) * 2.0;\n"  // sun
+    "    sky += vec3(1.0, 0.85, 0.6) * pow(sunDot, 8.0) * 0.15;\n"  // glow
+    // wispy clouds
+    "    float cx = dir.x / max(dir.y, 0.01) * 2.0 + u_Time * 0.01;\n"
+    "    float cz = dir.z / max(dir.y, 0.01) * 2.0;\n"
+    "    float cloud = sin(cx*1.2)*sin(cz*1.5)*0.5+0.5;\n"
+    "    cloud = smoothstep(0.45, 0.65, cloud);\n"
+    "    if (dir.y > 0.0) sky = mix(sky, vec3(1.0), cloud * 0.35 * clamp(dir.y*3.0, 0.0, 1.0));\n"
+    "    FragColor = vec4(sky, 1.0);\n"
+    "}\n";
+
+void OpenGLRenderer::InitSkybox() {
+    if (!glCreateShader) return;
+    GLuint vs = CompileDemoStage(GL_VERTEX_SHADER, s_SkyVertSrc);
+    GLuint fs = CompileDemoStage(GL_FRAGMENT_SHADER, s_SkyFragSrc);
+    m_SkyShader = glCreateProgram();
+    glAttachShader(m_SkyShader, vs);
+    glAttachShader(m_SkyShader, fs);
+    glLinkProgram(m_SkyShader);
+    glDeleteShader(vs); glDeleteShader(fs);
+
+    // Unit cube for skybox
+    float skyVerts[] = {
+        -1,1,-1, -1,-1,-1, 1,-1,-1, 1,-1,-1, 1,1,-1, -1,1,-1,
+        -1,-1,1, -1,-1,-1, -1,1,-1, -1,1,-1, -1,1,1, -1,-1,1,
+        1,-1,-1, 1,-1,1, 1,1,1, 1,1,1, 1,1,-1, 1,-1,-1,
+        -1,-1,1, -1,1,1, 1,1,1, 1,1,1, 1,-1,1, -1,-1,1,
+        -1,1,-1, 1,1,-1, 1,1,1, 1,1,1, -1,1,1, -1,1,-1,
+        -1,-1,-1, -1,-1,1, 1,-1,1, 1,-1,1, 1,-1,-1, -1,-1,-1,
+    };
+    glGenVertexArrays(1, &m_SkyVAO);
+    glGenBuffers(1, &m_SkyVBO);
+    glBindVertexArray(m_SkyVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_SkyVBO);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(sizeof(skyVerts)), skyVerts, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3*sizeof(float), reinterpret_cast<void*>(0));
+    glEnableVertexAttribArray(0);
+    glBindVertexArray(0);
+    GV_LOG_INFO("Procedural skybox initialised.");
+}
+
+void OpenGLRenderer::RenderSkybox(Camera& camera, f32 dt) {
+    if (!m_SkyShader || !m_SkyVAO) return;
+    m_SkyRotation += dt;
+
+    Mat4 view = camera.GetViewMatrix();
+    // Remove translation from view matrix — skybox is always centered on camera
+    view.m[12] = 0; view.m[13] = 0; view.m[14] = 0;
+    Mat4 proj = camera.GetProjectionMatrix();
+    Mat4 vp = proj * view;
+
+    glDepthFunc(GL_LEQUAL);   // draw at depth=1.0
+    glUseProgram(m_SkyShader);
+    glUniformMatrix4fv(glGetUniformLocation(m_SkyShader, "u_VP"), 1, GL_FALSE, vp.m);
+    glUniform1f(glGetUniformLocation(m_SkyShader, "u_Time"), m_SkyRotation);
+    glBindVertexArray(m_SkyVAO);
+    glDrawArrays(GL_TRIANGLES, 0, 36);
+    glBindVertexArray(0);
+    glUseProgram(0);
+    glDepthFunc(GL_LESS);
+}
+
+// ── Line / Gizmo Shader ───────────────────────────────────────────────────
+
+static const char* s_LineVertSrc =
+    "#version 330 core\n"
+    "layout(location = 0) in vec3 aPos;\n"
+    "layout(location = 1) in vec3 aColor;\n"
+    "uniform mat4 u_VP;\n"
+    "out vec3 vColor;\n"
+    "void main() {\n"
+    "    vColor = aColor;\n"
+    "    gl_Position = u_VP * vec4(aPos, 1.0);\n"
+    "}\n";
+
+static const char* s_LineFragSrc =
+    "#version 330 core\n"
+    "in vec3 vColor;\n"
+    "out vec4 FragColor;\n"
+    "void main() { FragColor = vec4(vColor, 1.0); }\n";
+
+void OpenGLRenderer::InitLineShader() {
+    if (!glCreateShader) return;
+    GLuint vs = CompileDemoStage(GL_VERTEX_SHADER, s_LineVertSrc);
+    GLuint fs = CompileDemoStage(GL_FRAGMENT_SHADER, s_LineFragSrc);
+    m_LineShader = glCreateProgram();
+    glAttachShader(m_LineShader, vs);
+    glAttachShader(m_LineShader, fs);
+    glLinkProgram(m_LineShader);
+    glDeleteShader(vs); glDeleteShader(fs);
+
+    // Dynamic VBO for line drawing (updated each frame)
+    glGenVertexArrays(1, &m_LineVAO);
+    glGenBuffers(1, &m_LineVBO);
+    glBindVertexArray(m_LineVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_LineVBO);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(8192 * sizeof(float)), nullptr, GL_DYNAMIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6*sizeof(float), reinterpret_cast<void*>(0));
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6*sizeof(float), reinterpret_cast<void*>(3*sizeof(float)));
+    glEnableVertexAttribArray(1);
+    glBindVertexArray(0);
+
+    // Highlight shader: draws object slightly scaled with flat color + wireframe
+    m_HighlightShader = m_SceneShader; // reuse scene shader — we'll just set u_Color
+    GV_LOG_INFO("Line/gizmo shader initialised.");
+}
+
+void OpenGLRenderer::RenderGizmo(Camera& camera, const Vec3& pos, GizmoMode mode, i32 activeAxis) {
+    if (!m_LineShader || !m_LineVAO) return;
+
+    Mat4 vp = camera.GetProjectionMatrix() * camera.GetViewMatrix();
+    glUseProgram(m_LineShader);
+    glUniformMatrix4fv(glGetUniformLocation(m_LineShader, "u_VP"), 1, GL_FALSE, vp.m);
+
+    f32 len = 1.5f;
+    f32 hl = 0.15f; // arrowhead length
+
+    // Line data: pos(3) + color(3) per vertex, 2 vertices per line
+    // Rotation mode: 3 circles × 24 segments = 72 lines × 2 verts × 6 floats = 864
+    float lines[864 + 72]; // extra room for translate/scale
+    int idx = 0;
+
+    auto pushLine = [&](Vec3 a, Vec3 b, Vec3 col) {
+        lines[idx++] = a.x; lines[idx++] = a.y; lines[idx++] = a.z;
+        lines[idx++] = col.x; lines[idx++] = col.y; lines[idx++] = col.z;
+        lines[idx++] = b.x; lines[idx++] = b.y; lines[idx++] = b.z;
+        lines[idx++] = col.x; lines[idx++] = col.y; lines[idx++] = col.z;
+    };
+
+    Vec3 xCol = (activeAxis == 0) ? Vec3(1, 1, 0) : Vec3(1, 0.2f, 0.2f);
+    Vec3 yCol = (activeAxis == 1) ? Vec3(1, 1, 0) : Vec3(0.2f, 1, 0.2f);
+    Vec3 zCol = (activeAxis == 2) ? Vec3(1, 1, 0) : Vec3(0.2f, 0.2f, 1);
+
+    if (mode == GizmoMode::Translate) {
+        // Arrows along each axis
+        pushLine(pos, pos + Vec3(len, 0, 0), xCol);
+        pushLine(pos + Vec3(len, 0, 0), pos + Vec3(len - hl, hl, 0), xCol);
+        pushLine(pos, pos + Vec3(0, len, 0), yCol);
+        pushLine(pos + Vec3(0, len, 0), pos + Vec3(0, len - hl, hl), yCol);
+        pushLine(pos, pos + Vec3(0, 0, len), zCol);
+        pushLine(pos + Vec3(0, 0, len), pos + Vec3(0, hl, len - hl), zCol);
+    } else if (mode == GizmoMode::Scale) {
+        // Lines with squares at end
+        pushLine(pos, pos + Vec3(len, 0, 0), xCol);
+        pushLine(pos + Vec3(len-hl, -hl, 0), pos + Vec3(len+hl, hl, 0), xCol);
+        pushLine(pos, pos + Vec3(0, len, 0), yCol);
+        pushLine(pos + Vec3(-hl, len-hl, 0), pos + Vec3(hl, len+hl, 0), yCol);
+        pushLine(pos, pos + Vec3(0, 0, len), zCol);
+        pushLine(pos + Vec3(0, -hl, len-hl), pos + Vec3(0, hl, len+hl), zCol);
+    } else {
+        // Rotate — circles (approximate with line segments)
+        const int N = 24;
+        for (int i = 0; i < N; ++i) {
+            f32 a0 = (float)i / (float)N * 6.2832f;
+            f32 a1 = (float)(i+1) / (float)N * 6.2832f;
+            f32 r = 1.0f;
+            // X circle (YZ plane)
+            pushLine(pos + Vec3(0, std::cos(a0)*r, std::sin(a0)*r),
+                     pos + Vec3(0, std::cos(a1)*r, std::sin(a1)*r), xCol);
+            // Y circle (XZ plane)  
+            pushLine(pos + Vec3(std::cos(a0)*r, 0, std::sin(a0)*r),
+                     pos + Vec3(std::cos(a1)*r, 0, std::sin(a1)*r), yCol);
+            // Z circle (XY plane)
+            pushLine(pos + Vec3(std::cos(a0)*r, std::sin(a0)*r, 0),
+                     pos + Vec3(std::cos(a1)*r, std::sin(a1)*r, 0), zCol);
+        }
+    }
+
+    int vertCount = idx / 6;
+    glBindVertexArray(m_LineVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_LineVBO);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(idx * sizeof(float)), lines);
+    glLineWidth(2.5f);
+    glDisable(GL_DEPTH_TEST);
+    glDrawArrays(GL_LINES, 0, vertCount);
+    glEnable(GL_DEPTH_TEST);
+    glLineWidth(1.0f);
+    glBindVertexArray(0);
+    glUseProgram(0);
+}
+
+void OpenGLRenderer::RenderHighlight(Camera& camera, const Mat4& model, PrimitiveType type) {
+    // Draw wireframe outline of the selected object
+    if (!m_SceneShader) return;
+    Mat4 view = camera.GetViewMatrix();
+    Mat4 proj = camera.GetProjectionMatrix();
+
+    glUseProgram(m_SceneShader);
+    glUniformMatrix4fv(glGetUniformLocation(m_SceneShader, "u_Model"), 1, GL_FALSE, model.m);
+    glUniformMatrix4fv(glGetUniformLocation(m_SceneShader, "u_View"),  1, GL_FALSE, view.m);
+    glUniformMatrix4fv(glGetUniformLocation(m_SceneShader, "u_Proj"),  1, GL_FALSE, proj.m);
+    glUniform4f(glGetUniformLocation(m_SceneShader, "u_Color"), 1.0f, 0.8f, 0.0f, 1.0f);
+    glUniform1i(glGetUniformLocation(m_SceneShader, "u_LightingEnabled"), 0);
+
+    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+    glLineWidth(2.0f);
+    glDisable(GL_DEPTH_TEST);
+
+    if (type == PrimitiveType::Cube) {
+        glBindVertexArray(m_CubeVAO);
+        glDrawElements(GL_TRIANGLES, m_CubeIndexCount, GL_UNSIGNED_INT, reinterpret_cast<void*>(0));
+        glBindVertexArray(0);
+    } else if (type == PrimitiveType::Plane) {
+        glBindVertexArray(m_PlaneVAO);
+        glDrawElements(GL_TRIANGLES, m_PlaneIndexCount, GL_UNSIGNED_INT, reinterpret_cast<void*>(0));
+        glBindVertexArray(0);
+    } else if (type == PrimitiveType::Triangle) {
+        glBindVertexArray(m_TriVAO);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glBindVertexArray(0);
+    }
+
+    glEnable(GL_DEPTH_TEST);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    glLineWidth(1.0f);
+    glUseProgram(0);
+}
+
+// ── Grid (XZ plane) ───────────────────────────────────────────────────────
+
+void OpenGLRenderer::InitGrid() {
+    if (!glGenVertexArrays) return;
+
+    const int halfSize = 20;
+    const float step = 1.0f;
+    std::vector<float> gridVerts;
+
+    for (int i = -halfSize; i <= halfSize; ++i) {
+        float fi = static_cast<float>(i) * step;
+        float limit = static_cast<float>(halfSize) * step;
+        float alpha = (i == 0) ? 0.5f : 0.22f;
+        // Line along Z
+        gridVerts.insert(gridVerts.end(), { fi, 0, -limit, alpha, alpha, alpha });
+        gridVerts.insert(gridVerts.end(), { fi, 0,  limit, alpha, alpha, alpha });
+        // Line along X
+        gridVerts.insert(gridVerts.end(), { -limit, 0, fi, alpha, alpha, alpha });
+        gridVerts.insert(gridVerts.end(), {  limit, 0, fi, alpha, alpha, alpha });
+    }
+    m_GridVertCount = static_cast<i32>(gridVerts.size() / 6);
+
+    glGenVertexArrays(1, &m_GridVAO);
+    glGenBuffers(1, &m_GridVBO);
+    glBindVertexArray(m_GridVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_GridVBO);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(gridVerts.size() * sizeof(float)),
+                 gridVerts.data(), GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6*sizeof(float), reinterpret_cast<void*>(0));
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6*sizeof(float), reinterpret_cast<void*>(3*sizeof(float)));
+    glEnableVertexAttribArray(1);
+    glBindVertexArray(0);
+    GV_LOG_INFO("Editor grid created.");
+}
+
+void OpenGLRenderer::RenderGrid(Camera& camera) {
+    if (!m_LineShader || !m_GridVAO) return;
+    Mat4 vp = camera.GetProjectionMatrix() * camera.GetViewMatrix();
+    glUseProgram(m_LineShader);
+    glUniformMatrix4fv(glGetUniformLocation(m_LineShader, "u_VP"), 1, GL_FALSE, vp.m);
+    glBindVertexArray(m_GridVAO);
+    glDrawArrays(GL_LINES, 0, m_GridVertCount);
+    glBindVertexArray(0);
+    glUseProgram(0);
 }
 
 #endif // GV_HAS_GLFW

@@ -30,9 +30,7 @@ void AnimationClip::SortKeyframes() {
               [](const Keyframe& a, const Keyframe& b) { return a.time < b.time; });
 }
 
-static Vec3 LerpVec3(Vec3 a, Vec3 b, f32 t) {
-    return { a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t };
-}
+// LerpVec3 is now defined in Math.h — use gv::LerpVec3 from there
 
 static Quaternion SlerpQuat(Quaternion a, Quaternion b, f32 t) {
     f32 dot = a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z;

@@ -3,6 +3,7 @@
 // ============================================================================
 #include "physics/Physics.h"
 #include "core/GameObject.h"
+#include "core/Transform.h"
 #include <algorithm>
 #include <cmath>
 
@@ -44,10 +45,47 @@ void PhysicsWorld::UnregisterBody(RigidBody* body) {
 
 bool PhysicsWorld::Raycast(const Vec3& origin, const Vec3& direction,
                            f32 maxDistance, CollisionInfo& outHit) const {
-    // Placeholder — iterate colliders and do ray-box / ray-sphere tests.
-    (void)origin; (void)direction; (void)maxDistance; (void)outHit;
-    GV_LOG_DEBUG("Raycast (placeholder) — no hit.");
-    return false;
+    // Real ray-AABB intersection against all registered bodies
+    Vec3 dir = direction.Normalized();
+    f32 closestT = maxDistance + 1.0f;
+    bool hit = false;
+
+    for (auto* rb : m_Bodies) {
+        if (!rb->GetOwner()) continue;
+        Collider* col = rb->GetOwner()->GetComponent<Collider>();
+        if (!col || col->type != ColliderType::Box) continue;
+
+        Transform& t = rb->GetOwner()->GetTransform();
+        Vec3 half(col->boxHalfExtents.x * t.scale.x,
+                  col->boxHalfExtents.y * t.scale.y,
+                  col->boxHalfExtents.z * t.scale.z);
+        Vec3 bmin = t.position - half;
+        Vec3 bmax = t.position + half;
+
+        f32 tHit = 0;
+        if (RayAABBIntersect(origin, dir, bmin, bmax, tHit)) {
+            if (tHit < closestT && tHit <= maxDistance) {
+                closestT = tHit;
+                outHit.objectA = rb->GetOwner();
+                outHit.objectB = nullptr;
+                outHit.contactPoint = origin + dir * tHit;
+                outHit.penetrationDepth = 0;
+                // Approximate contact normal
+                Vec3 cp = outHit.contactPoint - t.position;
+                f32 ax = std::fabs(cp.x / half.x);
+                f32 ay = std::fabs(cp.y / half.y);
+                f32 az = std::fabs(cp.z / half.z);
+                if (ax > ay && ax > az)      outHit.contactNormal = Vec3(cp.x > 0 ? 1.0f : -1.0f, 0, 0);
+                else if (ay > ax && ay > az) outHit.contactNormal = Vec3(0, cp.y > 0 ? 1.0f : -1.0f, 0);
+                else                         outHit.contactNormal = Vec3(0, 0, cp.z > 0 ? 1.0f : -1.0f);
+                hit = true;
+            }
+        }
+    }
+
+    // Also test non-physics objects in the scene (objects without RigidBody but with Collider)
+    // We only test registered bodies here; for full scene picking, caller handles the rest.
+    return hit;
 }
 
 // ── Private helpers ────────────────────────────────────────────────────────

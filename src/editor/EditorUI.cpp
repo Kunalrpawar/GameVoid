@@ -33,6 +33,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cmath>
+#include <cfloat>
 
 namespace gv {
 
@@ -298,6 +299,33 @@ void EditorUI::DrawToolbar() {
     ImGui::SameLine();
     if (ImGui::Button("+ Particles")) AddParticleEmitter();
     ImGui::SameLine();
+    if (ImGui::Button("+ Floor")) {
+        if (m_Scene) {
+            auto* obj = m_Scene->CreateGameObject("FloorPlane");
+            obj->GetTransform().SetPosition(0, 0, 0);
+            obj->GetTransform().SetScale(40.0f, 1.0f, 40.0f);
+            auto* mr = obj->AddComponent<MeshRenderer>();
+            mr->primitiveType = PrimitiveType::Plane;
+            mr->color = Vec4(0.4f, 0.4f, 0.42f, 1.0f);
+            auto* rb = obj->AddComponent<RigidBody>();
+            rb->bodyType = RigidBodyType::Static;
+            rb->useGravity = false;
+            auto* col = obj->AddComponent<Collider>();
+            col->type = ColliderType::Box;
+            col->boxHalfExtents = Vec3(0.5f, 0.01f, 0.5f);
+            m_Physics->RegisterBody(rb);
+            m_Selected = obj;
+            PushLog("[Editor] Added floor plane with collision.");
+        }
+    }
+    ImGui::SameLine(); ImGui::Separator(); ImGui::SameLine();
+    ImGui::Checkbox("Snap", &m_SnapToGrid);
+    if (m_SnapToGrid) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(50);
+        ImGui::DragFloat("##GridSz", &m_GridSize, 0.1f, 0.1f, 10.0f, "%.1f");
+    }
+    ImGui::SameLine();
     if (ImGui::Button("Delete"))  DeleteSelected();
 
     ImGui::End();
@@ -391,9 +419,9 @@ void EditorUI::DrawInspector() {
             if (comp->GetTypeName() == "MeshRenderer") {
                 auto* mr = dynamic_cast<MeshRenderer*>(comp.get());
                 if (mr) {
-                    const char* types[] = { "None", "Triangle", "Cube" };
+                    const char* types[] = { "None", "Triangle", "Cube", "Plane" };
                     int idx = static_cast<int>(mr->primitiveType);
-                    if (ImGui::Combo("Primitive", &idx, types, 3)) {
+                    if (ImGui::Combo("Primitive", &idx, types, 4)) {
                         mr->primitiveType = static_cast<PrimitiveType>(idx);
                     }
                     float col[4] = { mr->color.x, mr->color.y, mr->color.z, mr->color.w };
@@ -515,6 +543,13 @@ void EditorUI::DrawViewport(f32 dt) {
     if (w != m_ViewportW || h != m_ViewportH)
         ResizeViewport(w, h);
 
+    // Save viewport position for picking
+    ImVec2 vpPos = ImGui::GetCursorScreenPos();
+    m_VpScreenX = vpPos.x;
+    m_VpScreenY = vpPos.y;
+    m_VpScreenW = size.x;
+    m_VpScreenH = size.y;
+
     // Render scene into FBO
     glBindFramebuffer(GL_FRAMEBUFFER, m_ViewportFBO);
     glViewport(0, 0, static_cast<GLsizei>(m_ViewportW), static_cast<GLsizei>(m_ViewportH));
@@ -524,11 +559,31 @@ void EditorUI::DrawViewport(f32 dt) {
 
     Camera* cam = m_Scene ? m_Scene->GetActiveCamera() : nullptr;
     if (cam && m_Renderer) {
-        // Update camera aspect ratio to match viewport
         cam->SetPerspective(60.0f,
             static_cast<f32>(m_ViewportW) / static_cast<f32>(m_ViewportH),
             0.1f, 1000.0f);
+
+        // 1. Skybox (drawn first, behind everything)
+        m_Renderer->RenderSkybox(*cam, dt);
+
+        // 2. Grid
+        m_Renderer->RenderGrid(*cam);
+
+        // 3. Scene objects
         m_Renderer->RenderScene(*m_Scene, *cam);
+
+        // 4. Selection highlight
+        if (m_Selected && m_Selected->GetComponent<MeshRenderer>()) {
+            auto* mr = m_Selected->GetComponent<MeshRenderer>();
+            Mat4 model = m_Selected->GetTransform().GetModelMatrix();
+            m_Renderer->RenderHighlight(*cam, model, mr->primitiveType);
+        }
+
+        // 5. Gizmo
+        if (m_Selected) {
+            Vec3 gizPos = m_Selected->GetTransform().position;
+            m_Renderer->RenderGizmo(*cam, gizPos, m_GizmoMode, m_DragAxis);
+        }
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
@@ -536,9 +591,173 @@ void EditorUI::DrawViewport(f32 dt) {
     ImTextureID texID = static_cast<ImTextureID>(m_ViewportColor);
     ImGui::Image(texID, size, ImVec2(0, 1), ImVec2(1, 0));   // flip Y
 
-    // Viewport click → select object (simple screen-centre pick placeholder)
-    if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        PushLog("[Viewport] Click — object picking (placeholder).");
+    // ── Object Picking via ray-cast ────────────────────────────────────────
+    bool vpHovered = ImGui::IsItemHovered();
+    ImVec2 mousePos = ImGui::GetIO().MousePos;
+
+    if (vpHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && cam && !m_Dragging) {
+        // Convert mouse to viewport-local NDC
+        f32 mx = (mousePos.x - m_VpScreenX) / m_VpScreenW;
+        f32 my = (mousePos.y - m_VpScreenY) / m_VpScreenH;
+        f32 ndcX = mx * 2.0f - 1.0f;
+        f32 ndcY = 1.0f - my * 2.0f;  // flip Y
+
+        // Unproject: screen → world ray
+        Mat4 invVP = (cam->GetProjectionMatrix() * cam->GetViewMatrix()).Inverse();
+        Vec3 nearPt = invVP.TransformPoint(Vec3(ndcX, ndcY, -1.0f));
+        Vec3 farPt  = invVP.TransformPoint(Vec3(ndcX, ndcY,  1.0f));
+        Vec3 rayDir = (farPt - nearPt).Normalized();
+        Vec3 rayOrigin = nearPt;
+
+        // Test all scene objects (not just those with RigidBody)
+        GameObject* bestHit = nullptr;
+        f32 bestT = FLT_MAX;
+
+        if (m_Scene) {
+            for (auto& obj : m_Scene->GetAllObjects()) {
+                if (!obj || !obj->IsActive()) continue;
+                auto* mr = obj->GetComponent<MeshRenderer>();
+                if (!mr || mr->primitiveType == PrimitiveType::None) continue;
+
+                Transform& t = obj->GetTransform();
+                Vec3 half(0.5f * t.scale.x, 0.5f * t.scale.y, 0.5f * t.scale.z);
+                // For planes, half-Y is very thin
+                if (mr->primitiveType == PrimitiveType::Plane)
+                    half = Vec3(0.5f * t.scale.x, 0.05f, 0.5f * t.scale.z);
+                Vec3 bmin = t.position - half;
+                Vec3 bmax = t.position + half;
+
+                f32 tHit = 0;
+                if (RayAABBIntersect(rayOrigin, rayDir, bmin, bmax, tHit)) {
+                    if (tHit < bestT) {
+                        bestT = tHit;
+                        bestHit = obj.get();
+                    }
+                }
+            }
+        }
+
+        if (bestHit) {
+            m_Selected = bestHit;
+            PushLog("[Viewport] Selected '" + bestHit->GetName() + "'");
+        } else {
+            m_Selected = nullptr;
+        }
+    }
+
+    // ── Gizmo Drag Interaction ─────────────────────────────────────────────
+    if (vpHovered && m_Selected && cam) {
+        // Start drag: check if mouse is near a gizmo axis
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !m_Dragging) {
+            f32 mx = (mousePos.x - m_VpScreenX) / m_VpScreenW;
+            f32 my = (mousePos.y - m_VpScreenY) / m_VpScreenH;
+            f32 ndcX = mx * 2.0f - 1.0f;
+            f32 ndcY = 1.0f - my * 2.0f;
+
+            Mat4 vp = cam->GetProjectionMatrix() * cam->GetViewMatrix();
+            Vec3 gizPos = m_Selected->GetTransform().position;
+
+            // Project gizmo axis tips to screen and check proximity
+            auto project = [&](Vec3 worldPt) -> Vec2 {
+                Vec3 ndc = vp.TransformPoint(worldPt);
+                return { (ndc.x * 0.5f + 0.5f) * m_VpScreenW + m_VpScreenX,
+                         (1.0f - (ndc.y * 0.5f + 0.5f)) * m_VpScreenH + m_VpScreenY };
+            };
+
+            Vec3 tips[3] = {
+                gizPos + Vec3(1.5f, 0, 0),
+                gizPos + Vec3(0, 1.5f, 0),
+                gizPos + Vec3(0, 0, 1.5f)
+            };
+
+            Vec2 center2D = project(gizPos);
+            f32 threshold = 30.0f; // pixels
+
+            for (int a = 0; a < 3; ++a) {
+                Vec2 tip2D = project(tips[a]);
+                // Distance from mouse to line segment (center → tip)
+                Vec2 mp(mousePos.x, mousePos.y);
+                Vec2 d = tip2D - center2D;
+                Vec2 p = mp - center2D;
+                f32 lenSq = d.x * d.x + d.y * d.y;
+                f32 t = (lenSq > 0.01f) ? (p.x * d.x + p.y * d.y) / lenSq : 0.0f;
+                t = (t < 0) ? 0 : (t > 1) ? 1 : t;
+                Vec2 closest(center2D.x + d.x * t, center2D.y + d.y * t);
+                f32 dist = std::sqrt((mp.x - closest.x)*(mp.x - closest.x) + (mp.y - closest.y)*(mp.y - closest.y));
+                if (dist < threshold) {
+                    m_Dragging = true;
+                    m_DragAxis = a;
+                    m_DragStart = Vec3(mousePos.x, mousePos.y, 0);
+                    m_DragObjStart = m_Selected->GetTransform().position;
+                    // For Euler rotation extract
+                    const Quaternion& q = m_Selected->GetTransform().rotation;
+                    f32 sinp = 2.0f * (q.w * q.x + q.y * q.z);
+                    f32 cosp = 1.0f - 2.0f * (q.x * q.x + q.y * q.y);
+                    f32 siny = 2.0f * (q.w * q.y - q.z * q.x);
+                    f32 sinr = 2.0f * (q.w * q.z + q.x * q.y);
+                    f32 cosr = 1.0f - 2.0f * (q.y * q.y + q.z * q.z);
+                    m_DragRotStart = Vec3(
+                        std::atan2(sinp, cosp) * (180.0f / 3.14159265f),
+                        std::fabs(siny) >= 1.0f ? std::copysign(90.0f, siny) : std::asin(siny) * (180.0f / 3.14159265f),
+                        std::atan2(sinr, cosr) * (180.0f / 3.14159265f));
+                    m_DragScaleStart = m_Selected->GetTransform().scale;
+                    break;
+                }
+            }
+        }
+
+        // Continue drag
+        if (m_Dragging && ImGui::IsMouseDown(ImGuiMouseButton_Left) && m_DragAxis >= 0) {
+            f32 dx = mousePos.x - m_DragStart.x;
+            f32 dy = -(mousePos.y - m_DragStart.y); // flip Y
+            f32 delta = (m_DragAxis == 1) ? dy : dx; // Y-axis uses vertical mouse movement
+
+            f32 sensitivity = 0.01f;
+            Transform& t = m_Selected->GetTransform();
+
+            if (m_GizmoMode == GizmoMode::Translate) {
+                Vec3 pos = m_DragObjStart;
+                f32 move = delta * sensitivity * 2.0f;
+                if (m_DragAxis == 0) pos.x += move;
+                if (m_DragAxis == 1) pos.y += move;
+                if (m_DragAxis == 2) pos.z += move;
+
+                if (m_SnapToGrid && m_GridSize > 0.01f) {
+                    pos.x = std::round(pos.x / m_GridSize) * m_GridSize;
+                    pos.y = std::round(pos.y / m_GridSize) * m_GridSize;
+                    pos.z = std::round(pos.z / m_GridSize) * m_GridSize;
+                }
+
+                t.position = pos;
+            } else if (m_GizmoMode == GizmoMode::Rotate) {
+                Vec3 rot = m_DragRotStart;
+                f32 angle = delta * sensitivity * 50.0f;
+                if (m_DragAxis == 0) rot.x += angle;
+                if (m_DragAxis == 1) rot.y += angle;
+                if (m_DragAxis == 2) rot.z += angle;
+                t.SetEulerDeg(rot.x, rot.y, rot.z);
+            } else if (m_GizmoMode == GizmoMode::Scale) {
+                Vec3 scl = m_DragScaleStart;
+                f32 factor = 1.0f + delta * sensitivity;
+                if (factor < 0.05f) factor = 0.05f;
+                if (m_DragAxis == 0) scl.x = m_DragScaleStart.x * factor;
+                if (m_DragAxis == 1) scl.y = m_DragScaleStart.y * factor;
+                if (m_DragAxis == 2) scl.z = m_DragScaleStart.z * factor;
+                t.scale = scl;
+            }
+        }
+
+        // End drag
+        if (m_Dragging && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+            m_Dragging = false;
+            m_DragAxis = -1;
+        }
+    }
+
+    // Cancel drag if mouse released anywhere
+    if (m_Dragging && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        m_Dragging = false;
+        m_DragAxis = -1;
     }
 
     ImGui::End();

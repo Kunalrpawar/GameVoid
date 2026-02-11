@@ -98,14 +98,21 @@ bool Engine::Init(const EngineConfig& config) {
     m_Physics.RegisterBody(cube2RB);
     GV_LOG_INFO("[StartupScene] Created 'RotatedCube' at (0.3, 6, 0) with RigidBody.");
 
-    // 4. Ground plane (visual only — floor constraint is Y=0 in physics)
+    // 4. Ground plane (Plane primitive with Static RigidBody + Collider)
     auto* floorObj = defaultScene->CreateGameObject("Floor");
-    floorObj->GetTransform().SetPosition(0.0f, -0.05f, 0.0f);
-    floorObj->GetTransform().SetScale(20.0f, 0.1f, 20.0f);
+    floorObj->GetTransform().SetPosition(0.0f, 0.0f, 0.0f);
+    floorObj->GetTransform().SetScale(40.0f, 1.0f, 40.0f);
     auto* floorMR = floorObj->AddComponent<MeshRenderer>();
-    floorMR->primitiveType = PrimitiveType::Cube;
-    floorMR->color = Vec4(0.35f, 0.35f, 0.4f, 1.0f);   // dark grey
-    GV_LOG_INFO("[StartupScene] Created ground plane.");
+    floorMR->primitiveType = PrimitiveType::Plane;
+    floorMR->color = Vec4(0.4f, 0.4f, 0.42f, 1.0f);
+    auto* floorRB = floorObj->AddComponent<RigidBody>();
+    floorRB->bodyType = RigidBodyType::Static;
+    floorRB->useGravity = false;
+    auto* floorCol = floorObj->AddComponent<Collider>();
+    floorCol->type = ColliderType::Box;
+    floorCol->boxHalfExtents = Vec3(0.5f, 0.01f, 0.5f);  // scaled by transform
+    m_Physics.RegisterBody(floorRB);
+    GV_LOG_INFO("[StartupScene] Created ground plane with physics.");
 
     // ── Physics ────────────────────────────────────────────────────────────
     if (config.enablePhysics) {

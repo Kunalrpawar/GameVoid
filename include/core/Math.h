@@ -39,7 +39,12 @@ struct Vec3 {
     Vec3 operator+(const Vec3& o) const { return { x + o.x, y + o.y, z + o.z }; }
     Vec3 operator-(const Vec3& o) const { return { x - o.x, y - o.y, z - o.z }; }
     Vec3 operator*(f32 s) const         { return { x * s, y * s, z * s }; }
+    Vec3 operator/(f32 s) const         { return { x / s, y / s, z / s }; }
     Vec3 operator-() const              { return { -x, -y, -z }; }
+
+    Vec3& operator+=(const Vec3& o) { x += o.x; y += o.y; z += o.z; return *this; }
+    Vec3& operator-=(const Vec3& o) { x -= o.x; y -= o.y; z -= o.z; return *this; }
+    Vec3& operator*=(f32 s)         { x *= s; y *= s; z *= s; return *this; }
 
     f32  Dot(const Vec3& o) const   { return x * o.x + y * o.y + z * o.z; }
     Vec3 Cross(const Vec3& o) const {
@@ -162,6 +167,53 @@ struct Mat4 {
             }
         return r;
     }
+
+    /// Transform a 3D point (w=1) by this matrix and perspective-divide.
+    Vec3 TransformPoint(const Vec3& v) const {
+        f32 rx = m[0]*v.x + m[4]*v.y + m[8]*v.z  + m[12];
+        f32 ry = m[1]*v.x + m[5]*v.y + m[9]*v.z  + m[13];
+        f32 rz = m[2]*v.x + m[6]*v.y + m[10]*v.z + m[14];
+        f32 rw = m[3]*v.x + m[7]*v.y + m[11]*v.z + m[15];
+        if (std::fabs(rw) > 1e-7f) { rx /= rw; ry /= rw; rz /= rw; }
+        return { rx, ry, rz };
+    }
+
+    /// Transform a 3D direction (w=0) by this matrix.
+    Vec3 TransformDir(const Vec3& v) const {
+        return { m[0]*v.x + m[4]*v.y + m[8]*v.z,
+                 m[1]*v.x + m[5]*v.y + m[9]*v.z,
+                 m[2]*v.x + m[6]*v.y + m[10]*v.z };
+    }
+
+    /// 4×4 matrix inverse (general, cofactor method).
+    Mat4 Inverse() const {
+        Mat4 inv;
+        const f32* s = m;
+        f32* d = inv.m;
+
+        d[0]  =  s[5]*s[10]*s[15]-s[5]*s[11]*s[14]-s[9]*s[6]*s[15]+s[9]*s[7]*s[14]+s[13]*s[6]*s[11]-s[13]*s[7]*s[10];
+        d[4]  = -s[4]*s[10]*s[15]+s[4]*s[11]*s[14]+s[8]*s[6]*s[15]-s[8]*s[7]*s[14]-s[12]*s[6]*s[11]+s[12]*s[7]*s[10];
+        d[8]  =  s[4]*s[9]*s[15]-s[4]*s[11]*s[13]-s[8]*s[5]*s[15]+s[8]*s[7]*s[13]+s[12]*s[5]*s[11]-s[12]*s[7]*s[9];
+        d[12] = -s[4]*s[9]*s[14]+s[4]*s[10]*s[13]+s[8]*s[5]*s[14]-s[8]*s[6]*s[13]-s[12]*s[5]*s[10]+s[12]*s[6]*s[9];
+        d[1]  = -s[1]*s[10]*s[15]+s[1]*s[11]*s[14]+s[9]*s[2]*s[15]-s[9]*s[3]*s[14]-s[13]*s[2]*s[11]+s[13]*s[3]*s[10];
+        d[5]  =  s[0]*s[10]*s[15]-s[0]*s[11]*s[14]-s[8]*s[2]*s[15]+s[8]*s[3]*s[14]+s[12]*s[2]*s[11]-s[12]*s[3]*s[10];
+        d[9]  = -s[0]*s[9]*s[15]+s[0]*s[11]*s[13]+s[8]*s[1]*s[15]-s[8]*s[3]*s[13]-s[12]*s[1]*s[11]+s[12]*s[3]*s[9];
+        d[13] =  s[0]*s[9]*s[14]-s[0]*s[10]*s[13]-s[8]*s[1]*s[14]+s[8]*s[2]*s[13]+s[12]*s[1]*s[10]-s[12]*s[2]*s[9];
+        d[2]  =  s[1]*s[6]*s[15]-s[1]*s[7]*s[14]-s[5]*s[2]*s[15]+s[5]*s[3]*s[14]+s[13]*s[2]*s[7]-s[13]*s[3]*s[6];
+        d[6]  = -s[0]*s[6]*s[15]+s[0]*s[7]*s[14]+s[4]*s[2]*s[15]-s[4]*s[3]*s[14]-s[12]*s[2]*s[7]+s[12]*s[3]*s[6];
+        d[10] =  s[0]*s[5]*s[15]-s[0]*s[7]*s[13]-s[4]*s[1]*s[15]+s[4]*s[3]*s[13]+s[12]*s[1]*s[7]-s[12]*s[3]*s[5];
+        d[14] = -s[0]*s[5]*s[14]+s[0]*s[6]*s[13]+s[4]*s[1]*s[14]-s[4]*s[2]*s[13]-s[12]*s[1]*s[6]+s[12]*s[2]*s[5];
+        d[3]  = -s[1]*s[6]*s[11]+s[1]*s[7]*s[10]+s[5]*s[2]*s[11]-s[5]*s[3]*s[10]-s[9]*s[2]*s[7]+s[9]*s[3]*s[6];
+        d[7]  =  s[0]*s[6]*s[11]-s[0]*s[7]*s[10]-s[4]*s[2]*s[11]+s[4]*s[3]*s[10]+s[8]*s[2]*s[7]-s[8]*s[3]*s[6];
+        d[11] = -s[0]*s[5]*s[11]+s[0]*s[7]*s[9]+s[4]*s[1]*s[11]-s[4]*s[3]*s[9]-s[8]*s[1]*s[7]+s[8]*s[3]*s[5];
+        d[15] =  s[0]*s[5]*s[10]-s[0]*s[6]*s[9]-s[4]*s[1]*s[10]+s[4]*s[2]*s[9]+s[8]*s[1]*s[6]-s[8]*s[2]*s[5];
+
+        f32 det = s[0]*d[0] + s[1]*d[4] + s[2]*d[8] + s[3]*d[12];
+        if (std::fabs(det) < 1e-12f) return Identity();
+        f32 invDet = 1.0f / det;
+        for (int i = 0; i < 16; ++i) d[i] *= invDet;
+        return inv;
+    }
 };
 
 // ─── Quaternion (unit quaternion for rotations) ────────────────────────────
@@ -227,5 +279,34 @@ struct Quaternion {
         return v + t * w + q.Cross(t);
     }
 };
+
+// ── Utility free functions ─────────────────────────────────────────────────
+
+/// Linear interpolation.
+inline f32 Lerpf(f32 a, f32 b, f32 t) { return a + (b - a) * t; }
+inline Vec3 LerpVec3(const Vec3& a, const Vec3& b, f32 t) {
+    return { Lerpf(a.x, b.x, t), Lerpf(a.y, b.y, t), Lerpf(a.z, b.z, t) };
+}
+
+/// Ray vs AABB slab intersection.  Returns true if hit; sets tMin.
+inline bool RayAABBIntersect(const Vec3& origin, const Vec3& dir,
+                              const Vec3& boxMin, const Vec3& boxMax,
+                              f32& tMin) {
+    f32 t1, t2, tNear = -1e30f, tFar = 1e30f;
+    auto slab = [&](f32 o, f32 d, f32 mn, f32 mx) -> bool {
+        if (std::fabs(d) < 1e-8f) return (o >= mn && o <= mx);
+        t1 = (mn - o) / d;
+        t2 = (mx - o) / d;
+        if (t1 > t2) { f32 tmp = t1; t1 = t2; t2 = tmp; }
+        if (t1 > tNear) tNear = t1;
+        if (t2 < tFar)  tFar  = t2;
+        return tNear <= tFar && tFar >= 0.0f;
+    };
+    if (!slab(origin.x, dir.x, boxMin.x, boxMax.x)) return false;
+    if (!slab(origin.y, dir.y, boxMin.y, boxMax.y)) return false;
+    if (!slab(origin.z, dir.z, boxMin.z, boxMax.z)) return false;
+    tMin = (tNear >= 0.0f) ? tNear : tFar;
+    return tMin >= 0.0f;
+}
 
 } // namespace gv

@@ -22,6 +22,7 @@
 
 #include "core/Types.h"
 #include "core/Math.h"
+#include "renderer/Renderer.h"
 #include "ai/AIManager.h"
 #include <string>
 #include <vector>
@@ -49,9 +50,6 @@ class Animator;
 class AnimationLibrary;
 class NodeGraph;
 struct TerrainBrush;
-
-/// Gizmo operation mode.
-enum class GizmoMode { Translate, Rotate, Scale };
 
 /// Godot-style dockable editor overlay driven by Dear ImGui.
 class EditorUI {
@@ -145,6 +143,20 @@ private:
     GameObject*     m_Selected = nullptr;
     GizmoMode       m_GizmoMode = GizmoMode::Translate;
     bool            m_Playing  = false;
+
+    // ── Object picking / drag ──────────────────────────────────────────────
+    bool m_Dragging      = false;
+    i32  m_DragAxis      = -1;       // 0=X, 1=Y, 2=Z, -1=none
+    Vec3 m_DragStart     {};
+    Vec3 m_DragObjStart  {};
+    Vec3 m_DragRotStart  {};
+    Vec3 m_DragScaleStart{};
+    bool m_SnapToGrid    = false;
+    f32  m_GridSize       = 1.0f;
+
+    // Viewport screen-space info for picking
+    f32  m_VpScreenX = 0, m_VpScreenY = 0; // top-left of viewport in screen coords
+    f32  m_VpScreenW = 1, m_VpScreenH = 1;
 
     // Viewport FBO
     u32 m_ViewportFBO    = 0;

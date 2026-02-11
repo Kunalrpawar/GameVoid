@@ -19,7 +19,7 @@ class Material;
 // ── Built-in primitive shapes ──────────────────────────────────────────────
 /// Identifies which built-in mesh the renderer should draw.
 /// In a full engine the MeshRenderer would reference a Mesh asset instead.
-enum class PrimitiveType { None, Triangle, Cube };
+enum class PrimitiveType : int { None, Triangle, Cube, Plane };
 
 /// Component that holds a reference to a Mesh and a Material.
 /// The renderer inspects GameObjects for this component when drawing a scene.
