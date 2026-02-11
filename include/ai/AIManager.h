@@ -100,6 +100,25 @@ public:
     /// an optional AI-generated script.  Returns the new object pointer.
     GameObject* GenerateObjectFromPrompt(const std::string& prompt, Scene& scene) const;
 
+    // ── Scene generation (used by AI Generator panel) ──────────────────────
+    /// Result of a scene-generation request: list of blueprints + status.
+    struct SceneGenResult {
+        bool success = false;
+        std::string errorMessage;
+        std::string rawResponse;           // raw AI text for logging
+        std::vector<ObjectBlueprint> objects;
+    };
+
+    /// Build the system prompt that constrains AI output to valid JSON.
+    std::string BuildSceneGenPrompt(const std::string& userPrompt) const;
+
+    /// Parse the AI response text into ObjectBlueprints.
+    /// Handles markdown code fences, partial JSON, etc.
+    static SceneGenResult ParseSceneGenResponse(const std::string& text);
+
+    /// High-level: send prompt, parse, return blueprints.
+    SceneGenResult GenerateSceneFromPrompt(const std::string& userPrompt) const;
+
     // ── Async variant (callback-based; placeholder) ────────────────────────
     using ResponseCallback = std::function<void(const AIResponse&)>;
     void SendPromptAsync(const std::string& prompt, ResponseCallback cb) const;

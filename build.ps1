@@ -20,11 +20,16 @@ $commonSources = @(
     "src/core/FPSCamera.cpp",
     "src/renderer/Renderer.cpp",
     "src/renderer/Camera.cpp",
+    "src/renderer/Material.cpp",
     "src/physics/Physics.cpp",
     "src/assets/Assets.cpp",
     "src/ai/AIManager.cpp",
     "src/scripting/ScriptEngine.cpp",
+    "src/scripting/NodeGraph.cpp",
     "src/editor/CLIEditor.cpp",
+    "src/terrain/Terrain.cpp",
+    "src/effects/ParticleSystem.cpp",
+    "src/animation/Animation.cpp",
     "src/future/Placeholders.cpp"
 )
 

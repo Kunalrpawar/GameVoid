@@ -22,6 +22,7 @@
 
 #include "core/Types.h"
 #include "core/Math.h"
+#include "ai/AIManager.h"
 #include <string>
 #include <vector>
 #include <deque>
@@ -38,6 +39,16 @@ class ScriptEngine;
 class AssetManager;
 class GameObject;
 class OpenGLRenderer;
+class TerrainComponent;
+class PBRMaterial;
+class MaterialLibrary;
+class ShaderGraph;
+class ParticleEmitter;
+class AnimationClip;
+class Animator;
+class AnimationLibrary;
+class NodeGraph;
+struct TerrainBrush;
 
 /// Gizmo operation mode.
 enum class GizmoMode { Translate, Rotate, Scale };
@@ -93,6 +104,21 @@ private:
     void DrawInspector();
     void DrawConsole();
     void DrawViewport(f32 dt);
+    void DrawAIGenerator();
+    void DrawBottomTabs();
+
+    // ── New system panels ──────────────────────────────────────────────────
+    void DrawTerrainPanel();
+    void DrawMaterialPanel();
+    void DrawParticlePanel();
+    void DrawAnimationPanel();
+    void DrawNodeScriptPanel();
+
+    // ── AI Generator helpers ───────────────────────────────────────────────
+    void AIGenerate();          // kick off generation
+    void AISpawnBlueprints();   // instantiate parsed blueprints into scene
+    void AISpawnBlueprintsFrom(const std::vector<AIManager::ObjectBlueprint>& blueprints);
+    void AIUndoLastGeneration();
 
     // ── FBO helpers ────────────────────────────────────────────────────────
     void CreateViewportFBO(u32 w, u32 h);
@@ -101,6 +127,8 @@ private:
     // ── Add-object helpers ─────────────────────────────────────────────────
     void AddCube();
     void AddLight();
+    void AddTerrain();
+    void AddParticleEmitter();
     void DeleteSelected();
     void SaveScene(const std::string& path);
     void LoadScene(const std::string& path);
@@ -136,6 +164,56 @@ private:
 
     bool m_Initialised = false;
     bool m_ShowDemo    = false;
+    bool m_ShowAIPanel = true;
+
+    // ── AI Generator state ─────────────────────────────────────────────────
+    char   m_AIPromptBuf[1024] = {};
+    bool   m_AIGenerating  = false;
+    f32    m_AIProgress    = 0.0f;     // 0..1 progress bar
+    std::string m_AIStatusMsg;
+    std::vector<u32> m_AILastSpawnedIDs;   // for undo
+
+    // ── Bottom tab state ───────────────────────────────────────────────────
+    i32 m_BottomTab = 0;   // 0=Console, 1=Terrain, 2=Material, 3=Particle, 4=Animation, 5=Script
+
+    // ── Terrain editor state ───────────────────────────────────────────────
+    i32  m_TerrainRes       = 64;
+    f32  m_TerrainSize      = 40.0f;
+    f32  m_TerrainHeight    = 6.0f;
+    i32  m_TerrainSeed      = 42;
+    i32  m_TerrainOctaves   = 6;
+    i32  m_TerrainBrushMode = 0;   // 0=Raise,1=Lower,2=Smooth,3=Flatten,4=Paint
+    f32  m_TerrainBrushRadius   = 3.0f;
+    f32  m_TerrainBrushStrength = 0.4f;
+    i32  m_TerrainPaintLayer    = 0;
+
+    // ── Material editor state ──────────────────────────────────────────────
+    i32  m_MatSelectedIdx  = -1;
+    char m_MatNameBuf[128] = "New Material";
+    f32  m_MatAlbedo[4]    = { 0.8f, 0.8f, 0.8f, 1.0f };
+    f32  m_MatRoughness    = 0.5f;
+    f32  m_MatMetallic     = 0.0f;
+    f32  m_MatEmission[3]  = { 0, 0, 0 };
+    f32  m_MatEmissionStr  = 0.0f;
+    f32  m_MatAO           = 1.0f;
+
+    // ── Particle editor state ──────────────────────────────────────────────
+    i32  m_ParticlePreset = 0;
+
+    // ── Animation editor state ─────────────────────────────────────────────
+    char m_AnimClipName[64] = "Clip";
+    f32  m_AnimTimeline     = 0.0f;
+    bool m_AnimPlaying      = false;
+    f32  m_AnimSpeed        = 1.0f;
+
+    // ── Node Scripting editor state ────────────────────────────────────────
+    i32  m_NodeAddType = 0;
+    Vec2 m_NodeCanvasOffset { 0, 0 };
+    f32  m_NodeZoom = 1.0f;
+
+    // ── Subsystem instances ────────────────────────────────────────────────
+    MaterialLibrary*  m_MaterialLib = nullptr;
+    AnimationLibrary* m_AnimLib     = nullptr;
 };
 
 } // namespace gv

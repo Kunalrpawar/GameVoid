@@ -117,6 +117,194 @@ void AIManager::SendPromptAsync(const std::string& prompt, ResponseCallback cb) 
     if (cb) cb(resp);
 }
 
+// ── Scene Generation from Prompt ───────────────────────────────────────────
+
+std::string AIManager::BuildSceneGenPrompt(const std::string& userPrompt) const {
+    return
+        "You are a game level designer AI. The user will describe a scene.\n"
+        "Generate a JSON array of game objects. Each element is an object with:\n"
+        "  \"name\": string,\n"
+        "  \"meshType\": \"cube\" | \"triangle\" | \"plane\",\n"
+        "  \"position\": [x, y, z],\n"
+        "  \"rotation\": [rx, ry, rz]  (degrees),\n"
+        "  \"scale\": [sx, sy, sz],\n"
+        "  \"color\": [r, g, b, a]  (0-1 floats),\n"
+        "  \"hasPhysics\": true/false\n"
+        "\n"
+        "RULES:\n"
+        "- Output ONLY the JSON array, nothing else. No markdown, no comments.\n"
+        "- Ground/floor at Y=0. Objects above Y=0.\n"
+        "- Use 5-30 objects. Be creative with placement.\n"
+        "- Use varied colours.\n"
+        "- Gravity objects: hasPhysics=true.\n"
+        "\n"
+        "Scene description: " + userPrompt;
+}
+
+// Simple hand-written JSON array-of-objects parser for ObjectBlueprint.
+// Handles: [{ ... }, { ... }] with string, number, bool, array fields.
+// Robust against whitespace, trailing commas, and markdown code fences.
+AIManager::SceneGenResult AIManager::ParseSceneGenResponse(const std::string& raw) {
+    SceneGenResult result;
+    result.rawResponse = raw;
+
+    // Strip markdown code fences if present
+    std::string text = raw;
+    {
+        auto pos1 = text.find("```");
+        if (pos1 != std::string::npos) {
+            auto pos2 = text.find('\n', pos1);
+            if (pos2 != std::string::npos) text = text.substr(pos2 + 1);
+        }
+        auto pos3 = text.rfind("```");
+        if (pos3 != std::string::npos) text = text.substr(0, pos3);
+    }
+
+    // Find the outermost [ ... ]
+    auto arrStart = text.find('[');
+    auto arrEnd   = text.rfind(']');
+    if (arrStart == std::string::npos || arrEnd == std::string::npos || arrEnd <= arrStart) {
+        result.errorMessage = "No JSON array found in AI response.";
+        return result;
+    }
+    text = text.substr(arrStart, arrEnd - arrStart + 1);
+
+    // Helper lambdas for parsing
+    size_t pos = 1; // skip '['
+    auto skipWS = [&]() {
+        while (pos < text.size() && (text[pos] == ' ' || text[pos] == '\n' ||
+               text[pos] == '\r' || text[pos] == '\t' || text[pos] == ','))
+            pos++;
+    };
+
+    auto parseString = [&]() -> std::string {
+        std::string s;
+        if (pos >= text.size() || text[pos] != '"') return s;
+        pos++; // skip opening "
+        while (pos < text.size() && text[pos] != '"') {
+            if (text[pos] == '\\' && pos + 1 < text.size()) { pos++; }
+            s += text[pos++];
+        }
+        if (pos < text.size()) pos++; // skip closing "
+        return s;
+    };
+
+    auto parseNumber = [&]() -> f32 {
+        skipWS();
+        std::string num;
+        while (pos < text.size() && (text[pos] == '-' || text[pos] == '.' ||
+               (text[pos] >= '0' && text[pos] <= '9') || text[pos] == 'e' ||
+               text[pos] == 'E' || text[pos] == '+'))
+            num += text[pos++];
+        if (num.empty()) return 0.0f;
+        try { return std::stof(num); } catch (...) { return 0.0f; }
+    };
+
+    auto parseBool = [&]() -> bool {
+        skipWS();
+        if (pos + 4 <= text.size() && text.substr(pos, 4) == "true") { pos += 4; return true; }
+        if (pos + 5 <= text.size() && text.substr(pos, 5) == "false") { pos += 5; return false; }
+        return false;
+    };
+
+    auto parseNumArray = [&](f32* out, int count) {
+        skipWS();
+        if (pos < text.size() && text[pos] == '[') pos++; // skip [
+        for (int i = 0; i < count; i++) {
+            skipWS();
+            out[i] = parseNumber();
+            skipWS();
+            if (pos < text.size() && text[pos] == ',') pos++;
+        }
+        skipWS();
+        if (pos < text.size() && text[pos] == ']') pos++; // skip ]
+    };
+
+    // Parse objects
+    while (pos < text.size()) {
+        skipWS();
+        if (pos >= text.size() || text[pos] == ']') break;
+        if (text[pos] != '{') { pos++; continue; }
+        pos++; // skip '{'
+
+        ObjectBlueprint bp;
+        bp.name = "AI_Object";
+        bp.meshType = "cube";
+        f32 color[4] = { 0.7f, 0.7f, 0.7f, 1.0f };
+        bool hasPhysics = false;
+
+        // Parse key-value pairs
+        while (pos < text.size() && text[pos] != '}') {
+            skipWS();
+            if (pos >= text.size() || text[pos] == '}') break;
+            std::string key = parseString();
+            skipWS();
+            if (pos < text.size() && text[pos] == ':') pos++; // skip ':'
+            skipWS();
+
+            if (key == "name")         bp.name = parseString();
+            else if (key == "meshType") bp.meshType = parseString();
+            else if (key == "position") { f32 v[3]; parseNumArray(v, 3); bp.position = Vec3(v[0], v[1], v[2]); }
+            else if (key == "rotation") { f32 v[3]; parseNumArray(v, 3); bp.rotation = Vec3(v[0], v[1], v[2]); }
+            else if (key == "scale")    { f32 v[3]; parseNumArray(v, 3); bp.scale = Vec3(v[0], v[1], v[2]); }
+            else if (key == "color")    { parseNumArray(color, 4); }
+            else if (key == "hasPhysics") hasPhysics = parseBool();
+            else {
+                // Skip unknown value
+                if (pos < text.size() && text[pos] == '"') parseString();
+                else if (pos < text.size() && text[pos] == '[') {
+                    int depth = 1; pos++;
+                    while (pos < text.size() && depth > 0) {
+                        if (text[pos] == '[') depth++;
+                        else if (text[pos] == ']') depth--;
+                        pos++;
+                    }
+                } else if (pos < text.size() && text[pos] == '{') {
+                    int depth = 1; pos++;
+                    while (pos < text.size() && depth > 0) {
+                        if (text[pos] == '{') depth++;
+                        else if (text[pos] == '}') depth--;
+                        pos++;
+                    }
+                } else {
+                    while (pos < text.size() && text[pos] != ',' && text[pos] != '}') pos++;
+                }
+            }
+            skipWS();
+        }
+
+        if (pos < text.size() && text[pos] == '}') pos++; // skip '}'
+
+        // Store colour in materialName as "r,g,b,a" for later parsing
+        bp.materialName = std::to_string(color[0]) + "," + std::to_string(color[1]) + ","
+                        + std::to_string(color[2]) + "," + std::to_string(color[3]);
+        // Store hasPhysics in scriptSnippet field as a flag
+        bp.scriptSnippet = hasPhysics ? "physics" : "";
+
+        result.objects.push_back(bp);
+    }
+
+    result.success = !result.objects.empty();
+    if (!result.success)
+        result.errorMessage = "Parsed 0 objects from AI response.";
+
+    return result;
+}
+
+AIManager::SceneGenResult AIManager::GenerateSceneFromPrompt(const std::string& userPrompt) const {
+    std::string fullPrompt = BuildSceneGenPrompt(userPrompt);
+    AIResponse resp = SendPrompt(fullPrompt);
+
+    if (!resp.success) {
+        SceneGenResult r;
+        r.errorMessage = resp.errorMessage;
+        r.rawResponse = resp.rawJSON;
+        return r;
+    }
+
+    return ParseSceneGenResponse(resp.text);
+}
+
 // == generateObjectFromPrompt ================================================
 // The primary AI->game-world entry-point.
 
