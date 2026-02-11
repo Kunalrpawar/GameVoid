@@ -2,59 +2,8 @@
 
 A modular C++ game engine skeleton designed for 2D/3D game development with AI-assisted content creation.
 
-## Project Structure
+![GameVoid Engine](photo/image.png)
 
-```
-gamevoid/
-├── CMakeLists.txt                 # Build system
-├── README.md
-│
-├── include/                       # Public headers
-│   ├── core/
-│   │   ├── Types.h                # Type aliases, logging macros
-│   │   ├── Math.h                 # Vec2/3/4, Mat4, Quaternion
-│   │   ├── Transform.h            # Position, rotation, scale
-│   │   ├── Component.h            # Component base class
-│   │   ├── GameObject.h           # Entity with transform + components
-│   │   ├── Scene.h                # Scene graph + SceneManager
-│   │   └── Engine.h               # Top-level engine bootstrap
-│   │
-│   ├── renderer/
-│   │   ├── Renderer.h             # IRenderer interface + OpenGLRenderer + Shader
-│   │   ├── Camera.h               # Perspective / orthographic camera component
-│   │   ├── Lighting.h             # Ambient, directional, point, spot lights
-│   │   └── MeshRenderer.h         # MeshRenderer + SpriteRenderer components
-│   │
-│   ├── physics/
-│   │   └── Physics.h              # RigidBody, Collider, PhysicsWorld
-│   │
-│   ├── assets/
-│   │   └── Assets.h               # Texture, Mesh, Material, AssetManager
-│   │
-│   ├── ai/
-│   │   └── AIManager.h            # Google Gemini API integration
-│   │
-│   ├── scripting/
-│   │   └── ScriptEngine.h         # Lua scripting (ScriptComponent + ScriptEngine)
-│   │
-│   ├── editor/
-│   │   └── CLIEditor.h            # Command-line editor/debugger
-│   │
-│   └── future/
-│       └── Placeholders.h         # Animation, audio, networking, particles, UI stubs
-│
-└── src/                           # Implementations
-    ├── main.cpp                   # Entry point
-    ├── core/Engine.cpp
-    ├── renderer/Renderer.cpp
-    ├── renderer/Camera.cpp
-    ├── physics/Physics.cpp
-    ├── assets/Assets.cpp
-    ├── ai/AIManager.cpp
-    ├── scripting/ScriptEngine.cpp
-    ├── editor/CLIEditor.cpp
-    └── future/Placeholders.cpp
-```
 
 ## Building
 
