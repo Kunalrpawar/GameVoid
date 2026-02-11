@@ -18,6 +18,7 @@
 #endif
 #include "core/Window.h"
 #include "future/Placeholders.h"
+#include "animation/Animation.h"
 #include <string>
 
 namespace gv {

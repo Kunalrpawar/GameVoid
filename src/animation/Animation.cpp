@@ -146,12 +146,11 @@ void Animator::CrossFade(const std::string& toClip, f32 transitionTime) {
 }
 
 void Animator::OnUpdate(f32 dt) {
-    if (!m_Playing || m_Paused || !Owner) return;
+    if (!m_Playing || m_Paused || !GetOwner()) return;
 
     m_Time += dt * m_Speed;
 
-    Transform* tr = Owner->GetTransform();
-    if (!tr) return;
+    Transform& tr = GetOwner()->GetTransform();
 
     if (m_Blending) {
         m_Blend.blendProgress += dt / m_Blend.transitionTime;
@@ -166,17 +165,17 @@ void Animator::OnUpdate(f32 dt) {
             Keyframe kA = clipA->Sample(m_Time);
             Keyframe kB = clipB->Sample(m_Time);
             f32 t = m_Blend.blendProgress;
-            tr->position = LerpVec3(kA.position, kB.position, t);
-            tr->rotation = SlerpQuat(kA.rotation, kB.rotation, t);
-            tr->scale    = LerpVec3(kA.scale, kB.scale, t);
+            tr.position = LerpVec3(kA.position, kB.position, t);
+            tr.rotation = SlerpQuat(kA.rotation, kB.rotation, t);
+            tr.scale    = LerpVec3(kA.scale, kB.scale, t);
         }
     } else {
         auto* clip = GetClip(m_CurrentClip);
         if (clip) {
             Keyframe k = clip->Sample(m_Time);
-            tr->position = k.position;
-            tr->rotation = k.rotation;
-            tr->scale    = k.scale;
+            tr.position = k.position;
+            tr.rotation = k.rotation;
+            tr.scale    = k.scale;
         }
     }
 }

@@ -365,7 +365,7 @@ void NodeGraph::ExecuteNode(u32 nodeID, Scene& scene, GameObject* self, f32 dt) 
     case VisualNodeType::SetPosition:
         if (self) {
             Vec3 pos = EvaluateVec3(nodeID, 1, scene, self, dt);
-            self->GetTransform()->SetPosition(pos);
+            self->GetTransform().position = pos;
         }
         // Follow flow output
         for (auto& c : m_Connections) {
@@ -382,7 +382,7 @@ void NodeGraph::ExecuteNode(u32 nodeID, Scene& scene, GameObject* self, f32 dt) 
     case VisualNodeType::SetRotation:
         if (self) {
             Vec3 euler = EvaluateVec3(nodeID, 1, scene, self, dt);
-            self->GetTransform()->SetEulerDeg(euler);
+            self->GetTransform().SetEulerDeg(euler.x, euler.y, euler.z);
         }
         for (auto& c : m_Connections) {
             if (c.fromNodeID == nodeID) {
@@ -397,7 +397,7 @@ void NodeGraph::ExecuteNode(u32 nodeID, Scene& scene, GameObject* self, f32 dt) 
     case VisualNodeType::SetScale:
         if (self) {
             Vec3 sc = EvaluateVec3(nodeID, 1, scene, self, dt);
-            self->GetTransform()->SetScale(sc);
+            self->GetTransform().scale = sc;
         }
         for (auto& c : m_Connections) {
             if (c.fromNodeID == nodeID) {
@@ -532,7 +532,7 @@ Vec3 NodeGraph::EvaluateVec3(u32 nodeID, i32 pinIndex, Scene& scene, GameObject*
         if (src) {
             switch (src->type) {
             case VisualNodeType::GetPosition:
-                return self ? self->GetTransform()->position : Vec3{};
+                return self ? self->GetTransform().position : Vec3{};
             default:
                 return pin.vec3Val;
             }
@@ -610,7 +610,7 @@ bool NodeGraph::Deserialize(const std::string& /*data*/) {
 
 // ── NodeGraphComponent ─────────────────────────────────────────────────────
 void NodeGraphComponent::OnStart() {
-    if (!m_Started && Owner) {
+    if (!m_Started && GetOwner()) {
         // Get scene from owner — placeholder, would need scene reference
         m_Started = true;
     }

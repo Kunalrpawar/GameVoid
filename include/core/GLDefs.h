@@ -275,6 +275,7 @@ typedef void   (APIENTRY *PFN_glVertexAttribPointer)(GLuint index, GLint size, G
                                                        const void* pointer);
 typedef void   (APIENTRY *PFN_glEnableVertexAttribArray)(GLuint index);
 typedef void   (APIENTRY *PFN_glDisableVertexAttribArray)(GLuint index);
+typedef void   (APIENTRY *PFN_glVertexAttribDivisor)(GLuint index, GLuint divisor);
 
 // Texture (GL 1.3+)
 typedef void   (APIENTRY *PFN_glActiveTexture)(GLenum texture);
@@ -342,9 +343,10 @@ extern PFN_glBufferData             glBufferData;
 extern PFN_glBufferSubData          glBufferSubData;
 
 // Vertex attributes
-extern PFN_glVertexAttribPointer    glVertexAttribPointer;
+extern PFN_glVertexAttribPointer      glVertexAttribPointer;
 extern PFN_glEnableVertexAttribArray  glEnableVertexAttribArray;
 extern PFN_glDisableVertexAttribArray glDisableVertexAttribArray;
+extern PFN_glVertexAttribDivisor      glVertexAttribDivisor;
 
 // Texture
 extern PFN_glActiveTexture          glActiveTexture;

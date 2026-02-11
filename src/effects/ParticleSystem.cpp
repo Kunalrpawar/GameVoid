@@ -2,6 +2,7 @@
 // GameVoid Engine — Particle System Implementation
 // ============================================================================
 #include "effects/ParticleSystem.h"
+#include "core/GameObject.h"
 #include <cmath>
 #include <cstdlib>
 #include <algorithm>
@@ -138,8 +139,8 @@ void ParticleEmitter::EmitParticle() {
 
         // Position based on shape
         Vec3 emitPos = { 0, 0, 0 };
-        if (Owner) {
-            emitPos = Owner->GetTransform()->position;
+        if (GetOwner()) {
+            emitPos = GetOwner()->GetTransform().position;
         }
 
         switch (shape) {
@@ -182,12 +183,12 @@ void ParticleEmitter::EmitParticle() {
         // Rotate localDir so that (0,1,0) aligns with 'direction'
         Vec3 up = { 0, 1, 0 };
         Vec3 dir = direction.Normalized();
-        if (std::abs(Vec3::Dot(up, dir)) < 0.999f) {
-            Vec3 axis = Vec3::Cross(up, dir).Normalized();
-            f32 angle = std::acos(Vec3::Dot(up, dir));
+        if (std::abs(up.Dot(dir)) < 0.999f) {
+            Vec3 axis = up.Cross(dir).Normalized();
+            f32 angle = std::acos(up.Dot(dir));
             Quaternion q = Quaternion::FromAxisAngle(axis, angle);
             localDir = q.RotateVec3(localDir);
-        } else if (Vec3::Dot(up, dir) < 0) {
+        } else if (up.Dot(dir) < 0) {
             localDir.y = -localDir.y;
         }
         p.velocity = { localDir.x * spd, localDir.y * spd, localDir.z * spd };

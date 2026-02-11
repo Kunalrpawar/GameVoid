@@ -6,22 +6,7 @@
 
 namespace gv {
 
-// ── Animator ───────────────────────────────────────────────────────────────
-void Animator::Play(const std::string& clipName) {
-    for (i32 i = 0; i < static_cast<i32>(m_Clips.size()); ++i) {
-        if (m_Clips[i].name == clipName) {
-            m_CurrentClip = i;
-            m_PlaybackTime = 0.0f;
-            m_Playing = true;
-            return;
-        }
-    }
-    GV_LOG_WARN("Animator — clip '" + clipName + "' not found.");
-}
-
-void Animator::Stop()  { m_Playing = false; m_PlaybackTime = 0.0f; }
-void Animator::Pause() { m_Playing = false; }
-void Animator::SetSpeed(f32 speed) { m_Speed = speed; }
+// Animator — removed; see animation/Animation.cpp for full implementation
 
 // ── Shader Library ─────────────────────────────────────────────────────────
 bool ShaderLibrary::Load(const std::string& name, const std::string& vertPath,

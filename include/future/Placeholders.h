@@ -21,41 +21,7 @@
 
 namespace gv {
 
-// ============================================================================
-// Animation System (placeholder)
-// ============================================================================
-/// Represents a single animation clip (e.g. "walk", "idle", "attack").
-struct AnimationClip {
-    std::string name;
-    f32 duration   = 1.0f;     // seconds
-    bool looping   = true;
-    // In production: keyframe data, bone indices, etc.
-};
-
-/// Component that plays AnimationClips on the owning GameObject's mesh.
-class Animator : public Component {
-public:
-    std::string GetTypeName() const override { return "Animator"; }
-
-    void Play(const std::string& clipName);
-    void Stop();
-    void Pause();
-    void SetSpeed(f32 speed);
-
-    void AddClip(const AnimationClip& clip) { m_Clips.push_back(clip); }
-
-    void OnUpdate(f32 dt) override {
-        // TODO: advance playback time, interpolate keyframes
-        (void)dt;
-    }
-
-private:
-    std::vector<AnimationClip> m_Clips;
-    i32  m_CurrentClip = -1;
-    f32  m_PlaybackTime = 0.0f;
-    f32  m_Speed = 1.0f;
-    bool m_Playing = false;
-};
+// Animation System — see animation/Animation.h for full implementation
 
 // ============================================================================
 // Shader Library (placeholder)

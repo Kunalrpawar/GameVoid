@@ -1141,15 +1141,15 @@ void EditorUI::DrawAnimationPanel() {
             clip.SetDuration(2.0f);
             // Add default keyframes
             Keyframe k0; k0.time = 0;
-            k0.position = m_Selected->GetTransform()->position;
-            k0.rotation = m_Selected->GetTransform()->rotation;
-            k0.scale    = m_Selected->GetTransform()->scale;
+            k0.position = m_Selected->GetTransform().position;
+            k0.rotation = m_Selected->GetTransform().rotation;
+            k0.scale    = m_Selected->GetTransform().scale;
             clip.AddKeyframe(k0);
             Keyframe k1; k1.time = 2.0f;
-            k1.position = m_Selected->GetTransform()->position;
+            k1.position = m_Selected->GetTransform().position;
             k1.position.y += 2.0f;
-            k1.rotation = m_Selected->GetTransform()->rotation;
-            k1.scale    = m_Selected->GetTransform()->scale;
+            k1.rotation = m_Selected->GetTransform().rotation;
+            k1.scale    = m_Selected->GetTransform().scale;
             clip.AddKeyframe(k1);
             animator->AddClip(clip);
             PushLog("[Animation] Added clip: " + std::string(m_AnimClipName));
@@ -1226,8 +1226,6 @@ void EditorUI::DrawAnimationPanel() {
             if (ImGui::Combo("Interpolation", &iMode, interpModes, 3)) {
                 clip->SetInterpMode(static_cast<InterpMode>(iMode));
             }
-            ImGui::Checkbox("Loop", &clip->GetKeyframesMut().empty() ? m_AnimPlaying :
-                *reinterpret_cast<bool*>(&m_AnimPlaying)); // safe dummy
             bool loop = clip->IsLooping();
             if (ImGui::Checkbox("Looping", &loop)) { clip->SetLooping(loop); }
 
@@ -1235,9 +1233,9 @@ void EditorUI::DrawAnimationPanel() {
             if (ImGui::Button("+ Keyframe Here", ImVec2(-1, 22))) {
                 Keyframe kf;
                 kf.time = m_AnimTimeline;
-                kf.position = m_Selected->GetTransform()->position;
-                kf.rotation = m_Selected->GetTransform()->rotation;
-                kf.scale    = m_Selected->GetTransform()->scale;
+                kf.position = m_Selected->GetTransform().position;
+                kf.rotation = m_Selected->GetTransform().rotation;
+                kf.scale    = m_Selected->GetTransform().scale;
                 clip->AddKeyframe(kf);
                 PushLog("[Animation] Added keyframe at t=" + std::to_string(m_AnimTimeline));
             }

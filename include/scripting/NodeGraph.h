@@ -8,6 +8,7 @@
 
 #include "core/Types.h"
 #include "core/Math.h"
+#include "core/Component.h"
 #include <string>
 #include <vector>
 #include <map>

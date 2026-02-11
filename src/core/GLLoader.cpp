@@ -54,9 +54,10 @@ PFN_glBufferData             glBufferData             = nullptr;
 PFN_glBufferSubData          glBufferSubData          = nullptr;
 
 // Vertex attributes
-PFN_glVertexAttribPointer    glVertexAttribPointer    = nullptr;
+PFN_glVertexAttribPointer      glVertexAttribPointer      = nullptr;
 PFN_glEnableVertexAttribArray  glEnableVertexAttribArray  = nullptr;
 PFN_glDisableVertexAttribArray glDisableVertexAttribArray = nullptr;
+PFN_glVertexAttribDivisor      glVertexAttribDivisor      = nullptr;
 
 // Texture
 PFN_glActiveTexture          glActiveTexture          = nullptr;
@@ -129,6 +130,7 @@ bool gvLoadGL() {
     GV_LOAD(glVertexAttribPointer);
     GV_LOAD(glEnableVertexAttribArray);
     GV_LOAD(glDisableVertexAttribArray);
+    GV_LOAD(glVertexAttribDivisor);
 
     // Texture
     GV_LOAD(glActiveTexture);
