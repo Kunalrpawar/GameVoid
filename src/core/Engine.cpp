@@ -219,21 +219,8 @@ void Engine::Run() {
 
             if (m_Window.IsKeyDown(GVKey::Escape)) { m_Window.SetShouldClose(true); break; }
 
-            // FPS camera only when ImGui doesn't want keyboard/mouse
-            bool imguiKeyboard = m_EditorUI.WantsCaptureKeyboard();
-            bool imguiMouse    = m_EditorUI.WantsCaptureMouse();
-
-            Camera* activeCam = scene->GetActiveCamera();
-            if (activeCam && m_Window.IsCursorCaptured()) {
-                auto* fps = activeCam->GetOwner()->GetComponent<FPSCameraController>();
-                if (fps && !imguiKeyboard) fps->UpdateFromInput(m_Window, dt);
-            }
-
-            // Tab toggles cursor capture (for FPS navigation in viewport)
-            if (m_Window.IsKeyPressed(GVKey::Tab)) {
-                bool next = !m_Window.IsCursorCaptured();
-                m_Window.SetCursorCaptured(next);
-            }
+            // FPS camera only when cursor is captured (disabled in editor — orbit cam handles it)
+            // In editor-gui mode the orbit camera in EditorUI handles all camera movement.
 
             // Physics (when playing)
             if (m_Config.enablePhysics && m_EditorUI.IsPlaying())

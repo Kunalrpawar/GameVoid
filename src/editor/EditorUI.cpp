@@ -91,6 +91,21 @@ bool EditorUI::Init(Window* window, OpenGLRenderer* renderer, Scene* scene,
     // Create scene FBO at initial size
     CreateViewportFBO(m_Window->GetWidth(), m_Window->GetHeight());
 
+    // ── Initialise orbit camera from the scene camera position ─────────────
+    Camera* cam = m_Scene ? m_Scene->GetActiveCamera() : nullptr;
+    if (cam && cam->GetOwner()) {
+        Vec3 camPos = cam->GetOwner()->GetTransform().position;
+        // Default: look at origin from the camera's initial position
+        m_OrbitCam.focusPoint = Vec3(0, 0, 0);
+        Vec3 diff = camPos - m_OrbitCam.focusPoint;
+        m_OrbitCam.distance = diff.Length();
+        if (m_OrbitCam.distance < 0.1f) m_OrbitCam.distance = 8.0f;
+        // Compute yaw/pitch from offset
+        m_OrbitCam.yaw   = std::atan2(diff.x, diff.z) * (180.0f / 3.14159265f);
+        m_OrbitCam.pitch = -std::asin(diff.y / m_OrbitCam.distance) * (180.0f / 3.14159265f);
+        m_OrbitCam.ApplyToTransform(cam->GetOwner()->GetTransform());
+    }
+
     m_Initialised = true;
     GV_LOG_INFO("EditorUI initialised (Dear ImGui " + std::string(IMGUI_VERSION) + ").");
     PushLog("[Editor] Ready.");
@@ -881,11 +896,79 @@ void EditorUI::DrawViewport(f32 dt) {
     ImTextureID texID = static_cast<ImTextureID>(m_ViewportColor);
     ImGui::Image(texID, size, ImVec2(0, 1), ImVec2(1, 0));   // flip Y
 
-    // ── Object Picking via ray-cast ────────────────────────────────────────
-    bool vpHovered = ImGui::IsItemHovered();
+    // ── Orbit / Pan / Zoom camera controls ─────────────────────────────────
+    bool vpHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
     ImVec2 mousePos = ImGui::GetIO().MousePos;
 
-    if (vpHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && cam && !m_Dragging) {
+    if (cam) {
+        bool mmb = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
+        bool rmb = ImGui::IsMouseDown(ImGuiMouseButton_Right);
+        bool shiftHeld = ImGui::GetIO().KeyShift;
+        bool altHeld   = ImGui::GetIO().KeyAlt;
+
+        // Scroll → zoom (only when hovered)
+        if (vpHovered) {
+            f32 scroll = ImGui::GetIO().MouseWheel;
+            if (scroll != 0.0f) {
+                m_OrbitCam.Zoom(scroll);
+                m_OrbitCam.ApplyToTransform(cam->GetOwner()->GetTransform());
+            }
+        }
+
+        // ── Start drag: only when viewport is hovered ──────────────────
+        if (vpHovered && !m_OrbitActive && !m_PanActive) {
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ||
+                ImGui::IsMouseClicked(ImGuiMouseButton_Right)  ||
+                (altHeld && ImGui::IsMouseClicked(ImGuiMouseButton_Left))) {
+                m_LastMousePos = Vec2(mousePos.x, mousePos.y);
+                if (shiftHeld) {
+                    m_PanActive = true;
+                } else {
+                    m_OrbitActive = true;
+                }
+            }
+        }
+
+        // ── Continue drag: works even when mouse leaves viewport ───────
+        if (m_OrbitActive) {
+            if (mmb || rmb || (altHeld && ImGui::IsMouseDown(ImGuiMouseButton_Left))) {
+                f32 dx = mousePos.x - m_LastMousePos.x;
+                f32 dy = mousePos.y - m_LastMousePos.y;
+                m_LastMousePos = Vec2(mousePos.x, mousePos.y);
+                if (shiftHeld) {
+                    m_OrbitCam.Pan(dx, dy);  // shift mid-drag switches to pan
+                } else {
+                    m_OrbitCam.Orbit(dx, dy);
+                }
+                m_OrbitCam.ApplyToTransform(cam->GetOwner()->GetTransform());
+            } else {
+                m_OrbitActive = false;  // button released
+            }
+        }
+
+        if (m_PanActive) {
+            if (mmb || rmb) {
+                f32 dx = mousePos.x - m_LastMousePos.x;
+                f32 dy = mousePos.y - m_LastMousePos.y;
+                m_LastMousePos = Vec2(mousePos.x, mousePos.y);
+                m_OrbitCam.Pan(dx, dy);
+                m_OrbitCam.ApplyToTransform(cam->GetOwner()->GetTransform());
+            } else {
+                m_PanActive = false;  // button released
+            }
+        }
+    }
+
+    // ── Focus on selected object (F key) ───────────────────────────────────
+    if (vpHovered && ImGui::IsKeyPressed(ImGuiKey_F) && m_Selected && cam) {
+        m_OrbitCam.FocusOn(m_Selected->GetTransform().position);
+        m_OrbitCam.ApplyToTransform(cam->GetOwner()->GetTransform());
+    }
+
+    // ── Object Picking via ray-cast ────────────────────────────────────────
+    // Only pick on Left-click when NOT orbiting/panning
+    if (vpHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && cam
+        && !m_Dragging && !m_OrbitActive && !m_PanActive && !ImGui::GetIO().KeyAlt) {
         // Convert mouse to viewport-local NDC
         f32 mx = (mousePos.x - m_VpScreenX) / m_VpScreenW;
         f32 my = (mousePos.y - m_VpScreenY) / m_VpScreenH;

@@ -29,6 +29,7 @@ $commonSources = @(
     "src/scripting/NodeGraph.cpp",
     "src/scripting/NativeScript.cpp",
     "src/editor/CLIEditor.cpp",
+    "src/editor/OrbitCamera.cpp",
     "src/terrain/Terrain.cpp",
     "src/effects/ParticleSystem.cpp",
     "src/animation/Animation.cpp",
