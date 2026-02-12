@@ -107,3 +107,6 @@ cmake --build .
 ## License
 
 MIT — use freely for any project.
+
+
+.\GameVoid.exe --editor-gui

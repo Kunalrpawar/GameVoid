@@ -7,6 +7,8 @@
 #include "renderer/Camera.h"
 #include "renderer/Lighting.h"
 #include "renderer/MeshRenderer.h"
+#include "renderer/MaterialComponent.h"
+#include "scripting/NativeScript.h"
 #ifdef GV_HAS_GLFW
 #include "core/GLDefs.h"
 #endif
@@ -71,6 +73,10 @@ bool Engine::Init(const EngineConfig& config) {
     auto* cubeMR = cubeObj->AddComponent<MeshRenderer>();
     cubeMR->primitiveType = PrimitiveType::Cube;
     cubeMR->color = Vec4(0.25f, 0.6f, 1.0f, 1.0f);   // sky-blue
+    auto* cubeMat = cubeObj->AddComponent<MaterialComponent>();
+    cubeMat->albedo = cubeMR->color;
+    cubeMat->metallic = 0.2f;
+    cubeMat->roughness = 0.5f;
     auto* cubeRB = cubeObj->AddComponent<RigidBody>();
     cubeRB->useGravity = true;
     cubeObj->AddComponent<Collider>()->type = ColliderType::Box;
@@ -126,10 +132,19 @@ bool Engine::Init(const EngineConfig& config) {
     }
 
     // ── AI ─────────────────────────────────────────────────────────────────
-    if (config.enableAI && !config.geminiAPIKey.empty()) {
-        m_AI.SetAPIKey(config.geminiAPIKey);
-        GV_LOG_INFO("AI module configured with Gemini API key.");
+    if (config.enableAI) {
+        // Use provided key or try loading from config file
+        if (!config.geminiAPIKey.empty()) {
+            m_AI.Init(config.geminiAPIKey);
+        } else {
+            m_AI.Init("");  // will try loading from config file
+        }
+        GV_LOG_INFO("AI module configured (key " + std::string(m_AI.IsReady() ? "present" : "absent") + ").");
     }
+
+    // ── Register built-in C++ behaviors ────────────────────────────────────
+    RegisterBuiltinBehaviors();
+    GV_LOG_INFO("Registered " + std::to_string(BehaviorRegistry::Instance().GetNames().size()) + " built-in behaviors.");
 
     // ── Input / Audio (placeholders) ───────────────────────────────────────
     m_Input.Init();

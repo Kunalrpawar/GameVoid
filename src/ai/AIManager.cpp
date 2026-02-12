@@ -1,35 +1,227 @@
 // ============================================================================
 // GameVoid Engine — AI Manager Implementation (Google Gemini)
 // ============================================================================
+// Real HTTP integration via WinInet (Windows) or placeholder on other platforms.
+// ============================================================================
 #include "ai/AIManager.h"
 #include "core/Scene.h"
 #include "core/GameObject.h"
 #include "renderer/MeshRenderer.h"
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <wininet.h>
+#pragma comment(lib, "wininet.lib")
+#endif
+
+#include <fstream>
+#include <sstream>
+#include <algorithm>
+
 namespace gv {
+
+// ── Init / Config Persistence ──────────────────────────────────────────────
+
+void AIManager::Init(const std::string& apiKey) {
+    if (!apiKey.empty()) {
+        m_Config.apiKey = apiKey;
+        SaveConfigToFile();
+        GV_LOG_INFO("AIManager::Init — API key set and saved to config.");
+    } else {
+        // Try loading from disk
+        if (LoadConfigFromFile()) {
+            GV_LOG_INFO("AIManager::Init — loaded API key from config file.");
+        } else {
+            GV_LOG_WARN("AIManager::Init — no API key provided or found on disk.");
+        }
+    }
+}
+
+void AIManager::SaveConfigToFile() const {
+    std::ofstream ofs(m_Config.configFilePath);
+    if (ofs.is_open()) {
+        ofs << "[AI]\n";
+        ofs << "apiKey=" << m_Config.apiKey << "\n";
+        ofs << "model=" << m_Config.model << "\n";
+        ofs << "temperature=" << m_Config.temperature << "\n";
+        ofs << "maxTokens=" << m_Config.maxTokens << "\n";
+        ofs.close();
+        GV_LOG_INFO("AIManager — config saved to " + m_Config.configFilePath);
+    }
+}
+
+bool AIManager::LoadConfigFromFile() {
+    std::ifstream ifs(m_Config.configFilePath);
+    if (!ifs.is_open()) return false;
+
+    std::string line;
+    while (std::getline(ifs, line)) {
+        // skip comments / section headers
+        if (line.empty() || line[0] == '[' || line[0] == '#') continue;
+        auto eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        std::string key = line.substr(0, eq);
+        std::string val = line.substr(eq + 1);
+        // trim whitespace
+        while (!key.empty() && key.back() == ' ') key.pop_back();
+        while (!val.empty() && val.front() == ' ') val.erase(val.begin());
+
+        if (key == "apiKey")       m_Config.apiKey = val;
+        else if (key == "model")   m_Config.model = val;
+        else if (key == "temperature") { try { m_Config.temperature = std::stof(val); } catch (...) {} }
+        else if (key == "maxTokens")   { try { m_Config.maxTokens = static_cast<u32>(std::stoul(val)); } catch (...) {} }
+    }
+    return !m_Config.apiKey.empty();
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 std::string AIManager::BuildRequestURL() const {
-    // e.g. https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=API_KEY
     return m_Config.baseUrl + m_Config.model + ":generateContent?key=" + m_Config.apiKey;
 }
 
+// ── HTTP POST (WinInet on Windows, placeholder elsewhere) ──────────────────
+
 AIResponse AIManager::HttpPost(const std::string& url, const std::string& jsonBody) const {
     AIResponse resp;
-    // In production:
-    //   CURL* curl = curl_easy_init();
-    //   curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    //   curl_easy_setopt(curl, CURLOPT_POSTFIELDS, jsonBody.c_str());
-    //   ... set headers (Content-Type: application/json) ...
-    //   CURLcode res = curl_easy_perform(curl);
-    //   resp.rawJSON = <response buffer>;
-    //   resp.success = (res == CURLE_OK);
-    //   curl_easy_cleanup(curl);
+
+#ifdef _WIN32
+    // ── Parse URL components ───────────────────────────────────────────────
+    std::string host, path;
+    {
+        std::string u = url;
+        size_t schemeEnd = u.find("://");
+        if (schemeEnd != std::string::npos) u = u.substr(schemeEnd + 3);
+        size_t slash = u.find('/');
+        if (slash != std::string::npos) {
+            host = u.substr(0, slash);
+            path = u.substr(slash);
+        } else {
+            host = u;
+            path = "/";
+        }
+    }
+
+    HINTERNET hInternet = InternetOpenA("GameVoid/1.0", INTERNET_OPEN_TYPE_PRECONFIG,
+                                        nullptr, nullptr, 0);
+    if (!hInternet) {
+        resp.errorMessage = "InternetOpen failed (error " + std::to_string(GetLastError()) + ").";
+        GV_LOG_ERROR(resp.errorMessage);
+        return resp;
+    }
+
+    HINTERNET hConnect = InternetConnectA(hInternet, host.c_str(),
+                                          INTERNET_DEFAULT_HTTPS_PORT,
+                                          nullptr, nullptr,
+                                          INTERNET_SERVICE_HTTP, 0, 0);
+    if (!hConnect) {
+        resp.errorMessage = "InternetConnect failed (error " + std::to_string(GetLastError()) + ").";
+        GV_LOG_ERROR(resp.errorMessage);
+        InternetCloseHandle(hInternet);
+        return resp;
+    }
+
+    DWORD flags = INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_RELOAD;
+    HINTERNET hRequest = HttpOpenRequestA(hConnect, "POST", path.c_str(),
+                                          nullptr, nullptr, nullptr, flags, 0);
+    if (!hRequest) {
+        resp.errorMessage = "HttpOpenRequest failed (error " + std::to_string(GetLastError()) + ").";
+        GV_LOG_ERROR(resp.errorMessage);
+        InternetCloseHandle(hConnect);
+        InternetCloseHandle(hInternet);
+        return resp;
+    }
+
+    // Set content type header
+    const char* headers = "Content-Type: application/json\r\n";
+    BOOL bResult = HttpSendRequestA(hRequest, headers, (DWORD)strlen(headers),
+                                    (LPVOID)jsonBody.c_str(), (DWORD)jsonBody.size());
+    if (!bResult) {
+        resp.errorMessage = "HttpSendRequest failed (error " + std::to_string(GetLastError()) + ").";
+        GV_LOG_ERROR(resp.errorMessage);
+        InternetCloseHandle(hRequest);
+        InternetCloseHandle(hConnect);
+        InternetCloseHandle(hInternet);
+        return resp;
+    }
+
+    // Read response body
+    std::string responseBody;
+    char buf[4096];
+    DWORD bytesRead = 0;
+    while (InternetReadFile(hRequest, buf, sizeof(buf) - 1, &bytesRead) && bytesRead > 0) {
+        buf[bytesRead] = '\0';
+        responseBody.append(buf, bytesRead);
+        bytesRead = 0;
+    }
+
+    InternetCloseHandle(hRequest);
+    InternetCloseHandle(hConnect);
+    InternetCloseHandle(hInternet);
+
+    resp.rawJSON = responseBody;
+
+    // ── Extract text from Gemini JSON response ─────────────────────────────
+    // Response format: { "candidates": [{ "content": { "parts": [{ "text": "..." }] } }] }
+    // Simple extraction without a JSON library:
+    {
+        std::string marker = "\"text\"";
+        size_t pos = responseBody.find(marker);
+        if (pos != std::string::npos) {
+            pos = responseBody.find(':', pos);
+            if (pos != std::string::npos) {
+                pos = responseBody.find('"', pos + 1);
+                if (pos != std::string::npos) {
+                    pos++; // skip opening "
+                    std::string extracted;
+                    while (pos < responseBody.size()) {
+                        if (responseBody[pos] == '\\' && pos + 1 < responseBody.size()) {
+                            char next = responseBody[pos + 1];
+                            if (next == '"')       { extracted += '"';  pos += 2; continue; }
+                            else if (next == 'n')  { extracted += '\n'; pos += 2; continue; }
+                            else if (next == '\\') { extracted += '\\'; pos += 2; continue; }
+                            else if (next == 't')  { extracted += '\t'; pos += 2; continue; }
+                            else { extracted += next; pos += 2; continue; }
+                        }
+                        if (responseBody[pos] == '"') break;
+                        extracted += responseBody[pos++];
+                    }
+                    resp.text = extracted;
+                    resp.success = true;
+                }
+            }
+        }
+
+        if (!resp.success) {
+            // Check for error message in response
+            size_t errPos = responseBody.find("\"message\"");
+            if (errPos != std::string::npos) {
+                errPos = responseBody.find('"', responseBody.find(':', errPos) + 1);
+                if (errPos != std::string::npos) {
+                    errPos++;
+                    std::string errMsg;
+                    while (errPos < responseBody.size() && responseBody[errPos] != '"') {
+                        errMsg += responseBody[errPos++];
+                    }
+                    resp.errorMessage = "Gemini API error: " + errMsg;
+                }
+            }
+            if (resp.errorMessage.empty())
+                resp.errorMessage = "Failed to parse Gemini response.";
+            GV_LOG_WARN(resp.errorMessage);
+        }
+    }
+
+    GV_LOG_INFO("AIManager::HttpPost — response " + std::to_string(responseBody.size()) + " bytes, success=" + (resp.success ? "true" : "false"));
+#else
+    // Non-Windows placeholder
     GV_LOG_INFO("AIManager::HttpPost (placeholder) — URL: " + url.substr(0, 80) + "...");
     (void)jsonBody;
     resp.success = false;
-    resp.errorMessage = "HTTP client not implemented in skeleton build.";
+    resp.errorMessage = "HTTP client not implemented on this platform. Build on Windows for WinInet support.";
+#endif
+
     return resp;
 }
 

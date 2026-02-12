@@ -20,12 +20,15 @@
 #include "renderer/Lighting.h"
 #include "renderer/MeshRenderer.h"
 #include "renderer/Material.h"
+#include "renderer/MaterialComponent.h"
 #include "physics/Physics.h"
 #include "ai/AIManager.h"
 #include "terrain/Terrain.h"
 #include "effects/ParticleSystem.h"
 #include "animation/Animation.h"
 #include "scripting/NodeGraph.h"
+#include "scripting/NativeScript.h"
+#include "scripting/ScriptEngine.h"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -229,6 +232,9 @@ void EditorUI::DrawMenuBar() {
             if (ImGui::MenuItem("Particles"))   { m_BottomTab = 3; }
             if (ImGui::MenuItem("Animation"))   { m_BottomTab = 4; }
             if (ImGui::MenuItem("Node Script")) { m_BottomTab = 5; }
+            if (ImGui::MenuItem("Behaviors"))   { m_BottomTab = 6; }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Editor Settings")) { m_ShowEditorSettings = true; }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("AI")) {
@@ -379,23 +385,17 @@ void EditorUI::DrawInspector() {
         }
 
         // Show rotation as Euler (approximate)
-        // Convert quaternion to approximate Euler for display
-        // Using a simple extraction for display purposes
         float rotDeg[3] = { 0, 0, 0 };
         {
-            // Quaternion to Euler (yaw-pitch-roll)
             const Quaternion& q = t.rotation;
-            // pitch (X)
             f32 sinp = 2.0f * (q.w * q.x + q.y * q.z);
             f32 cosp = 1.0f - 2.0f * (q.x * q.x + q.y * q.y);
             rotDeg[0] = std::atan2(sinp, cosp) * (180.0f / 3.14159265358979f);
-            // yaw (Y)
             f32 siny = 2.0f * (q.w * q.y - q.z * q.x);
             if (std::fabs(siny) >= 1.0f)
                 rotDeg[1] = std::copysign(90.0f, siny);
             else
                 rotDeg[1] = std::asin(siny) * (180.0f / 3.14159265358979f);
-            // roll (Z)
             f32 sinr = 2.0f * (q.w * q.z + q.x * q.y);
             f32 cosr = 1.0f - 2.0f * (q.y * q.y + q.z * q.z);
             rotDeg[2] = std::atan2(sinr, cosr) * (180.0f / 3.14159265358979f);
@@ -410,9 +410,50 @@ void EditorUI::DrawInspector() {
         }
     }
 
-    // Components list
+    // ── Material Component (Godot-style) ───────────────────────────────────
+    DrawInspectorMaterial();
+
+    // ── Rigidbody toggle ───────────────────────────────────────────────────
+    {
+        auto* rb = m_Selected->GetComponent<RigidBody>();
+        bool hasRB = (rb != nullptr);
+        if (ImGui::CollapsingHeader("Rigidbody", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (ImGui::Checkbox("Has Rigidbody", &hasRB)) {
+                if (hasRB && !rb) {
+                    rb = m_Selected->AddComponent<RigidBody>();
+                    rb->useGravity = true;
+                    m_Selected->AddComponent<Collider>()->type = ColliderType::Box;
+                    if (m_Physics) m_Physics->RegisterBody(rb);
+                    PushLog("[Inspector] Added RigidBody to " + m_Selected->GetName());
+                } else if (!hasRB && rb) {
+                    m_Selected->RemoveComponent<Collider>();
+                    m_Selected->RemoveComponent<RigidBody>();
+                    PushLog("[Inspector] Removed RigidBody from " + m_Selected->GetName());
+                }
+            }
+            if (rb) {
+                ImGui::DragFloat("Mass", &rb->mass, 0.1f, 0.01f, 1000.0f);
+                ImGui::Checkbox("Use Gravity", &rb->useGravity);
+                ImGui::DragFloat("Restitution", &rb->restitution, 0.01f, 0.0f, 1.0f);
+                ImGui::Text("Velocity: %.2f, %.2f, %.2f",
+                    rb->velocity.x, rb->velocity.y, rb->velocity.z);
+            }
+        }
+    }
+
+    // ── Scripts & Behaviors ─────────────────────────────────────────────────
+    DrawInspectorScripts();
+
+    // Components list (other components)
     if (ImGui::CollapsingHeader("Components", ImGuiTreeNodeFlags_DefaultOpen)) {
         for (auto& comp : m_Selected->GetComponents()) {
+            // Skip types that already have dedicated sections
+            if (comp->GetTypeName() == "Material" ||
+                comp->GetTypeName() == "RigidBody" ||
+                comp->GetTypeName() == "Collider" ||
+                comp->GetTypeName() == "NativeScript")
+                continue;
+
             ImGui::BulletText("%s", comp->GetTypeName().c_str());
 
             // MeshRenderer specific
@@ -425,21 +466,9 @@ void EditorUI::DrawInspector() {
                         mr->primitiveType = static_cast<PrimitiveType>(idx);
                     }
                     float col[4] = { mr->color.x, mr->color.y, mr->color.z, mr->color.w };
-                    if (ImGui::ColorEdit4("Color", col)) {
+                    if (ImGui::ColorEdit4("MR Color", col)) {
                         mr->color = Vec4(col[0], col[1], col[2], col[3]);
                     }
-                }
-            }
-
-            // RigidBody specific
-            if (comp->GetTypeName() == "RigidBody") {
-                auto* rb = dynamic_cast<RigidBody*>(comp.get());
-                if (rb) {
-                    ImGui::DragFloat("Mass", &rb->mass, 0.1f, 0.01f, 1000.0f);
-                    ImGui::Checkbox("Use Gravity", &rb->useGravity);
-                    ImGui::DragFloat("Restitution", &rb->restitution, 0.01f, 0.0f, 1.0f);
-                    ImGui::Text("Velocity: %.2f, %.2f, %.2f",
-                        rb->velocity.x, rb->velocity.y, rb->velocity.z);
                 }
             }
 
@@ -466,6 +495,17 @@ void EditorUI::DrawInspector() {
                         al->colour = Vec3(col[0], col[1], col[2]);
                     }
                     ImGui::DragFloat("Intensity", &al->intensity, 0.01f, 0.0f, 5.0f);
+                }
+            }
+            if (comp->GetTypeName() == "PointLight") {
+                auto* pl = dynamic_cast<PointLight*>(comp.get());
+                if (pl) {
+                    float col[3] = { pl->colour.x, pl->colour.y, pl->colour.z };
+                    if (ImGui::ColorEdit3("Light Color", col)) {
+                        pl->colour = Vec3(col[0], col[1], col[2]);
+                    }
+                    ImGui::DragFloat("Intensity", &pl->intensity, 0.01f, 0.0f, 10.0f);
+                    ImGui::DragFloat("Range", &pl->range, 0.5f, 0.1f, 200.0f);
                 }
             }
 
@@ -520,7 +560,257 @@ void EditorUI::DrawInspector() {
         }
     }
 
+    // ── Add Component Button (Godot-style) ─────────────────────────────────
+    DrawInspectorAddComponent();
+
     ImGui::End();
+}
+
+// ── Inspector: Material Section ────────────────────────────────────────────
+
+void EditorUI::DrawInspectorMaterial() {
+    auto* mat = m_Selected->GetComponent<MaterialComponent>();
+    if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (!mat) {
+            ImGui::TextDisabled("No material attached.");
+            if (ImGui::Button("+ Add Material Component")) {
+                mat = m_Selected->AddComponent<MaterialComponent>();
+                // Copy colour from MeshRenderer if present
+                auto* mr = m_Selected->GetComponent<MeshRenderer>();
+                if (mr) mat->albedo = mr->color;
+                PushLog("[Inspector] Added Material to " + m_Selected->GetName());
+            }
+        }
+        if (mat) {
+            // Color picker (RGBA)
+            float col[4] = { mat->albedo.x, mat->albedo.y, mat->albedo.z, mat->albedo.w };
+            if (ImGui::ColorEdit4("Albedo##Mat", col, ImGuiColorEditFlags_AlphaBar)) {
+                mat->albedo = Vec4(col[0], col[1], col[2], col[3]);
+                mat->ApplyToMeshRenderer();   // live viewport update
+            }
+
+            // Metallic slider
+            if (ImGui::SliderFloat("Metallic##Mat", &mat->metallic, 0.0f, 1.0f)) {
+                // In full PBR pipeline, would update shader uniforms
+            }
+
+            // Roughness slider
+            if (ImGui::SliderFloat("Roughness##Mat", &mat->roughness, 0.0f, 1.0f)) {
+            }
+
+            // Emission
+            float em[3] = { mat->emission.x, mat->emission.y, mat->emission.z };
+            if (ImGui::ColorEdit3("Emission##Mat", em)) {
+                mat->emission = Vec3(em[0], em[1], em[2]);
+            }
+            ImGui::DragFloat("Emission Str##Mat", &mat->emissionStrength, 0.01f, 0.0f, 10.0f);
+            ImGui::SliderFloat("AO##Mat", &mat->ao, 0.0f, 1.0f);
+
+            // Material name
+            char mnBuf[128];
+            std::snprintf(mnBuf, sizeof(mnBuf), "%s", mat->GetMaterialName().c_str());
+            if (ImGui::InputText("Mat Name", mnBuf, sizeof(mnBuf))) {
+                mat->SetMaterialName(mnBuf);
+            }
+
+            // Preview sphere (inline in inspector)
+            ImGui::Separator();
+            ImVec2 cur = ImGui::GetCursorScreenPos();
+            ImDrawList* draw = ImGui::GetWindowDrawList();
+            ImVec2 center(cur.x + 30, cur.y + 30);
+            ImU32 baseCol = ImGui::ColorConvertFloat4ToU32(
+                ImVec4(mat->albedo.x, mat->albedo.y, mat->albedo.z, 1.0f));
+            ImU32 darkCol = ImGui::ColorConvertFloat4ToU32(
+                ImVec4(mat->albedo.x * 0.3f, mat->albedo.y * 0.3f, mat->albedo.z * 0.3f, 1.0f));
+            draw->AddCircleFilled(center, 28, darkCol, 32);
+            draw->AddCircleFilled(ImVec2(center.x - 5, center.y - 5), 20, baseCol, 32);
+            f32 specSz = 8.0f * (1.0f - mat->roughness);
+            if (specSz > 1)
+                draw->AddCircleFilled(ImVec2(center.x - 10, center.y - 10), specSz,
+                                      IM_COL32(255, 255, 255, 180), 16);
+            ImGui::Dummy(ImVec2(60, 60));
+            ImGui::SameLine();
+            ImGui::BeginGroup();
+            ImGui::TextDisabled("R: %.2f", mat->roughness);
+            ImGui::TextDisabled("M: %.2f", mat->metallic);
+            ImGui::EndGroup();
+        }
+    }
+}
+
+// ── Inspector: Scripts & Behaviors Section ─────────────────────────────────
+
+void EditorUI::DrawInspectorScripts() {
+    if (ImGui::CollapsingHeader("Scripts & Behaviors", ImGuiTreeNodeFlags_DefaultOpen)) {
+        bool hasAny = false;
+
+        // List all NativeScript behaviors
+        for (auto& comp : m_Selected->GetComponents()) {
+            auto* ns = dynamic_cast<NativeScriptComponent*>(comp.get());
+            if (!ns) continue;
+            hasAny = true;
+
+            ImGui::PushID(ns);
+            bool enabled = ns->IsEnabled();
+            if (ImGui::Checkbox("##ScriptEnabled", &enabled)) {
+                ns->SetEnabled(enabled);
+            }
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1), "%s", ns->GetScriptName().c_str());
+
+            // Type-specific properties
+            if (auto* rot = dynamic_cast<RotatorBehavior*>(ns)) {
+                ImGui::DragFloat("Speed##Rot", &rot->speed, 1.0f, -1000.0f, 1000.0f);
+                float ax[3] = { rot->axis.x, rot->axis.y, rot->axis.z };
+                if (ImGui::DragFloat3("Axis##Rot", ax, 0.1f)) {
+                    rot->axis = Vec3(ax[0], ax[1], ax[2]);
+                }
+            }
+            if (auto* bob = dynamic_cast<BobBehavior*>(ns)) {
+                ImGui::DragFloat("Amplitude##Bob", &bob->amplitude, 0.05f, 0.0f, 10.0f);
+                ImGui::DragFloat("Frequency##Bob", &bob->frequency, 0.1f, 0.0f, 20.0f);
+            }
+            if (auto* ad = dynamic_cast<AutoDestroyBehavior*>(ns)) {
+                ImGui::DragFloat("Lifetime##AD", &ad->lifetime, 0.1f, 0.1f, 60.0f);
+            }
+
+            ImGui::PopID();
+            ImGui::Separator();
+        }
+
+        // List ScriptComponents (Lua scripts)
+        for (auto& comp : m_Selected->GetComponents()) {
+            if (comp->GetTypeName() == "ScriptComponent") {
+                hasAny = true;
+                auto* sc = dynamic_cast<ScriptComponent*>(comp.get());
+                if (sc) {
+                    ImGui::BulletText("Lua Script: %s",
+                        sc->GetScriptPath().empty() ? "(inline)" : sc->GetScriptPath().c_str());
+                }
+            }
+        }
+
+        if (!hasAny) {
+            ImGui::TextDisabled("No scripts attached.");
+        }
+
+        // Behavior dropdown: add new behavior
+        ImGui::Separator();
+        auto names = BehaviorRegistry::Instance().GetNames();
+        if (!names.empty()) {
+            if (m_AddBehaviorIdx >= static_cast<i32>(names.size()))
+                m_AddBehaviorIdx = 0;
+
+            // Build combo items
+            std::string combo;
+            for (auto& n : names) { combo += n; combo += '\0'; }
+            combo += '\0';
+            ImGui::Combo("##BehaviorList", &m_AddBehaviorIdx, combo.c_str());
+            ImGui::SameLine();
+            if (ImGui::Button("+ Attach")) {
+                auto* behavior = BehaviorRegistry::Instance().Create(names[m_AddBehaviorIdx]);
+                if (behavior) {
+                    // Transfer ownership: AddComponent takes Unique<T>, but we can set owner manually
+                    behavior->SetOwner(m_Selected);
+                    behavior->OnAttach();
+                    // We need to add it via AddComponent but we already have a raw pointer.
+                    // Use a small trick: add via the generic component vector.
+                    // Actually, the cleanest way is to use AddComponent with the concrete type.
+                    // Since we have a factory, we'll attach via the direct approach below.
+                    // For now, use AddComponent with the known types:
+                    const std::string& bname = names[m_AddBehaviorIdx];
+                    delete behavior; // discard factory product
+                    if (bname == "Rotator")      m_Selected->AddComponent<RotatorBehavior>();
+                    else if (bname == "Bob")      m_Selected->AddComponent<BobBehavior>();
+                    else if (bname == "Follow")   m_Selected->AddComponent<FollowBehavior>();
+                    else if (bname == "AutoDestroy") m_Selected->AddComponent<AutoDestroyBehavior>();
+                    PushLog("[Inspector] Attached behavior: " + bname + " to " + m_Selected->GetName());
+                }
+            }
+        }
+    }
+}
+
+// ── Inspector: Add Component Button ────────────────────────────────────────
+
+void EditorUI::DrawInspectorAddComponent() {
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    const char* componentNames[] = { "Rigidbody", "Point Light", "Directional Light",
+                                     "Material", "MeshRenderer", "ScriptComponent",
+                                     "ParticleEmitter", "Animator", "NodeGraph" };
+    const int componentCount = 9;
+
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.5f, 0.2f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.7f, 0.3f, 1.0f));
+
+    // Center the button
+    float avail = ImGui::GetContentRegionAvail().x;
+    float btnW = avail * 0.8f;
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - btnW) * 0.5f);
+
+    if (ImGui::Button("Add Component", ImVec2(btnW, 28))) {
+        ImGui::OpenPopup("AddComponentPopup");
+    }
+    ImGui::PopStyleColor(2);
+
+    if (ImGui::BeginPopup("AddComponentPopup")) {
+        ImGui::TextDisabled("Select component to add:");
+        ImGui::Separator();
+
+        if (ImGui::MenuItem("Rigidbody")) {
+            if (!m_Selected->GetComponent<RigidBody>()) {
+                auto* rb = m_Selected->AddComponent<RigidBody>();
+                rb->useGravity = true;
+                m_Selected->AddComponent<Collider>()->type = ColliderType::Box;
+                if (m_Physics) m_Physics->RegisterBody(rb);
+                PushLog("[Inspector] Added Rigidbody.");
+            }
+        }
+        if (ImGui::MenuItem("Point Light")) {
+            m_Selected->AddComponent<PointLight>();
+            PushLog("[Inspector] Added PointLight.");
+        }
+        if (ImGui::MenuItem("Directional Light")) {
+            m_Selected->AddComponent<DirectionalLight>();
+            PushLog("[Inspector] Added DirectionalLight.");
+        }
+        if (ImGui::MenuItem("Material")) {
+            if (!m_Selected->GetComponent<MaterialComponent>()) {
+                auto* mat = m_Selected->AddComponent<MaterialComponent>();
+                auto* mr = m_Selected->GetComponent<MeshRenderer>();
+                if (mr) mat->albedo = mr->color;
+                PushLog("[Inspector] Added Material.");
+            }
+        }
+        if (ImGui::MenuItem("MeshRenderer")) {
+            if (!m_Selected->GetComponent<MeshRenderer>()) {
+                auto* mr = m_Selected->AddComponent<MeshRenderer>();
+                mr->primitiveType = PrimitiveType::Cube;
+                PushLog("[Inspector] Added MeshRenderer.");
+            }
+        }
+        if (ImGui::MenuItem("Script (Lua)")) {
+            m_Selected->AddComponent<ScriptComponent>();
+            PushLog("[Inspector] Added ScriptComponent.");
+        }
+
+        ImGui::Separator();
+        ImGui::TextDisabled("C++ Behaviors:");
+        auto bnames = BehaviorRegistry::Instance().GetNames();
+        for (auto& bn : bnames) {
+            if (ImGui::MenuItem(bn.c_str())) {
+                if (bn == "Rotator")      m_Selected->AddComponent<RotatorBehavior>();
+                else if (bn == "Bob")      m_Selected->AddComponent<BobBehavior>();
+                else if (bn == "Follow")   m_Selected->AddComponent<FollowBehavior>();
+                else if (bn == "AutoDestroy") m_Selected->AddComponent<AutoDestroyBehavior>();
+                PushLog("[Inspector] Added behavior: " + bn);
+            }
+        }
+
+        ImGui::EndPopup();
+    }
 }
 
 // ── Console Panel (kept as fallback for direct calls) ──────────────────────
@@ -768,6 +1058,16 @@ void EditorUI::DrawAIGenerator() {
     ImGui::Begin("AI Generator", &m_ShowAIPanel,
         ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoCollapse);
+
+    // API key status indicator
+    bool hasKey = (m_AI && m_AI->IsReady());
+    if (hasKey) {
+        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1), "[API Connected]");
+    } else {
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1), "[No API Key]");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Settings")) { m_ShowEditorSettings = true; }
+    }
 
     ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Describe your scene:");
     ImGui::InputTextMultiline("##AIPrompt", m_AIPromptBuf, sizeof(m_AIPromptBuf),
@@ -1083,10 +1383,63 @@ void EditorUI::DrawBottomTabs() {
             ImGui::EndTabItem();
         }
 
+        if (ImGui::BeginTabItem("Behaviors")) {
+            m_BottomTab = 6;
+            DrawBehaviorPanel();
+            ImGui::EndTabItem();
+        }
+
         ImGui::EndTabBar();
     }
 
     ImGui::End();
+
+    // ── Editor Settings Popup (API key, model selection) ───────────────────
+    if (m_ShowEditorSettings) {
+        ImGui::OpenPopup("Editor Settings");
+        m_ShowEditorSettings = false;
+    }
+    if (ImGui::BeginPopupModal("Editor Settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1), "Gemini AI Configuration");
+        ImGui::Separator();
+
+        // Pre-fill from current config
+        if (m_AIKeyBuf[0] == '\0' && m_AI && !m_AI->GetConfig().apiKey.empty()) {
+            std::snprintf(m_AIKeyBuf, sizeof(m_AIKeyBuf), "%s", m_AI->GetConfig().apiKey.c_str());
+        }
+
+        ImGui::InputText("API Key", m_AIKeyBuf, sizeof(m_AIKeyBuf));
+        ImGui::TextDisabled("Key is stored in gamevoid_config.ini");
+
+        if (m_AI) {
+            // Model selector
+            const char* models[] = { "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro" };
+            static int modelIdx = 0;
+            if (m_AI->GetConfig().model == "gemini-2.0-flash") modelIdx = 0;
+            else if (m_AI->GetConfig().model == "gemini-1.5-flash") modelIdx = 1;
+            else if (m_AI->GetConfig().model == "gemini-1.5-pro") modelIdx = 2;
+
+            if (ImGui::Combo("Model", &modelIdx, models, 3)) {
+                m_AI->GetConfigMut().model = models[modelIdx];
+            }
+
+            ImGui::DragFloat("Temperature", &m_AI->GetConfigMut().temperature, 0.05f, 0.0f, 2.0f);
+        }
+
+        ImGui::Separator();
+        if (ImGui::Button("Save & Apply", ImVec2(140, 28))) {
+            if (m_AI) {
+                m_AI->Init(std::string(m_AIKeyBuf));
+                PushLog("[Settings] API key saved. Model: " + m_AI->GetConfig().model);
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(80, 28))) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 }
 
 // ── Terrain Panel ──────────────────────────────────────────────────────────
@@ -1458,6 +1811,99 @@ void EditorUI::DrawAnimationPanel() {
                 clip->AddKeyframe(kf);
                 PushLog("[Animation] Added keyframe at t=" + std::to_string(m_AnimTimeline));
             }
+        }
+    }
+
+    ImGui::Columns(1);
+}
+
+// ── Behavior Editor Panel ──────────────────────────────────────────────────
+
+void EditorUI::DrawBehaviorPanel() {
+    ImGui::Columns(2, "BehaviorCols", true);
+    ImGui::SetColumnWidth(0, 250);
+
+    // Column 1: Registered behaviors & object's attached scripts
+    ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1), "Behavior Registry");
+    ImGui::Separator();
+
+    auto names = BehaviorRegistry::Instance().GetNames();
+    for (auto& name : names) {
+        ImGui::BulletText("%s", name.c_str());
+        ImGui::SameLine();
+        if (m_Selected) {
+            std::string btnLabel = "Attach##" + name;
+            if (ImGui::SmallButton(btnLabel.c_str())) {
+                if (name == "Rotator")          m_Selected->AddComponent<RotatorBehavior>();
+                else if (name == "Bob")         m_Selected->AddComponent<BobBehavior>();
+                else if (name == "Follow")      m_Selected->AddComponent<FollowBehavior>();
+                else if (name == "AutoDestroy") m_Selected->AddComponent<AutoDestroyBehavior>();
+                PushLog("[Behavior] Attached " + name + " to " + m_Selected->GetName());
+            }
+        }
+    }
+
+    if (names.empty()) {
+        ImGui::TextDisabled("No behaviors registered.");
+    }
+
+    ImGui::NextColumn();
+
+    // Column 2: Attached behaviors on selected object
+    ImGui::TextColored(ImVec4(0.8f, 0.6f, 1.0f, 1), "Attached Behaviors");
+    ImGui::Separator();
+
+    if (!m_Selected) {
+        ImGui::TextDisabled("Select an object to see its behaviors.");
+    } else {
+        bool foundAny = false;
+        for (auto& comp : m_Selected->GetComponents()) {
+            auto* ns = dynamic_cast<NativeScriptComponent*>(comp.get());
+            if (!ns) continue;
+            foundAny = true;
+
+            ImGui::PushID(ns);
+
+            // Enable/disable checkbox
+            bool enabled = ns->IsEnabled();
+            if (ImGui::Checkbox("##en", &enabled)) {
+                ns->SetEnabled(enabled);
+            }
+            ImGui::SameLine();
+
+            // Behavior name with colour
+            ImVec4 col = enabled ? ImVec4(0.4f, 1.0f, 0.4f, 1) : ImVec4(0.5f, 0.5f, 0.5f, 1);
+            ImGui::TextColored(col, "%s", ns->GetScriptName().c_str());
+
+            // Inline property editors
+            if (auto* rot = dynamic_cast<RotatorBehavior*>(ns)) {
+                ImGui::Indent();
+                ImGui::DragFloat("Speed", &rot->speed, 1, -720, 720);
+                float ax[3] = { rot->axis.x, rot->axis.y, rot->axis.z };
+                if (ImGui::DragFloat3("Axis", ax, 0.1f))
+                    rot->axis = Vec3(ax[0], ax[1], ax[2]);
+                ImGui::Unindent();
+            }
+            if (auto* bob = dynamic_cast<BobBehavior*>(ns)) {
+                ImGui::Indent();
+                ImGui::DragFloat("Amplitude", &bob->amplitude, 0.05f, 0, 10);
+                ImGui::DragFloat("Frequency", &bob->frequency, 0.1f, 0, 20);
+                ImGui::Unindent();
+            }
+            if (auto* ad = dynamic_cast<AutoDestroyBehavior*>(ns)) {
+                ImGui::Indent();
+                ImGui::DragFloat("Lifetime", &ad->lifetime, 0.1f, 0.1f, 60);
+                ImGui::Unindent();
+            }
+
+            ImGui::PopID();
+            ImGui::Separator();
+        }
+
+        if (!foundAny) {
+            ImGui::TextDisabled("No C++ behaviors attached.");
+            ImGui::TextDisabled("Use 'Add Component' in Inspector,");
+            ImGui::TextDisabled("or click 'Attach' on the left.");
         }
     }
 

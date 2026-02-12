@@ -29,6 +29,9 @@ file(GLOB_RECURSE ENGINE_SOURCES
     "src/scripting/*.cpp"
     "src/editor/*.cpp"
     "src/future/*.cpp"
+    "src/effects/*.cpp"
+    "src/terrain/*.cpp"
+    "src/animation/*.cpp"
     "src/main.cpp"
 )
 
@@ -37,6 +40,12 @@ add_executable(${PROJECT_NAME} ${ENGINE_SOURCES})
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/include
 )
+
+# ── Platform-specific libraries ────────────────────────────────────────────
+# WinInet for Gemini API integration on Windows
+if(WIN32)
+    target_link_libraries(${PROJECT_NAME} PRIVATE wininet)
+endif()
 
 # target_link_libraries(${PROJECT_NAME} PRIVATE OpenGL::GL glfw glm assimp lua curl)
 

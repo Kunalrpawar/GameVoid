@@ -33,6 +33,7 @@ struct AIConfig {
     std::string baseUrl = "https://generativelanguage.googleapis.com/v1beta/models/";
     f32 temperature     = 0.7f;
     u32 maxTokens       = 4096;
+    std::string configFilePath = "gamevoid_config.ini"; // stores API key securely
 };
 
 // ============================================================================
@@ -57,9 +58,23 @@ public:
     // ── Configuration ──────────────────────────────────────────────────────
     void SetConfig(const AIConfig& config) { m_Config = config; }
     const AIConfig& GetConfig() const      { return m_Config; }
+    AIConfig& GetConfigMut()               { return m_Config; }
 
     /// Convenience: set just the API key.
     void SetAPIKey(const std::string& key) { m_Config.apiKey = key; }
+
+    /// Initialise the AI subsystem with an API key (Godot-style entry point).
+    /// Loads/saves the key from/to the config file.
+    void Init(const std::string& apiKey);
+
+    /// Save the current API key to config file.
+    void SaveConfigToFile() const;
+
+    /// Load the API key from config file (returns true if found).
+    bool LoadConfigFromFile();
+
+    /// Returns true if the API key is set and non-empty.
+    bool IsReady() const { return !m_Config.apiKey.empty(); }
 
     // ── Raw prompt ─────────────────────────────────────────────────────────
     /// Send an arbitrary text prompt to Gemini and return the response.

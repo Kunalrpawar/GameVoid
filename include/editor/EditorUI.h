@@ -24,6 +24,7 @@
 #include "core/Math.h"
 #include "renderer/Renderer.h"
 #include "ai/AIManager.h"
+#include "scripting/NativeScript.h"
 #include <string>
 #include <vector>
 #include <deque>
@@ -43,6 +44,8 @@ class OpenGLRenderer;
 class TerrainComponent;
 class PBRMaterial;
 class MaterialLibrary;
+class MaterialComponent;
+class NativeScriptComponent;
 class ShaderGraph;
 class ParticleEmitter;
 class AnimationClip;
@@ -111,6 +114,12 @@ private:
     void DrawParticlePanel();
     void DrawAnimationPanel();
     void DrawNodeScriptPanel();
+    void DrawBehaviorPanel();          // new: behavior editor panel
+
+    // ── Inspector sub-sections ─────────────────────────────────────────────
+    void DrawInspectorMaterial();       // Material component editor in inspector
+    void DrawInspectorScripts();        // Script/behavior list in inspector
+    void DrawInspectorAddComponent();   // "Add Component" button & dropdown
 
     // ── AI Generator helpers ───────────────────────────────────────────────
     void AIGenerate();          // kick off generation
@@ -177,6 +186,7 @@ private:
     bool m_Initialised = false;
     bool m_ShowDemo    = false;
     bool m_ShowAIPanel = true;
+    bool m_ShowEditorSettings = false;   // Editor Settings popup (API key input)
 
     // ── AI Generator state ─────────────────────────────────────────────────
     char   m_AIPromptBuf[1024] = {};
@@ -185,8 +195,11 @@ private:
     std::string m_AIStatusMsg;
     std::vector<u32> m_AILastSpawnedIDs;   // for undo
 
+    // ── AI Settings state ──────────────────────────────────────────────────
+    char   m_AIKeyBuf[256] = {};        // API key input buffer
+
     // ── Bottom tab state ───────────────────────────────────────────────────
-    i32 m_BottomTab = 0;   // 0=Console, 1=Terrain, 2=Material, 3=Particle, 4=Animation, 5=Script
+    i32 m_BottomTab = 0;   // 0=Console, 1=Terrain, 2=Material, 3=Particle, 4=Animation, 5=Script, 6=Behavior
 
     // ── Terrain editor state ───────────────────────────────────────────────
     i32  m_TerrainRes       = 64;
@@ -222,6 +235,10 @@ private:
     i32  m_NodeAddType = 0;
     Vec2 m_NodeCanvasOffset { 0, 0 };
     f32  m_NodeZoom = 1.0f;
+
+    // ── Behavior editor state ──────────────────────────────────────────────
+    i32  m_AddComponentIdx = 0;        // "Add Component" dropdown index
+    i32  m_AddBehaviorIdx  = 0;        // behavior dropdown index
 
     // ── Subsystem instances ────────────────────────────────────────────────
     MaterialLibrary*  m_MaterialLib = nullptr;
