@@ -1,10 +1,14 @@
 // ============================================================================
 // GameVoid Engine -- OpenGL Renderer Implementation
 // ============================================================================
+// PBR rendering, shadow mapping, point/spot lights, post-processing (bloom,
+// tone mapping, FXAA), debug draw, instanced rendering, sprite rendering.
+// ============================================================================
 #include "renderer/Renderer.h"
 #include "renderer/Camera.h"
 #include "renderer/Lighting.h"
 #include "renderer/MeshRenderer.h"
+#include "renderer/MaterialComponent.h"
 #include "core/Scene.h"
 #include "core/GameObject.h"
 
@@ -13,9 +17,22 @@
 #include "core/Window.h"
 #include <cmath>
 #include <vector>
+#include <algorithm>
 #endif
 
 namespace gv {
+
+// ── IRenderer default implementations (no-ops unless overridden) ───────────
+void IRenderer::DrawRect(f32 x, f32 y, f32 w, f32 h, const Vec4& c)
+    { (void)x;(void)y;(void)w;(void)h;(void)c; }
+void IRenderer::DrawTexture(u32 t, f32 x, f32 y, f32 w, f32 h)
+    { (void)t;(void)x;(void)y;(void)w;(void)h; }
+void IRenderer::DrawDebugBox(const Vec3& c, const Vec3& h, const Vec4& col)
+    { (void)c;(void)h;(void)col; }
+void IRenderer::DrawDebugSphere(const Vec3& c, f32 r, const Vec4& col)
+    { (void)c;(void)r;(void)col; }
+void IRenderer::DrawDebugLine(const Vec3& f, const Vec3& t, const Vec4& col)
+    { (void)f;(void)t;(void)col; }
 
 // ── OpenGLRenderer ─────────────────────────────────────────────────────────
 
@@ -25,19 +42,16 @@ bool OpenGLRenderer::Init(u32 width, u32 height, const std::string& title) {
 
 #ifdef GV_HAS_GLFW
     if (m_Window && m_Window->IsInitialised()) {
-        // Load GL 2.0+ function pointers (GL context already current via Window)
         if (!gvLoadGL()) {
             GV_LOG_ERROR("OpenGLRenderer: some GL 3.3 functions could not be loaded.");
         }
 
-        // Initial GL state
         glViewport(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_LESS);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-        // Log driver info
         const char* glVendor   = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
         const char* glRenderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
         const char* glVersion  = reinterpret_cast<const char*>(glGetString(GL_VERSION));
@@ -45,12 +59,16 @@ bool OpenGLRenderer::Init(u32 width, u32 height, const std::string& title) {
         GV_LOG_INFO("GL Renderer: " + std::string(glRenderer ? glRenderer : "?"));
         GV_LOG_INFO("GL Version:  " + std::string(glVersion  ? glVersion  : "?"));
 
-        InitDemo();          // spinning demo triangle
-        InitSceneShader();   // flat-colour MVP shader
-        InitPrimitives();    // built-in triangle & cube & plane VAOs
-        InitSkybox();        // procedural skybox shader
-        InitLineShader();    // line/gizmo + highlight shaders
-        InitGrid();          // grid VAO
+        InitDemo();
+        InitSceneShader();
+        InitPrimitives();
+        InitSkybox();
+        InitLineShader();
+        InitGrid();
+        InitShadowMap();
+        InitPostProcessing();
+        InitScreenQuad();
+        InitSpriteRenderer();
     }
 #endif
 
@@ -65,6 +83,9 @@ void OpenGLRenderer::Shutdown() {
 #ifdef GV_HAS_GLFW
     CleanupDemo();
     CleanupScene();
+    CleanupShadowMap();
+    CleanupPostProcessing();
+    CleanupSpriteRenderer();
 #endif
     m_Initialised = false;
     GV_LOG_INFO("OpenGLRenderer shut down.");
@@ -82,7 +103,7 @@ void OpenGLRenderer::Clear(f32 r, f32 g, f32 b, f32 a) {
 }
 
 void OpenGLRenderer::BeginFrame() {
-    // Clear is called separately — nothing needed here
+    // Clear is called separately
 }
 
 void OpenGLRenderer::EndFrame() {
@@ -91,156 +112,252 @@ void OpenGLRenderer::EndFrame() {
 #endif
 }
 
+// ============================================================================
+// RenderScene — Main rendering pipeline
+// ============================================================================
 void OpenGLRenderer::RenderScene(Scene& scene, Camera& camera) {
 #ifdef GV_HAS_GLFW
     if (!m_SceneShader) {
-        // No GL — fall back to placeholder below
-    } else {
-        // 1. Compute view & projection matrices from the camera
-        Mat4 view = camera.GetViewMatrix();
-        Mat4 proj = camera.GetProjectionMatrix();
-
-        glUseProgram(m_SceneShader);
-        GLint locModel = glGetUniformLocation(m_SceneShader, "u_Model");
-        GLint locView  = glGetUniformLocation(m_SceneShader, "u_View");
-        GLint locProj  = glGetUniformLocation(m_SceneShader, "u_Proj");
-        GLint locColor = glGetUniformLocation(m_SceneShader, "u_Color");
-
-        glUniformMatrix4fv(locView, 1, GL_FALSE, view.m);
-        glUniformMatrix4fv(locProj, 1, GL_FALSE, proj.m);
-
-        // ── Upload lighting uniforms from scene ───────────────────────────
-        GLint locLightDir     = glGetUniformLocation(m_SceneShader, "u_LightDir");
-        GLint locLightColor   = glGetUniformLocation(m_SceneShader, "u_LightColor");
-        GLint locAmbientColor = glGetUniformLocation(m_SceneShader, "u_AmbientColor");
-        GLint locCamPos       = glGetUniformLocation(m_SceneShader, "u_CamPos");
-        GLint locLightOn      = glGetUniformLocation(m_SceneShader, "u_LightingEnabled");
-
-        // Defaults (overridden by actual scene lights)
-        Vec3 lightDir(0.3f, 1.0f, 0.5f);
-        Vec3 lightColor(1.0f, 1.0f, 1.0f);
-        Vec3 ambientColor(0.15f, 0.15f, 0.15f);
-
-        for (auto& obj : scene.GetAllObjects()) {
-            if (!obj->IsActive()) continue;
-            if (auto* dl = obj->GetComponent<DirectionalLight>()) {
-                // Negate: component stores direction light travels,
-                // shader needs direction TOWARD the light
-                lightDir = -(dl->direction.Normalized());
-                lightColor = dl->colour * dl->intensity;
-            }
-            if (auto* al = obj->GetComponent<AmbientLight>()) {
-                ambientColor = al->colour * al->intensity;
-            }
-        }
-
-        Vec3 camPos = camera.GetOwner()->GetTransform().position;
-        glUniform3f(locLightDir,     lightDir.x,     lightDir.y,     lightDir.z);
-        glUniform3f(locLightColor,   lightColor.x,   lightColor.y,   lightColor.z);
-        glUniform3f(locAmbientColor, ambientColor.x, ambientColor.y, ambientColor.z);
-        glUniform3f(locCamPos,       camPos.x,       camPos.y,       camPos.z);
-        glUniform1i(locLightOn, m_LightingEnabled ? 1 : 0);
-
-        i32 drawCount = 0;
-
-        // 2. Iterate all GameObjects that have a MeshRenderer
-        for (auto& obj : scene.GetAllObjects()) {
-            if (!obj->IsActive()) continue;
-
-            MeshRenderer* mr = obj->GetComponent<MeshRenderer>();
-            if (!mr) continue;
-            if (mr->primitiveType == PrimitiveType::None) continue;
-
-            // 3. Compute model matrix from the object's Transform
-            Mat4 model = obj->GetTransform().GetModelMatrix();
-            glUniformMatrix4fv(locModel, 1, GL_FALSE, model.m);
-
-            // 4. Upload flat colour
-            glUniform4f(locColor, mr->color.x, mr->color.y, mr->color.z, mr->color.w);
-
-            // 5. Draw the built-in primitive
-            if (mr->primitiveType == PrimitiveType::Triangle) {
-                glBindVertexArray(m_TriVAO);
-                glDrawArrays(GL_TRIANGLES, 0, 3);
-                glBindVertexArray(0);
-            } else if (mr->primitiveType == PrimitiveType::Cube) {
-                glBindVertexArray(m_CubeVAO);
-                glDrawElements(GL_TRIANGLES, m_CubeIndexCount, GL_UNSIGNED_INT,
-                               reinterpret_cast<void*>(0));
-                glBindVertexArray(0);
-            } else if (mr->primitiveType == PrimitiveType::Plane) {
-                glBindVertexArray(m_PlaneVAO);
-                glDrawElements(GL_TRIANGLES, m_PlaneIndexCount, GL_UNSIGNED_INT,
-                               reinterpret_cast<void*>(0));
-                glBindVertexArray(0);
-            }
-            drawCount++;
-        }
-
-        glUseProgram(0);
-
-        // Log draw count once on first frame only.
-        static bool loggedOnce = false;
-        if (!loggedOnce) {
-            GV_LOG_INFO("RenderScene: drew " + std::to_string(drawCount) + " object(s).");
-            loggedOnce = true;
-        }
-
+        (void)scene; (void)camera;
         return;
     }
-#endif
 
-    // Placeholder path (CLI-only build or no GL)
-    (void)scene; (void)camera;
-}
+    // ── 1. Collect light data ──────────────────────────────────────────────
+    Vec3 lightDir(0.3f, 1.0f, 0.5f);
+    Vec3 lightColor(1.0f, 1.0f, 1.0f);
+    Vec3 ambientColor(0.15f, 0.15f, 0.15f);
+    Vec3 camPos = camera.GetOwner()->GetTransform().position;
 
-void OpenGLRenderer::ApplyLighting(Scene& scene) {
-    // Collect all light components from the active scene and upload to shader.
-    //
-    // In production the active shader would receive uniform arrays such as:
-    //   u_AmbientColor, u_AmbientIntensity
-    //   u_DirLightDir[], u_DirLightColor[], u_DirLightIntensity[]
-    //   u_PointLightPos[], u_PointLightColor[], u_PointLightRange[]
+    // Point lights (max 8)
+    struct PointLightData {
+        Vec3 position, colour;
+        f32 intensity, constant, linear, quadratic, range;
+    };
+    std::vector<PointLightData> pointLights;
 
-    i32 dirIdx = 0, ptIdx = 0;
+    // Spot lights (max 4)
+    struct SpotLightData {
+        Vec3 position, direction, colour;
+        f32 intensity, innerCos, outerCos;
+    };
+    std::vector<SpotLightData> spotLights;
+
+    for (auto& obj : scene.GetAllObjects()) {
+        if (!obj->IsActive()) continue;
+        if (auto* dl = obj->GetComponent<DirectionalLight>()) {
+            lightDir = -(dl->direction.Normalized());
+            lightColor = dl->colour * dl->intensity;
+        }
+        if (auto* al = obj->GetComponent<AmbientLight>()) {
+            ambientColor = al->colour * al->intensity;
+        }
+        if (auto* pl = obj->GetComponent<PointLight>()) {
+            if (pointLights.size() < 8) {
+                pointLights.push_back({
+                    obj->GetTransform().position, pl->colour,
+                    pl->intensity, pl->constant, pl->linear, pl->quadratic, pl->range
+                });
+            }
+        }
+        if (auto* sl = obj->GetComponent<SpotLight>()) {
+            if (spotLights.size() < 4) {
+                const float PI = 3.14159265358979f;
+                spotLights.push_back({
+                    obj->GetTransform().position,
+                    sl->direction.Normalized(),
+                    sl->colour,
+                    sl->intensity,
+                    std::cos(sl->innerCutoff * PI / 180.0f),
+                    std::cos(sl->outerCutoff * PI / 180.0f)
+                });
+            }
+        }
+    }
+
+    // ── 2. Shadow pass (directional light) ─────────────────────────────────
+    if (m_ShadowsEnabled && m_ShadowShader && m_ShadowFBO) {
+        RenderShadowPass(scene, lightDir);
+    }
+
+    // ── 3. Main PBR pass ───────────────────────────────────────────────────
+    Mat4 view = camera.GetViewMatrix();
+    Mat4 proj = camera.GetProjectionMatrix();
+
+    glUseProgram(m_SceneShader);
+
+    // Matrices
+    GLint locView  = glGetUniformLocation(m_SceneShader, "u_View");
+    GLint locProj  = glGetUniformLocation(m_SceneShader, "u_Proj");
+    glUniformMatrix4fv(locView, 1, GL_FALSE, view.m);
+    glUniformMatrix4fv(locProj, 1, GL_FALSE, proj.m);
+
+    // Camera
+    glUniform3f(glGetUniformLocation(m_SceneShader, "u_CamPos"),
+                camPos.x, camPos.y, camPos.z);
+    glUniform1i(glGetUniformLocation(m_SceneShader, "u_LightingEnabled"),
+                m_LightingEnabled ? 1 : 0);
+
+    // Directional light
+    glUniform3f(glGetUniformLocation(m_SceneShader, "u_LightDir"),
+                lightDir.x, lightDir.y, lightDir.z);
+    glUniform3f(glGetUniformLocation(m_SceneShader, "u_LightColor"),
+                lightColor.x, lightColor.y, lightColor.z);
+    glUniform3f(glGetUniformLocation(m_SceneShader, "u_AmbientColor"),
+                ambientColor.x, ambientColor.y, ambientColor.z);
+
+    // Point lights
+    i32 numPL = static_cast<i32>(pointLights.size());
+    glUniform1i(glGetUniformLocation(m_SceneShader, "u_NumPointLights"), numPL);
+    for (i32 i = 0; i < numPL; ++i) {
+        std::string p = "u_PointLights[" + std::to_string(i) + "]";
+        glUniform3f(glGetUniformLocation(m_SceneShader, (p + ".position").c_str()),
+                    pointLights[i].position.x, pointLights[i].position.y, pointLights[i].position.z);
+        glUniform3f(glGetUniformLocation(m_SceneShader, (p + ".color").c_str()),
+                    pointLights[i].colour.x, pointLights[i].colour.y, pointLights[i].colour.z);
+        glUniform1f(glGetUniformLocation(m_SceneShader, (p + ".intensity").c_str()),
+                    pointLights[i].intensity);
+        glUniform1f(glGetUniformLocation(m_SceneShader, (p + ".constant").c_str()),
+                    pointLights[i].constant);
+        glUniform1f(glGetUniformLocation(m_SceneShader, (p + ".linear").c_str()),
+                    pointLights[i].linear);
+        glUniform1f(glGetUniformLocation(m_SceneShader, (p + ".quadratic").c_str()),
+                    pointLights[i].quadratic);
+        glUniform1f(glGetUniformLocation(m_SceneShader, (p + ".range").c_str()),
+                    pointLights[i].range);
+    }
+
+    // Spot lights
+    i32 numSL = static_cast<i32>(spotLights.size());
+    glUniform1i(glGetUniformLocation(m_SceneShader, "u_NumSpotLights"), numSL);
+    for (i32 i = 0; i < numSL; ++i) {
+        std::string p = "u_SpotLights[" + std::to_string(i) + "]";
+        glUniform3f(glGetUniformLocation(m_SceneShader, (p + ".position").c_str()),
+                    spotLights[i].position.x, spotLights[i].position.y, spotLights[i].position.z);
+        glUniform3f(glGetUniformLocation(m_SceneShader, (p + ".direction").c_str()),
+                    spotLights[i].direction.x, spotLights[i].direction.y, spotLights[i].direction.z);
+        glUniform3f(glGetUniformLocation(m_SceneShader, (p + ".color").c_str()),
+                    spotLights[i].colour.x, spotLights[i].colour.y, spotLights[i].colour.z);
+        glUniform1f(glGetUniformLocation(m_SceneShader, (p + ".intensity").c_str()),
+                    spotLights[i].intensity);
+        glUniform1f(glGetUniformLocation(m_SceneShader, (p + ".innerCos").c_str()),
+                    spotLights[i].innerCos);
+        glUniform1f(glGetUniformLocation(m_SceneShader, (p + ".outerCos").c_str()),
+                    spotLights[i].outerCos);
+    }
+
+    // Shadow map
+    if (m_ShadowsEnabled && m_ShadowMap) {
+        glActiveTexture(GL_TEXTURE0 + 5);
+        glBindTexture(GL_TEXTURE_2D, m_ShadowMap);
+        glUniform1i(glGetUniformLocation(m_SceneShader, "u_ShadowMap"), 5);
+        glUniformMatrix4fv(glGetUniformLocation(m_SceneShader, "u_LightSpaceMatrix"),
+                           1, GL_FALSE, m_LightSpaceMatrix.m);
+        glUniform1i(glGetUniformLocation(m_SceneShader, "u_ShadowsEnabled"), 1);
+    } else {
+        glUniform1i(glGetUniformLocation(m_SceneShader, "u_ShadowsEnabled"), 0);
+    }
+
+    // ── 4. Draw all objects with MeshRenderer ──────────────────────────────
+    GLint locModel = glGetUniformLocation(m_SceneShader, "u_Model");
+    GLint locColor = glGetUniformLocation(m_SceneShader, "u_Color");
+    // PBR material uniforms
+    GLint locMetallic  = glGetUniformLocation(m_SceneShader, "u_Metallic");
+    GLint locRoughness = glGetUniformLocation(m_SceneShader, "u_Roughness");
+    GLint locEmission  = glGetUniformLocation(m_SceneShader, "u_Emission");
+    GLint locAO        = glGetUniformLocation(m_SceneShader, "u_AO");
+    GLint locHasAlbedo = glGetUniformLocation(m_SceneShader, "u_HasAlbedoMap");
+    GLint locHasNormal = glGetUniformLocation(m_SceneShader, "u_HasNormalMap");
+
+    i32 drawCount = 0;
 
     for (auto& obj : scene.GetAllObjects()) {
         if (!obj->IsActive()) continue;
 
-        // Ambient
-        if (auto* ambient = obj->GetComponent<AmbientLight>()) {
-            // shader.SetVec3(\"u_AmbientColor\", ambient->colour);
-            // shader.SetFloat(\"u_AmbientIntensity\", ambient->intensity);
-            (void)ambient;
+        MeshRenderer* mr = obj->GetComponent<MeshRenderer>();
+        if (!mr) continue;
+        if (mr->primitiveType == PrimitiveType::None) continue;
+
+        Mat4 model = obj->GetTransform().GetModelMatrix();
+        glUniformMatrix4fv(locModel, 1, GL_FALSE, model.m);
+
+        // Check for MaterialComponent (PBR overrides)
+        auto* matComp = obj->GetComponent<MaterialComponent>();
+        if (matComp) {
+            glUniform4f(locColor, matComp->albedo.x, matComp->albedo.y,
+                        matComp->albedo.z, matComp->albedo.w);
+            glUniform1f(locMetallic,  matComp->metallic);
+            glUniform1f(locRoughness, matComp->roughness);
+            Vec3 em = matComp->emission * matComp->emissionStrength;
+            glUniform3f(locEmission, em.x, em.y, em.z);
+            glUniform1f(locAO, matComp->ao);
+
+            // Texture maps
+            if (matComp->albedoMap) {
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, matComp->albedoMap);
+                glUniform1i(glGetUniformLocation(m_SceneShader, "u_AlbedoMap"), 0);
+                glUniform1i(locHasAlbedo, 1);
+            } else {
+                glUniform1i(locHasAlbedo, 0);
+            }
+            if (matComp->normalMap) {
+                glActiveTexture(GL_TEXTURE0 + 1);
+                glBindTexture(GL_TEXTURE_2D, matComp->normalMap);
+                glUniform1i(glGetUniformLocation(m_SceneShader, "u_NormalMap"), 1);
+                glUniform1i(locHasNormal, 1);
+            } else {
+                glUniform1i(locHasNormal, 0);
+            }
+        } else {
+            glUniform4f(locColor, mr->color.x, mr->color.y, mr->color.z, mr->color.w);
+            glUniform1f(locMetallic,  0.0f);
+            glUniform1f(locRoughness, 0.5f);
+            glUniform3f(locEmission,  0.0f, 0.0f, 0.0f);
+            glUniform1f(locAO, 1.0f);
+            glUniform1i(locHasAlbedo, 0);
+            glUniform1i(locHasNormal, 0);
         }
 
-        // Directional
-        if (auto* dir = obj->GetComponent<DirectionalLight>()) {
-            std::string prefix = "u_DirLights[" + std::to_string(dirIdx++) + "]";
-            // shader.SetVec3(prefix + \".direction\", dir->direction);
-            // shader.SetVec3(prefix + \".color\",     dir->colour);
-            // shader.SetFloat(prefix + \".intensity\", dir->intensity);
-            (void)dir; (void)prefix;
+        // Draw the built-in primitive
+        if (mr->primitiveType == PrimitiveType::Triangle) {
+            glBindVertexArray(m_TriVAO);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            glBindVertexArray(0);
+        } else if (mr->primitiveType == PrimitiveType::Cube) {
+            glBindVertexArray(m_CubeVAO);
+            glDrawElements(GL_TRIANGLES, m_CubeIndexCount, GL_UNSIGNED_INT,
+                           reinterpret_cast<void*>(0));
+            glBindVertexArray(0);
+        } else if (mr->primitiveType == PrimitiveType::Plane) {
+            glBindVertexArray(m_PlaneVAO);
+            glDrawElements(GL_TRIANGLES, m_PlaneIndexCount, GL_UNSIGNED_INT,
+                           reinterpret_cast<void*>(0));
+            glBindVertexArray(0);
         }
-
-        // Point
-        if (auto* pt = obj->GetComponent<PointLight>()) {
-            std::string prefix = "u_PointLights[" + std::to_string(ptIdx++) + "]";
-            // shader.SetVec3(prefix + \".position\", obj->GetTransform().position);
-            // shader.SetVec3(prefix + \".color\",    pt->colour);
-            // shader.SetFloat(prefix + \".intensity\", pt->intensity);
-            // shader.SetFloat(prefix + \".constant\",  pt->constant);
-            // shader.SetFloat(prefix + \".linear\",    pt->linear);
-            // shader.SetFloat(prefix + \".quadratic\", pt->quadratic);
-            // shader.SetFloat(prefix + \".range\",     pt->range);
-            (void)pt; (void)prefix;
-        }
+        drawCount++;
     }
 
-    // shader.SetInt(\"u_NumDirLights\",   dirIdx);
-    // shader.SetInt(\"u_NumPointLights\", ptIdx);
-    GV_LOG_TRACE("Lighting applied: " + std::to_string(dirIdx) + " dir, " +
-                 std::to_string(ptIdx) + " point lights.");
+    glUseProgram(0);
+
+    // ── 5. Flush debug draw ────────────────────────────────────────────────
+    FlushDebugDraw(camera);
+
+    static bool loggedOnce = false;
+    if (!loggedOnce) {
+        GV_LOG_INFO("RenderScene: drew " + std::to_string(drawCount) +
+                    " object(s) with PBR pipeline.");
+        loggedOnce = true;
+    }
+
+    return;
+#else
+    (void)scene; (void)camera;
+#endif
+}
+
+void OpenGLRenderer::ApplyLighting(Scene& scene) {
+    (void)scene;
+    // Lighting is now uploaded directly in RenderScene
 }
 
 bool OpenGLRenderer::WindowShouldClose() const {
@@ -256,10 +373,9 @@ void OpenGLRenderer::PollEvents() {
 #endif
 }
 
-// ── Demo triangle (built-in visual test) ───────────────────────────────────
-// Renders a spinning RGB triangle to prove the GL context works.
-// Drawn by Engine::Run() when in window mode.
-
+// ============================================================================
+// Demo triangle
+// ============================================================================
 #ifdef GV_HAS_GLFW
 
 static const char* s_DemoVertSrc =
@@ -281,42 +397,44 @@ static const char* s_DemoFragSrc =
     "    FragColor = vec4(vColor, 1.0);\n"
     "}\n";
 
-static GLuint CompileDemoStage(GLenum type, const char* src) {
+static GLuint CompileShaderStage(GLenum type, const char* src) {
     GLuint shader = glCreateShader(type);
     glShaderSource(shader, 1, &src, nullptr);
     glCompileShader(shader);
     GLint ok = 0;
     glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
     if (!ok) {
-        char buf[512];
-        glGetShaderInfoLog(shader, 512, nullptr, buf);
-        GV_LOG_ERROR("Demo shader compile: " + std::string(buf));
+        char buf[1024];
+        glGetShaderInfoLog(shader, 1024, nullptr, buf);
+        GV_LOG_ERROR("Shader compile: " + std::string(buf));
     }
     return shader;
+}
+
+static GLuint LinkProgram(GLuint vs, GLuint fs) {
+    GLuint prog = glCreateProgram();
+    glAttachShader(prog, vs);
+    glAttachShader(prog, fs);
+    glLinkProgram(prog);
+    GLint linked = 0;
+    glGetProgramiv(prog, GL_LINK_STATUS, &linked);
+    if (!linked) {
+        char buf[1024];
+        glGetProgramInfoLog(prog, 1024, nullptr, buf);
+        GV_LOG_ERROR("Shader link: " + std::string(buf));
+    }
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    return prog;
 }
 
 void OpenGLRenderer::InitDemo() {
     if (!glCreateShader) return;
 
-    GLuint vs = CompileDemoStage(GL_VERTEX_SHADER,   s_DemoVertSrc);
-    GLuint fs = CompileDemoStage(GL_FRAGMENT_SHADER, s_DemoFragSrc);
+    GLuint vs = CompileShaderStage(GL_VERTEX_SHADER,   s_DemoVertSrc);
+    GLuint fs = CompileShaderStage(GL_FRAGMENT_SHADER, s_DemoFragSrc);
+    m_DemoShader = LinkProgram(vs, fs);
 
-    m_DemoShader = glCreateProgram();
-    glAttachShader(m_DemoShader, vs);
-    glAttachShader(m_DemoShader, fs);
-    glLinkProgram(m_DemoShader);
-
-    GLint linked = 0;
-    glGetProgramiv(m_DemoShader, GL_LINK_STATUS, &linked);
-    if (!linked) {
-        char buf[512];
-        glGetProgramInfoLog(m_DemoShader, 512, nullptr, buf);
-        GV_LOG_ERROR("Demo shader link: " + std::string(buf));
-    }
-    glDeleteShader(vs);
-    glDeleteShader(fs);
-
-    // RGB triangle  — position (x,y,z) + colour (r,g,b)
     float verts[] = {
          0.0f,  0.6f, 0.0f,   1.0f, 0.2f, 0.3f,
         -0.5f, -0.4f, 0.0f,   0.2f, 1.0f, 0.3f,
@@ -329,16 +447,12 @@ void OpenGLRenderer::InitDemo() {
     glBindBuffer(GL_ARRAY_BUFFER, m_DemoVBO);
     glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(sizeof(verts)),
                  verts, GL_STATIC_DRAW);
-
-    // aPos  (location 0)
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
                           reinterpret_cast<void*>(0));
     glEnableVertexAttribArray(0);
-    // aColor (location 1)
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
                           reinterpret_cast<void*>(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
-
     glBindVertexArray(0);
     GV_LOG_INFO("Demo triangle created.");
 }
@@ -348,21 +462,12 @@ void OpenGLRenderer::RenderDemo(f32 dt) {
 
     static f32 angle = 0.0f;
     angle += dt * 0.8f;
-
     float c = std::cos(angle);
     float s = std::sin(angle);
-    // Column-major rotation around Z
-    float model[16] = {
-         c,  s, 0, 0,
-        -s,  c, 0, 0,
-         0,  0, 1, 0,
-         0,  0, 0, 1,
-    };
+    float model[16] = { c,s,0,0, -s,c,0,0, 0,0,1,0, 0,0,0,1 };
 
     glUseProgram(m_DemoShader);
-    GLint loc = glGetUniformLocation(m_DemoShader, "u_Model");
-    glUniformMatrix4fv(loc, 1, GL_FALSE, model);
-
+    glUniformMatrix4fv(glGetUniformLocation(m_DemoShader, "u_Model"), 1, GL_FALSE, model);
     glBindVertexArray(m_DemoVAO);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glBindVertexArray(0);
@@ -375,91 +480,270 @@ void OpenGLRenderer::CleanupDemo() {
     if (m_DemoShader) { glDeleteProgram(m_DemoShader);        m_DemoShader = 0; }
 }
 
-// ── Scene-rendering shader & primitives ────────────────────────────────────
-// A minimal flat-colour shader: transforms vertices by Model*View*Proj,
-// colours every fragment with a uniform colour.
+// ============================================================================
+// PBR Scene Shader
+// ============================================================================
+// Cook-Torrance BRDF with GGX distribution, Smith geometry, Fresnel-Schlick.
+// Supports: directional light, up to 8 point lights, up to 4 spot lights,
+// shadow mapping, normal mapping, albedo/roughness/metallic textures.
 
-static const char* s_SceneVertSrc =
+static const char* s_PBR_VertSrc =
     "#version 330 core\n"
     "layout(location = 0) in vec3 aPos;\n"
     "layout(location = 1) in vec3 aNormal;\n"
+    "layout(location = 2) in vec2 aTexCoord;\n"
+    "layout(location = 3) in vec3 aTangent;\n"
+    "layout(location = 4) in vec3 aBitangent;\n"
+    "\n"
     "uniform mat4 u_Model;\n"
     "uniform mat4 u_View;\n"
     "uniform mat4 u_Proj;\n"
+    "uniform mat4 u_LightSpaceMatrix;\n"
+    "\n"
     "out vec3 vWorldPos;\n"
     "out vec3 vNormal;\n"
+    "out vec2 vTexCoord;\n"
+    "out vec4 vLightSpacePos;\n"
+    "out mat3 vTBN;\n"
+    "\n"
     "void main() {\n"
     "    vec4 worldPos = u_Model * vec4(aPos, 1.0);\n"
     "    gl_Position = u_Proj * u_View * worldPos;\n"
     "    vWorldPos = worldPos.xyz;\n"
-    "    vNormal = mat3(u_Model) * aNormal;\n"
+    "    mat3 normalMat = mat3(u_Model);\n"
+    "    vNormal = normalize(normalMat * aNormal);\n"
+    "    vTexCoord = aTexCoord;\n"
+    "    vLightSpacePos = u_LightSpaceMatrix * worldPos;\n"
+    "    vec3 T = normalize(normalMat * aTangent);\n"
+    "    vec3 B = normalize(normalMat * aBitangent);\n"
+    "    vec3 N = vNormal;\n"
+    "    vTBN = mat3(T, B, N);\n"
     "}\n";
 
-static const char* s_SceneFragSrc =
+static const char* s_PBR_FragSrc =
     "#version 330 core\n"
     "in vec3 vWorldPos;\n"
     "in vec3 vNormal;\n"
-    "out vec4 FragColor;\n"
+    "in vec2 vTexCoord;\n"
+    "in vec4 vLightSpacePos;\n"
+    "in mat3 vTBN;\n"
+    "\n"
+    "layout(location = 0) out vec4 FragColor;\n"
+    "\n"
     "uniform vec4 u_Color;\n"
+    "uniform float u_Metallic;\n"
+    "uniform float u_Roughness;\n"
+    "uniform vec3  u_Emission;\n"
+    "uniform float u_AO;\n"
+    "\n"
+    "// Texture maps\n"
+    "uniform sampler2D u_AlbedoMap;\n"
+    "uniform sampler2D u_NormalMap;\n"
+    "uniform int u_HasAlbedoMap;\n"
+    "uniform int u_HasNormalMap;\n"
+    "\n"
+    "// Directional light\n"
     "uniform vec3 u_LightDir;\n"
     "uniform vec3 u_LightColor;\n"
     "uniform vec3 u_AmbientColor;\n"
     "uniform vec3 u_CamPos;\n"
     "uniform int  u_LightingEnabled;\n"
+    "\n"
+    "// Point lights\n"
+    "struct PointLight {\n"
+    "    vec3 position;\n"
+    "    vec3 color;\n"
+    "    float intensity;\n"
+    "    float constant;\n"
+    "    float linear;\n"
+    "    float quadratic;\n"
+    "    float range;\n"
+    "};\n"
+    "#define MAX_POINT_LIGHTS 8\n"
+    "uniform PointLight u_PointLights[MAX_POINT_LIGHTS];\n"
+    "uniform int u_NumPointLights;\n"
+    "\n"
+    "// Spot lights\n"
+    "struct SpotLight {\n"
+    "    vec3 position;\n"
+    "    vec3 direction;\n"
+    "    vec3 color;\n"
+    "    float intensity;\n"
+    "    float innerCos;\n"
+    "    float outerCos;\n"
+    "};\n"
+    "#define MAX_SPOT_LIGHTS 4\n"
+    "uniform SpotLight u_SpotLights[MAX_SPOT_LIGHTS];\n"
+    "uniform int u_NumSpotLights;\n"
+    "\n"
+    "// Shadow mapping\n"
+    "uniform sampler2D u_ShadowMap;\n"
+    "uniform int u_ShadowsEnabled;\n"
+    "\n"
+    "const float PI = 3.14159265359;\n"
+    "\n"
+    "// ── PBR functions ──────────────────────────\n"
+    "float DistributionGGX(vec3 N, vec3 H, float roughness) {\n"
+    "    float a  = roughness * roughness;\n"
+    "    float a2 = a * a;\n"
+    "    float NdotH  = max(dot(N, H), 0.0);\n"
+    "    float NdotH2 = NdotH * NdotH;\n"
+    "    float denom = NdotH2 * (a2 - 1.0) + 1.0;\n"
+    "    return a2 / (PI * denom * denom + 0.0001);\n"
+    "}\n"
+    "\n"
+    "float GeometrySchlickGGX(float NdotV, float roughness) {\n"
+    "    float r = roughness + 1.0;\n"
+    "    float k = (r*r) / 8.0;\n"
+    "    return NdotV / (NdotV * (1.0 - k) + k);\n"
+    "}\n"
+    "\n"
+    "float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {\n"
+    "    float NdotV = max(dot(N, V), 0.0);\n"
+    "    float NdotL = max(dot(N, L), 0.0);\n"
+    "    return GeometrySchlickGGX(NdotV, roughness) * GeometrySchlickGGX(NdotL, roughness);\n"
+    "}\n"
+    "\n"
+    "vec3 FresnelSchlick(float cosTheta, vec3 F0) {\n"
+    "    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);\n"
+    "}\n"
+    "\n"
+    "// ── Shadow calculation ──────────────────────\n"
+    "float ShadowCalc(vec4 lsPos, vec3 N, vec3 L) {\n"
+    "    vec3 projCoords = lsPos.xyz / lsPos.w;\n"
+    "    projCoords = projCoords * 0.5 + 0.5;\n"
+    "    if (projCoords.z > 1.0) return 0.0;\n"
+    "    float currentDepth = projCoords.z;\n"
+    "    float bias = max(0.005 * (1.0 - dot(N, L)), 0.001);\n"
+    "    // PCF soft shadows (3x3 kernel)\n"
+    "    float shadow = 0.0;\n"
+    "    vec2 texelSize = 1.0 / textureSize(u_ShadowMap, 0);\n"
+    "    for (int x = -1; x <= 1; ++x) {\n"
+    "        for (int y = -1; y <= 1; ++y) {\n"
+    "            float pcfDepth = texture(u_ShadowMap, projCoords.xy + vec2(x,y)*texelSize).r;\n"
+    "            shadow += currentDepth - bias > pcfDepth ? 1.0 : 0.0;\n"
+    "        }\n"
+    "    }\n"
+    "    return shadow / 9.0;\n"
+    "}\n"
+    "\n"
+    "// ── Cook-Torrance BRDF for a single light ──\n"
+    "vec3 CookTorrance(vec3 N, vec3 V, vec3 L, vec3 lightColor,\n"
+    "                  vec3 albedo, float metallic, float roughness) {\n"
+    "    vec3 H = normalize(V + L);\n"
+    "    vec3 F0 = mix(vec3(0.04), albedo, metallic);\n"
+    "    float NDF = DistributionGGX(N, H, roughness);\n"
+    "    float G   = GeometrySmith(N, V, L, roughness);\n"
+    "    vec3  F   = FresnelSchlick(max(dot(H, V), 0.0), F0);\n"
+    "    vec3 numerator = NDF * G * F;\n"
+    "    float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;\n"
+    "    vec3 specular = numerator / denominator;\n"
+    "    vec3 kS = F;\n"
+    "    vec3 kD = (1.0 - kS) * (1.0 - metallic);\n"
+    "    float NdotL = max(dot(N, L), 0.0);\n"
+    "    return (kD * albedo / PI + specular) * lightColor * NdotL;\n"
+    "}\n"
+    "\n"
     "void main() {\n"
+    "    // Get albedo\n"
+    "    vec3 albedo = u_Color.rgb;\n"
+    "    float alpha = u_Color.a;\n"
+    "    if (u_HasAlbedoMap != 0) {\n"
+    "        vec4 texColor = texture(u_AlbedoMap, vTexCoord);\n"
+    "        albedo *= texColor.rgb;\n"
+    "        alpha *= texColor.a;\n"
+    "    }\n"
+    "\n"
     "    if (u_LightingEnabled == 0) {\n"
-    "        FragColor = u_Color;\n"
+    "        FragColor = vec4(albedo + u_Emission, alpha);\n"
     "        return;\n"
     "    }\n"
+    "\n"
+    "    // Normal (with optional normal map)\n"
     "    vec3 N = normalize(vNormal);\n"
-    "    vec3 L = normalize(u_LightDir);\n"
-    "    // Ambient\n"
-    "    vec3 ambient = u_AmbientColor * u_Color.rgb;\n"
-    "    // Diffuse (Lambert)\n"
-    "    float diff = max(dot(N, L), 0.0);\n"
-    "    vec3 diffuse = diff * u_LightColor * u_Color.rgb;\n"
-    "    // Specular (Blinn-Phong)\n"
+    "    if (u_HasNormalMap != 0) {\n"
+    "        vec3 tangentNormal = texture(u_NormalMap, vTexCoord).xyz * 2.0 - 1.0;\n"
+    "        N = normalize(vTBN * tangentNormal);\n"
+    "    }\n"
     "    vec3 V = normalize(u_CamPos - vWorldPos);\n"
-    "    vec3 H = normalize(L + V);\n"
-    "    float spec = pow(max(dot(N, H), 0.0), 32.0);\n"
-    "    vec3 specular = spec * u_LightColor * 0.5;\n"
-    "    FragColor = vec4(ambient + diffuse + specular, u_Color.a);\n"
+    "\n"
+    "    float metallic = u_Metallic;\n"
+    "    float roughness = max(u_Roughness, 0.04);\n"
+    "\n"
+    "    // ── Directional light ────────────────────\n"
+    "    vec3 L = normalize(u_LightDir);\n"
+    "    vec3 Lo = CookTorrance(N, V, L, u_LightColor, albedo, metallic, roughness);\n"
+    "\n"
+    "    // Shadow\n"
+    "    float shadow = 0.0;\n"
+    "    if (u_ShadowsEnabled != 0) {\n"
+    "        shadow = ShadowCalc(vLightSpacePos, N, L);\n"
+    "    }\n"
+    "    Lo *= (1.0 - shadow);\n"
+    "\n"
+    "    // ── Point lights ─────────────────────────\n"
+    "    for (int i = 0; i < u_NumPointLights; ++i) {\n"
+    "        vec3 pL = u_PointLights[i].position - vWorldPos;\n"
+    "        float dist = length(pL);\n"
+    "        if (dist > u_PointLights[i].range) continue;\n"
+    "        pL = normalize(pL);\n"
+    "        float atten = u_PointLights[i].intensity /\n"
+    "            (u_PointLights[i].constant + u_PointLights[i].linear * dist +\n"
+    "             u_PointLights[i].quadratic * dist * dist);\n"
+    "        Lo += CookTorrance(N, V, pL, u_PointLights[i].color * atten,\n"
+    "                           albedo, metallic, roughness);\n"
+    "    }\n"
+    "\n"
+    "    // ── Spot lights ──────────────────────────\n"
+    "    for (int i = 0; i < u_NumSpotLights; ++i) {\n"
+    "        vec3 sL = normalize(u_SpotLights[i].position - vWorldPos);\n"
+    "        float theta = dot(sL, normalize(-u_SpotLights[i].direction));\n"
+    "        float epsilon = u_SpotLights[i].innerCos - u_SpotLights[i].outerCos;\n"
+    "        float spotIntensity = clamp((theta - u_SpotLights[i].outerCos) / epsilon, 0.0, 1.0);\n"
+    "        if (spotIntensity > 0.0) {\n"
+    "            float dist = length(u_SpotLights[i].position - vWorldPos);\n"
+    "            float atten = u_SpotLights[i].intensity / (1.0 + 0.09*dist + 0.032*dist*dist);\n"
+    "            Lo += CookTorrance(N, V, sL, u_SpotLights[i].color * atten * spotIntensity,\n"
+    "                               albedo, metallic, roughness);\n"
+    "        }\n"
+    "    }\n"
+    "\n"
+    "    // Ambient (simplified IBL approximation)\n"
+    "    vec3 F0 = mix(vec3(0.04), albedo, metallic);\n"
+    "    vec3 kS = FresnelSchlick(max(dot(N, V), 0.0), F0);\n"
+    "    vec3 kD = (1.0 - kS) * (1.0 - metallic);\n"
+    "    vec3 ambient = (kD * albedo * u_AmbientColor) * u_AO;\n"
+    "\n"
+    "    vec3 color = ambient + Lo + u_Emission;\n"
+    "    FragColor = vec4(color, alpha);\n"
     "}\n";
 
 void OpenGLRenderer::InitSceneShader() {
     if (!glCreateShader) return;
 
-    GLuint vs = CompileDemoStage(GL_VERTEX_SHADER,   s_SceneVertSrc);
-    GLuint fs = CompileDemoStage(GL_FRAGMENT_SHADER, s_SceneFragSrc);
+    GLuint vs = CompileShaderStage(GL_VERTEX_SHADER,   s_PBR_VertSrc);
+    GLuint fs = CompileShaderStage(GL_FRAGMENT_SHADER, s_PBR_FragSrc);
+    m_SceneShader = LinkProgram(vs, fs);
 
-    m_SceneShader = glCreateProgram();
-    glAttachShader(m_SceneShader, vs);
-    glAttachShader(m_SceneShader, fs);
-    glLinkProgram(m_SceneShader);
-
-    GLint linked = 0;
-    glGetProgramiv(m_SceneShader, GL_LINK_STATUS, &linked);
-    if (!linked) {
-        char buf[512];
-        glGetProgramInfoLog(m_SceneShader, 512, nullptr, buf);
-        GV_LOG_ERROR("Scene shader link: " + std::string(buf));
-    }
-    glDeleteShader(vs);
-    glDeleteShader(fs);
-
-    GV_LOG_INFO("Scene shader compiled (Phong lighting).");
+    GV_LOG_INFO("PBR scene shader compiled (Cook-Torrance BRDF).");
 }
 
+// ============================================================================
+// Built-in Primitives (with UVs and tangents for PBR / normal mapping)
+// ============================================================================
 void OpenGLRenderer::InitPrimitives() {
     if (!glGenVertexArrays) return;
 
-    // ── Triangle (2D / flat) ───────────────────────────────────────────────
-    // position (xyz) + normal (xyz)
+    // Vertex layout: position(3) + normal(3) + texCoord(2) + tangent(3) + bitangent(3)
+    // = 14 floats, 56 bytes per vertex
+    const int STRIDE = 14;
+
+    // ── Triangle ───────────────────────────────────────────────────────────
     float triVerts[] = {
-        // positions           normals (all face +Z)
-         0.0f,  0.5f, 0.0f,   0.0f, 0.0f, 1.0f,
-        -0.5f, -0.5f, 0.0f,   0.0f, 0.0f, 1.0f,
-         0.5f, -0.5f, 0.0f,   0.0f, 0.0f, 1.0f,
+        // pos                 normal              uv        tangent             bitangent
+         0.0f,  0.5f, 0.0f,   0,0,1,   0.5f,1,   1,0,0,   0,1,0,
+        -0.5f, -0.5f, 0.0f,   0,0,1,   0,0,      1,0,0,   0,1,0,
+         0.5f, -0.5f, 0.0f,   0,0,1,   1,0,      1,0,0,   0,1,0,
     };
 
     glGenVertexArrays(1, &m_TriVAO);
@@ -468,96 +752,90 @@ void OpenGLRenderer::InitPrimitives() {
     glBindBuffer(GL_ARRAY_BUFFER, m_TriVBO);
     glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(sizeof(triVerts)),
                  triVerts, GL_STATIC_DRAW);
-    // aPos (location 0)
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
-                          reinterpret_cast<void*>(0));
-    glEnableVertexAttribArray(0);
-    // aNormal (location 1)
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
-                          reinterpret_cast<void*>(3 * sizeof(float)));
-    glEnableVertexAttribArray(1);
+    for (int i = 0; i < 5; ++i) {
+        int sz = (i == 2) ? 2 : 3;
+        int off = 0;
+        if (i == 1) off = 3; else if (i == 2) off = 6; else if (i == 3) off = 8; else if (i == 4) off = 11;
+        glVertexAttribPointer(i, sz, GL_FLOAT, GL_FALSE, STRIDE * sizeof(float),
+                              reinterpret_cast<void*>(off * sizeof(float)));
+        glEnableVertexAttribArray(i);
+    }
     glBindVertexArray(0);
-
     GV_LOG_INFO("Built-in triangle primitive created.");
 
-    // ── Cube (3D, 36 vertices with per-face normals, indexed) ──────────────
-    // 6 faces × 4 vertices each = 24 unique vertices (position + normal)
-    float cubeVerts[] = {
-        // Front face (+Z)
-        -0.5f, -0.5f,  0.5f,   0, 0, 1,
-         0.5f, -0.5f,  0.5f,   0, 0, 1,
-         0.5f,  0.5f,  0.5f,   0, 0, 1,
-        -0.5f,  0.5f,  0.5f,   0, 0, 1,
-        // Back face (-Z)
-        -0.5f, -0.5f, -0.5f,   0, 0,-1,
-        -0.5f,  0.5f, -0.5f,   0, 0,-1,
-         0.5f,  0.5f, -0.5f,   0, 0,-1,
-         0.5f, -0.5f, -0.5f,   0, 0,-1,
-        // Top face (+Y)
-        -0.5f,  0.5f, -0.5f,   0, 1, 0,
-        -0.5f,  0.5f,  0.5f,   0, 1, 0,
-         0.5f,  0.5f,  0.5f,   0, 1, 0,
-         0.5f,  0.5f, -0.5f,   0, 1, 0,
-        // Bottom face (-Y)
-        -0.5f, -0.5f, -0.5f,   0,-1, 0,
-         0.5f, -0.5f, -0.5f,   0,-1, 0,
-         0.5f, -0.5f,  0.5f,   0,-1, 0,
-        -0.5f, -0.5f,  0.5f,   0,-1, 0,
-        // Right face (+X)
-         0.5f, -0.5f, -0.5f,   1, 0, 0,
-         0.5f,  0.5f, -0.5f,   1, 0, 0,
-         0.5f,  0.5f,  0.5f,   1, 0, 0,
-         0.5f, -0.5f,  0.5f,   1, 0, 0,
-        // Left face (-X)
-        -0.5f, -0.5f, -0.5f,  -1, 0, 0,
-        -0.5f, -0.5f,  0.5f,  -1, 0, 0,
-        -0.5f,  0.5f,  0.5f,  -1, 0, 0,
-        -0.5f,  0.5f, -0.5f,  -1, 0, 0,
+    // ── Cube ───────────────────────────────────────────────────────────────
+    struct CubeFace { float nx,ny,nz; float tx,ty,tz; float bx,by,bz;
+                      float verts[4][3]; float uvs[4][2]; };
+    CubeFace cubeFaces[] = {
+        // front +Z
+        { 0,0,1, 1,0,0, 0,1,0,
+          {{-0.5f,-0.5f,0.5f},{0.5f,-0.5f,0.5f},{0.5f,0.5f,0.5f},{-0.5f,0.5f,0.5f}},
+          {{0,0},{1,0},{1,1},{0,1}} },
+        // back -Z
+        { 0,0,-1, -1,0,0, 0,1,0,
+          {{-0.5f,-0.5f,-0.5f},{-0.5f,0.5f,-0.5f},{0.5f,0.5f,-0.5f},{0.5f,-0.5f,-0.5f}},
+          {{1,0},{1,1},{0,1},{0,0}} },
+        // top +Y
+        { 0,1,0, 1,0,0, 0,0,-1,
+          {{-0.5f,0.5f,-0.5f},{-0.5f,0.5f,0.5f},{0.5f,0.5f,0.5f},{0.5f,0.5f,-0.5f}},
+          {{0,0},{0,1},{1,1},{1,0}} },
+        // bottom -Y
+        { 0,-1,0, 1,0,0, 0,0,1,
+          {{-0.5f,-0.5f,-0.5f},{0.5f,-0.5f,-0.5f},{0.5f,-0.5f,0.5f},{-0.5f,-0.5f,0.5f}},
+          {{0,0},{1,0},{1,1},{0,1}} },
+        // right +X
+        { 1,0,0, 0,0,-1, 0,1,0,
+          {{0.5f,-0.5f,-0.5f},{0.5f,0.5f,-0.5f},{0.5f,0.5f,0.5f},{0.5f,-0.5f,0.5f}},
+          {{0,0},{0,1},{1,1},{1,0}} },
+        // left -X
+        { -1,0,0, 0,0,1, 0,1,0,
+          {{-0.5f,-0.5f,-0.5f},{-0.5f,-0.5f,0.5f},{-0.5f,0.5f,0.5f},{-0.5f,0.5f,-0.5f}},
+          {{0,0},{1,0},{1,1},{0,1}} },
     };
 
-    unsigned int cubeIndices[] = {
-         0,  1,  2,   2,  3,  0,   // front
-         4,  5,  6,   6,  7,  4,   // back
-         8,  9, 10,  10, 11,  8,   // top
-        12, 13, 14,  14, 15, 12,   // bottom
-        16, 17, 18,  18, 19, 16,   // right
-        20, 21, 22,  22, 23, 20,   // left
-    };
-    m_CubeIndexCount = 36;
+    std::vector<float> cubeData;
+    std::vector<unsigned int> cubeIdx;
+    for (int f = 0; f < 6; ++f) {
+        unsigned int base = static_cast<unsigned int>(cubeData.size() / STRIDE);
+        for (int v = 0; v < 4; ++v) {
+            cubeData.insert(cubeData.end(), {cubeFaces[f].verts[v][0], cubeFaces[f].verts[v][1], cubeFaces[f].verts[v][2]});
+            cubeData.insert(cubeData.end(), {cubeFaces[f].nx, cubeFaces[f].ny, cubeFaces[f].nz});
+            cubeData.insert(cubeData.end(), {cubeFaces[f].uvs[v][0], cubeFaces[f].uvs[v][1]});
+            cubeData.insert(cubeData.end(), {cubeFaces[f].tx, cubeFaces[f].ty, cubeFaces[f].tz});
+            cubeData.insert(cubeData.end(), {cubeFaces[f].bx, cubeFaces[f].by, cubeFaces[f].bz});
+        }
+        cubeIdx.insert(cubeIdx.end(), {base, base+1, base+2, base+2, base+3, base});
+    }
+    m_CubeIndexCount = static_cast<i32>(cubeIdx.size());
 
     glGenVertexArrays(1, &m_CubeVAO);
     glGenBuffers(1, &m_CubeVBO);
     glGenBuffers(1, &m_CubeEBO);
     glBindVertexArray(m_CubeVAO);
-
     glBindBuffer(GL_ARRAY_BUFFER, m_CubeVBO);
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(sizeof(cubeVerts)),
-                 cubeVerts, GL_STATIC_DRAW);
-
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(cubeData.size() * sizeof(float)),
+                 cubeData.data(), GL_STATIC_DRAW);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_CubeEBO);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(sizeof(cubeIndices)),
-                 cubeIndices, GL_STATIC_DRAW);
-
-    // aPos (location 0)
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
-                          reinterpret_cast<void*>(0));
-    glEnableVertexAttribArray(0);
-    // aNormal (location 1)
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
-                          reinterpret_cast<void*>(3 * sizeof(float)));
-    glEnableVertexAttribArray(1);
-
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(cubeIdx.size() * sizeof(unsigned int)),
+                 cubeIdx.data(), GL_STATIC_DRAW);
+    for (int i = 0; i < 5; ++i) {
+        int sz = (i == 2) ? 2 : 3;
+        int off = 0;
+        if (i == 1) off = 3; else if (i == 2) off = 6; else if (i == 3) off = 8; else if (i == 4) off = 11;
+        glVertexAttribPointer(i, sz, GL_FLOAT, GL_FALSE, STRIDE * sizeof(float),
+                              reinterpret_cast<void*>(off * sizeof(float)));
+        glEnableVertexAttribArray(i);
+    }
     glBindVertexArray(0);
+    GV_LOG_INFO("Built-in cube primitive created (24 verts, PBR layout).");
 
-    GV_LOG_INFO("Built-in cube primitive created (24 verts, 36 indices).");
-
-    // ── Plane (XZ, 1×1 centred at origin, faces +Y) ───────────────────────
+    // ── Plane ──────────────────────────────────────────────────────────────
     float planeVerts[] = {
-        // positions           normals
-        -0.5f, 0.0f, -0.5f,   0, 1, 0,
-         0.5f, 0.0f, -0.5f,   0, 1, 0,
-         0.5f, 0.0f,  0.5f,   0, 1, 0,
-        -0.5f, 0.0f,  0.5f,   0, 1, 0,
+        // pos               normal   uv     tangent    bitangent
+        -0.5f,0,-0.5f,  0,1,0,  0,0,  1,0,0,  0,0,1,
+         0.5f,0,-0.5f,  0,1,0,  1,0,  1,0,0,  0,0,1,
+         0.5f,0, 0.5f,  0,1,0,  1,1,  1,0,0,  0,0,1,
+        -0.5f,0, 0.5f,  0,1,0,  0,1,  1,0,0,  0,0,1,
     };
     unsigned int planeIdx[] = { 0, 1, 2, 2, 3, 0 };
     m_PlaneIndexCount = 6;
@@ -572,16 +850,667 @@ void OpenGLRenderer::InitPrimitives() {
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_PlaneEBO);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(sizeof(planeIdx)),
                  planeIdx, GL_STATIC_DRAW);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
-                          reinterpret_cast<void*>(0));
+    for (int i = 0; i < 5; ++i) {
+        int sz = (i == 2) ? 2 : 3;
+        int off = 0;
+        if (i == 1) off = 3; else if (i == 2) off = 6; else if (i == 3) off = 8; else if (i == 4) off = 11;
+        glVertexAttribPointer(i, sz, GL_FLOAT, GL_FALSE, STRIDE * sizeof(float),
+                              reinterpret_cast<void*>(off * sizeof(float)));
+        glEnableVertexAttribArray(i);
+    }
+    glBindVertexArray(0);
+    GV_LOG_INFO("Built-in plane primitive created (PBR layout).");
+}
+
+// ============================================================================
+// Shadow Mapping
+// ============================================================================
+static const char* s_ShadowVertSrc =
+    "#version 330 core\n"
+    "layout(location = 0) in vec3 aPos;\n"
+    "uniform mat4 u_LightSpaceMatrix;\n"
+    "uniform mat4 u_Model;\n"
+    "void main() {\n"
+    "    gl_Position = u_LightSpaceMatrix * u_Model * vec4(aPos, 1.0);\n"
+    "}\n";
+
+static const char* s_ShadowFragSrc =
+    "#version 330 core\n"
+    "void main() {\n"
+    "    // Depth is written automatically\n"
+    "}\n";
+
+void OpenGLRenderer::InitShadowMap() {
+    if (!glGenFramebuffers) return;
+
+    GLuint vs = CompileShaderStage(GL_VERTEX_SHADER, s_ShadowVertSrc);
+    GLuint fs = CompileShaderStage(GL_FRAGMENT_SHADER, s_ShadowFragSrc);
+    m_ShadowShader = LinkProgram(vs, fs);
+
+    // Create depth texture
+    glGenTextures(1, &m_ShadowMap);
+    glBindTexture(GL_TEXTURE_2D, m_ShadowMap);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT,
+                 static_cast<GLsizei>(m_ShadowMapSize), static_cast<GLsizei>(m_ShadowMapSize),
+                 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    float borderColor[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    if (glTexParameterfv) glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderColor);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    // Create FBO
+    glGenFramebuffers(1, &m_ShadowFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_ShadowFBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, m_ShadowMap, 0);
+    // No color attachment
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        GV_LOG_ERROR("Shadow map FBO incomplete!");
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    GV_LOG_INFO("Shadow map initialised (" + std::to_string(m_ShadowMapSize) + "x" +
+                std::to_string(m_ShadowMapSize) + ").");
+}
+
+void OpenGLRenderer::RenderShadowPass(Scene& scene, const Vec3& lightDir) {
+    // Compute light-space matrix (orthographic projection for directional light)
+    float extent = 30.0f;
+    Mat4 lightProj = Mat4::Ortho(-extent, extent, -extent, extent, 0.1f, 100.0f);
+    Vec3 lightPos = lightDir * 30.0f;  // Place light far away in light direction
+    Mat4 lightView = Mat4::LookAt(lightPos, Vec3(0, 0, 0), Vec3(0, 1, 0));
+    m_LightSpaceMatrix = lightProj * lightView;
+
+    glViewport(0, 0, static_cast<GLsizei>(m_ShadowMapSize), static_cast<GLsizei>(m_ShadowMapSize));
+    glBindFramebuffer(GL_FRAMEBUFFER, m_ShadowFBO);
+    glClear(GL_DEPTH_BUFFER_BIT);
+
+    glUseProgram(m_ShadowShader);
+    GLint locLSM = glGetUniformLocation(m_ShadowShader, "u_LightSpaceMatrix");
+    GLint locModel = glGetUniformLocation(m_ShadowShader, "u_Model");
+    glUniformMatrix4fv(locLSM, 1, GL_FALSE, m_LightSpaceMatrix.m);
+
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_FRONT);  // Peter-panning fix
+
+    for (auto& obj : scene.GetAllObjects()) {
+        if (!obj->IsActive()) continue;
+        MeshRenderer* mr = obj->GetComponent<MeshRenderer>();
+        if (!mr || mr->primitiveType == PrimitiveType::None) continue;
+
+        Mat4 model = obj->GetTransform().GetModelMatrix();
+        glUniformMatrix4fv(locModel, 1, GL_FALSE, model.m);
+
+        if (mr->primitiveType == PrimitiveType::Cube) {
+            glBindVertexArray(m_CubeVAO);
+            glDrawElements(GL_TRIANGLES, m_CubeIndexCount, GL_UNSIGNED_INT, nullptr);
+        } else if (mr->primitiveType == PrimitiveType::Plane) {
+            glBindVertexArray(m_PlaneVAO);
+            glDrawElements(GL_TRIANGLES, m_PlaneIndexCount, GL_UNSIGNED_INT, nullptr);
+        } else if (mr->primitiveType == PrimitiveType::Triangle) {
+            glBindVertexArray(m_TriVAO);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+        }
+        glBindVertexArray(0);
+    }
+
+    glCullFace(GL_BACK);
+    glDisable(GL_CULL_FACE);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, static_cast<GLsizei>(m_Width), static_cast<GLsizei>(m_Height));
+    glUseProgram(0);
+}
+
+void OpenGLRenderer::CleanupShadowMap() {
+    if (m_ShadowFBO)    { glDeleteFramebuffers(1, &m_ShadowFBO); m_ShadowFBO = 0; }
+    if (m_ShadowMap)    { glDeleteTextures(1, &m_ShadowMap);     m_ShadowMap = 0; }
+    if (m_ShadowShader && m_ShadowShader != m_SceneShader) {
+        glDeleteProgram(m_ShadowShader); m_ShadowShader = 0;
+    }
+}
+
+// ============================================================================
+// Post-Processing Pipeline (Bloom + Tone Mapping + FXAA)
+// ============================================================================
+
+// Screen quad for fullscreen passes
+void OpenGLRenderer::InitScreenQuad() {
+    if (!glGenVertexArrays) return;
+    float quadVerts[] = {
+        // pos(2)    uv(2)
+        -1, -1,   0, 0,
+         1, -1,   1, 0,
+         1,  1,   1, 1,
+        -1, -1,   0, 0,
+         1,  1,   1, 1,
+        -1,  1,   0, 1,
+    };
+    glGenVertexArrays(1, &m_ScreenQuadVAO);
+    glGenBuffers(1, &m_ScreenQuadVBO);
+    glBindVertexArray(m_ScreenQuadVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_ScreenQuadVBO);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(sizeof(quadVerts)),
+                 quadVerts, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), reinterpret_cast<void*>(0));
     glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
-                          reinterpret_cast<void*>(3 * sizeof(float)));
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float),
+                          reinterpret_cast<void*>(2*sizeof(float)));
+    glEnableVertexAttribArray(1);
+    glBindVertexArray(0);
+}
+
+static const char* s_ScreenQuadVert =
+    "#version 330 core\n"
+    "layout(location = 0) in vec2 aPos;\n"
+    "layout(location = 1) in vec2 aTexCoord;\n"
+    "out vec2 vTexCoord;\n"
+    "void main() {\n"
+    "    gl_Position = vec4(aPos, 0.0, 1.0);\n"
+    "    vTexCoord = aTexCoord;\n"
+    "}\n";
+
+// Bright-pass extraction (for bloom)
+static const char* s_BrightPassFrag =
+    "#version 330 core\n"
+    "in vec2 vTexCoord;\n"
+    "out vec4 FragColor;\n"
+    "uniform sampler2D u_HDRBuffer;\n"
+    "uniform float u_Threshold;\n"
+    "void main() {\n"
+    "    vec3 color = texture(u_HDRBuffer, vTexCoord).rgb;\n"
+    "    float brightness = dot(color, vec3(0.2126, 0.7152, 0.0722));\n"
+    "    if (brightness > u_Threshold)\n"
+    "        FragColor = vec4(color, 1.0);\n"
+    "    else\n"
+    "        FragColor = vec4(0.0, 0.0, 0.0, 1.0);\n"
+    "}\n";
+
+// Gaussian blur (ping-pong)
+static const char* s_BlurFrag =
+    "#version 330 core\n"
+    "in vec2 vTexCoord;\n"
+    "out vec4 FragColor;\n"
+    "uniform sampler2D u_Image;\n"
+    "uniform int u_Horizontal;\n"
+    "uniform float u_Weight[5] = float[] (0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);\n"
+    "void main() {\n"
+    "    vec2 texOffset = 1.0 / textureSize(u_Image, 0);\n"
+    "    vec3 result = texture(u_Image, vTexCoord).rgb * u_Weight[0];\n"
+    "    if (u_Horizontal != 0) {\n"
+    "        for (int i = 1; i < 5; ++i) {\n"
+    "            result += texture(u_Image, vTexCoord + vec2(texOffset.x*float(i), 0)).rgb * u_Weight[i];\n"
+    "            result += texture(u_Image, vTexCoord - vec2(texOffset.x*float(i), 0)).rgb * u_Weight[i];\n"
+    "        }\n"
+    "    } else {\n"
+    "        for (int i = 1; i < 5; ++i) {\n"
+    "            result += texture(u_Image, vTexCoord + vec2(0, texOffset.y*float(i))).rgb * u_Weight[i];\n"
+    "            result += texture(u_Image, vTexCoord - vec2(0, texOffset.y*float(i))).rgb * u_Weight[i];\n"
+    "        }\n"
+    "    }\n"
+    "    FragColor = vec4(result, 1.0);\n"
+    "}\n";
+
+// Tone mapping + bloom composite (ACES + Reinhard option)
+static const char* s_TonemapFrag =
+    "#version 330 core\n"
+    "in vec2 vTexCoord;\n"
+    "out vec4 FragColor;\n"
+    "uniform sampler2D u_HDRBuffer;\n"
+    "uniform sampler2D u_BloomBlur;\n"
+    "uniform float u_Exposure;\n"
+    "uniform float u_BloomIntensity;\n"
+    "uniform int u_BloomEnabled;\n"
+    "\n"
+    "vec3 ACESFilm(vec3 x) {\n"
+    "    float a = 2.51;\n"
+    "    float b = 0.03;\n"
+    "    float c = 2.43;\n"
+    "    float d = 0.59;\n"
+    "    float e = 0.14;\n"
+    "    return clamp((x*(a*x+b))/(x*(c*x+d)+e), 0.0, 1.0);\n"
+    "}\n"
+    "\n"
+    "void main() {\n"
+    "    vec3 hdr = texture(u_HDRBuffer, vTexCoord).rgb;\n"
+    "    if (u_BloomEnabled != 0) {\n"
+    "        vec3 bloom = texture(u_BloomBlur, vTexCoord).rgb;\n"
+    "        hdr += bloom * u_BloomIntensity;\n"
+    "    }\n"
+    "    // Exposure + ACES tone mapping\n"
+    "    vec3 mapped = ACESFilm(hdr * u_Exposure);\n"
+    "    // Gamma correction\n"
+    "    mapped = pow(mapped, vec3(1.0/2.2));\n"
+    "    FragColor = vec4(mapped, 1.0);\n"
+    "}\n";
+
+// FXAA (fast approximate anti-aliasing)
+static const char* s_FXAAFrag =
+    "#version 330 core\n"
+    "in vec2 vTexCoord;\n"
+    "out vec4 FragColor;\n"
+    "uniform sampler2D u_Screen;\n"
+    "uniform vec2 u_InvScreenSize;\n"
+    "\n"
+    "#define FXAA_REDUCE_MIN (1.0/128.0)\n"
+    "#define FXAA_REDUCE_MUL (1.0/8.0)\n"
+    "#define FXAA_SPAN_MAX   8.0\n"
+    "\n"
+    "void main() {\n"
+    "    vec3 rgbNW = texture(u_Screen, vTexCoord + vec2(-1, -1) * u_InvScreenSize).rgb;\n"
+    "    vec3 rgbNE = texture(u_Screen, vTexCoord + vec2( 1, -1) * u_InvScreenSize).rgb;\n"
+    "    vec3 rgbSW = texture(u_Screen, vTexCoord + vec2(-1,  1) * u_InvScreenSize).rgb;\n"
+    "    vec3 rgbSE = texture(u_Screen, vTexCoord + vec2( 1,  1) * u_InvScreenSize).rgb;\n"
+    "    vec3 rgbM  = texture(u_Screen, vTexCoord).rgb;\n"
+    "\n"
+    "    vec3 luma = vec3(0.299, 0.587, 0.114);\n"
+    "    float lumaNW = dot(rgbNW, luma);\n"
+    "    float lumaNE = dot(rgbNE, luma);\n"
+    "    float lumaSW = dot(rgbSW, luma);\n"
+    "    float lumaSE = dot(rgbSE, luma);\n"
+    "    float lumaM  = dot(rgbM,  luma);\n"
+    "\n"
+    "    float lumaMin = min(lumaM, min(min(lumaNW, lumaNE), min(lumaSW, lumaSE)));\n"
+    "    float lumaMax = max(lumaM, max(max(lumaNW, lumaNE), max(lumaSW, lumaSE)));\n"
+    "\n"
+    "    vec2 dir;\n"
+    "    dir.x = -((lumaNW + lumaNE) - (lumaSW + lumaSE));\n"
+    "    dir.y =  ((lumaNW + lumaSW) - (lumaNE + lumaSE));\n"
+    "\n"
+    "    float dirReduce = max((lumaNW+lumaNE+lumaSW+lumaSE)*(0.25*FXAA_REDUCE_MUL), FXAA_REDUCE_MIN);\n"
+    "    float rcpDirMin = 1.0/(min(abs(dir.x), abs(dir.y)) + dirReduce);\n"
+    "    dir = min(vec2(FXAA_SPAN_MAX), max(vec2(-FXAA_SPAN_MAX), dir*rcpDirMin)) * u_InvScreenSize;\n"
+    "\n"
+    "    vec3 rgbA = 0.5 * (texture(u_Screen, vTexCoord + dir*(1.0/3.0 - 0.5)).rgb\n"
+    "                     + texture(u_Screen, vTexCoord + dir*(2.0/3.0 - 0.5)).rgb);\n"
+    "    vec3 rgbB = rgbA * 0.5 + 0.25 * (texture(u_Screen, vTexCoord + dir*(-0.5)).rgb\n"
+    "                                    + texture(u_Screen, vTexCoord + dir*0.5).rgb);\n"
+    "    float lumaB = dot(rgbB, luma);\n"
+    "    if (lumaB < lumaMin || lumaB > lumaMax)\n"
+    "        FragColor = vec4(rgbA, 1.0);\n"
+    "    else\n"
+    "        FragColor = vec4(rgbB, 1.0);\n"
+    "}\n";
+
+void OpenGLRenderer::InitPostProcessing() {
+    if (!glGenFramebuffers || !glCreateShader) return;
+
+    // ── HDR framebuffer ────────────────────────────────────────────────────
+    glGenFramebuffers(1, &m_HDR_FBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_HDR_FBO);
+
+    // HDR color attachment (RGBA16F)
+    glGenTextures(1, &m_HDR_ColorTex);
+    glBindTexture(GL_TEXTURE_2D, m_HDR_ColorTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F,
+                 static_cast<GLsizei>(m_Width), static_cast<GLsizei>(m_Height),
+                 0, GL_RGBA, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_HDR_ColorTex, 0);
+
+    // Depth renderbuffer
+    glGenRenderbuffers(1, &m_HDR_DepthRBO);
+    glBindRenderbuffer(GL_RENDERBUFFER, m_HDR_DepthRBO);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24,
+                          static_cast<GLsizei>(m_Width), static_cast<GLsizei>(m_Height));
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, m_HDR_DepthRBO);
+
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        GV_LOG_ERROR("HDR FBO incomplete!");
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    // ── Bloom ping-pong FBOs ───────────────────────────────────────────────
+    for (int i = 0; i < 2; ++i) {
+        glGenFramebuffers(1, &m_BloomFBO[i]);
+        glGenTextures(1, &m_BloomTex[i]);
+        glBindFramebuffer(GL_FRAMEBUFFER, m_BloomFBO[i]);
+        glBindTexture(GL_TEXTURE_2D, m_BloomTex[i]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F,
+                     static_cast<GLsizei>(m_Width / 2), static_cast<GLsizei>(m_Height / 2),
+                     0, GL_RGBA, GL_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_BloomTex[i], 0);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    // ── Compile post-processing shaders ────────────────────────────────────
+    GLuint screenVS = CompileShaderStage(GL_VERTEX_SHADER, s_ScreenQuadVert);
+
+    GLuint bpFS = CompileShaderStage(GL_FRAGMENT_SHADER, s_BrightPassFrag);
+    m_BrightPassShader = LinkProgram(CompileShaderStage(GL_VERTEX_SHADER, s_ScreenQuadVert), bpFS);
+
+    GLuint blurFS = CompileShaderStage(GL_FRAGMENT_SHADER, s_BlurFrag);
+    m_BlurShader = LinkProgram(CompileShaderStage(GL_VERTEX_SHADER, s_ScreenQuadVert), blurFS);
+
+    GLuint tmFS = CompileShaderStage(GL_FRAGMENT_SHADER, s_TonemapFrag);
+    m_TonemapShader = LinkProgram(CompileShaderStage(GL_VERTEX_SHADER, s_ScreenQuadVert), tmFS);
+
+    GLuint fxFS = CompileShaderStage(GL_FRAGMENT_SHADER, s_FXAAFrag);
+    m_FXAAShader = LinkProgram(CompileShaderStage(GL_VERTEX_SHADER, s_ScreenQuadVert), fxFS);
+
+    (void)screenVS; // used inline above
+
+    GV_LOG_INFO("Post-processing pipeline initialised (bloom + ACES tone mapping + FXAA).");
+}
+
+void OpenGLRenderer::BeginHDRPass() {
+    if (!m_HDR_FBO) return;
+    glBindFramebuffer(GL_FRAMEBUFFER, m_HDR_FBO);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+}
+
+void OpenGLRenderer::EndHDRPass() {
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void OpenGLRenderer::RenderPostProcessing() {
+    if (!m_ScreenQuadVAO || !m_TonemapShader) return;
+
+    glDisable(GL_DEPTH_TEST);
+
+    GLuint finalTex = m_HDR_ColorTex;
+
+    // ── Bloom pass ─────────────────────────────────────────────────────────
+    if (m_BloomEnabled && m_BrightPassShader && m_BlurShader) {
+        // 1. Extract bright pixels
+        glViewport(0, 0, static_cast<GLsizei>(m_Width/2), static_cast<GLsizei>(m_Height/2));
+        glBindFramebuffer(GL_FRAMEBUFFER, m_BloomFBO[0]);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glUseProgram(m_BrightPassShader);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, m_HDR_ColorTex);
+        glUniform1i(glGetUniformLocation(m_BrightPassShader, "u_HDRBuffer"), 0);
+        glUniform1f(glGetUniformLocation(m_BrightPassShader, "u_Threshold"), m_BloomThreshold);
+        glBindVertexArray(m_ScreenQuadVAO);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        // 2. Gaussian blur (ping-pong, 5 iterations)
+        bool horizontal = true;
+        for (int i = 0; i < 10; ++i) {
+            glBindFramebuffer(GL_FRAMEBUFFER, m_BloomFBO[horizontal ? 1 : 0]);
+            glUseProgram(m_BlurShader);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, m_BloomTex[horizontal ? 0 : 1]);
+            glUniform1i(glGetUniformLocation(m_BlurShader, "u_Image"), 0);
+            glUniform1i(glGetUniformLocation(m_BlurShader, "u_Horizontal"), horizontal ? 1 : 0);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+            horizontal = !horizontal;
+        }
+        glBindVertexArray(0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glViewport(0, 0, static_cast<GLsizei>(m_Width), static_cast<GLsizei>(m_Height));
+    }
+
+    // ── Tone mapping pass ──────────────────────────────────────────────────
+    if (m_ToneMappingEnabled) {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glUseProgram(m_TonemapShader);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, m_HDR_ColorTex);
+        glUniform1i(glGetUniformLocation(m_TonemapShader, "u_HDRBuffer"), 0);
+
+        if (m_BloomEnabled) {
+            glActiveTexture(GL_TEXTURE0 + 1);
+            glBindTexture(GL_TEXTURE_2D, m_BloomTex[0]);
+            glUniform1i(glGetUniformLocation(m_TonemapShader, "u_BloomBlur"), 1);
+        }
+        glUniform1f(glGetUniformLocation(m_TonemapShader, "u_Exposure"), m_Exposure);
+        glUniform1f(glGetUniformLocation(m_TonemapShader, "u_BloomIntensity"), m_BloomIntensity);
+        glUniform1i(glGetUniformLocation(m_TonemapShader, "u_BloomEnabled"), m_BloomEnabled ? 1 : 0);
+
+        glBindVertexArray(m_ScreenQuadVAO);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        glBindVertexArray(0);
+    }
+
+    // ── FXAA pass ──────────────────────────────────────────────────────────
+    // Note: FXAA requires an additional FBO to read from. For simplicity,
+    // we skip it when not explicitly enabled (it would need another intermediate texture).
+    // The shader is ready for use when an additional FBO is set up.
+
+    glEnable(GL_DEPTH_TEST);
+    glUseProgram(0);
+}
+
+void OpenGLRenderer::CleanupPostProcessing() {
+    if (m_HDR_FBO)       { glDeleteFramebuffers(1, &m_HDR_FBO);       m_HDR_FBO = 0; }
+    if (m_HDR_ColorTex)  { glDeleteTextures(1, &m_HDR_ColorTex);      m_HDR_ColorTex = 0; }
+    if (m_HDR_DepthRBO)  { glDeleteRenderbuffers(1, &m_HDR_DepthRBO); m_HDR_DepthRBO = 0; }
+    for (int i = 0; i < 2; ++i) {
+        if (m_BloomFBO[i]) { glDeleteFramebuffers(1, &m_BloomFBO[i]); m_BloomFBO[i] = 0; }
+        if (m_BloomTex[i]) { glDeleteTextures(1, &m_BloomTex[i]);     m_BloomTex[i] = 0; }
+    }
+    if (m_BrightPassShader) { glDeleteProgram(m_BrightPassShader); m_BrightPassShader = 0; }
+    if (m_BlurShader)       { glDeleteProgram(m_BlurShader);       m_BlurShader = 0; }
+    if (m_TonemapShader)    { glDeleteProgram(m_TonemapShader);    m_TonemapShader = 0; }
+    if (m_FXAAShader)       { glDeleteProgram(m_FXAAShader);       m_FXAAShader = 0; }
+    if (m_ScreenQuadVAO)    { glDeleteVertexArrays(1, &m_ScreenQuadVAO); m_ScreenQuadVAO = 0; }
+    if (m_ScreenQuadVBO)    { glDeleteBuffers(1, &m_ScreenQuadVBO);      m_ScreenQuadVBO = 0; }
+}
+
+// ============================================================================
+// Sprite / 2D Rendering
+// ============================================================================
+static const char* s_SpriteVertSrc =
+    "#version 330 core\n"
+    "layout(location = 0) in vec2 aPos;\n"
+    "layout(location = 1) in vec2 aTexCoord;\n"
+    "uniform mat4 u_Projection;\n"
+    "uniform mat4 u_Model;\n"
+    "out vec2 vTexCoord;\n"
+    "void main() {\n"
+    "    gl_Position = u_Projection * u_Model * vec4(aPos, 0.0, 1.0);\n"
+    "    vTexCoord = aTexCoord;\n"
+    "}\n";
+
+static const char* s_SpriteFragSrc =
+    "#version 330 core\n"
+    "in vec2 vTexCoord;\n"
+    "out vec4 FragColor;\n"
+    "uniform sampler2D u_Texture;\n"
+    "uniform vec4 u_Tint;\n"
+    "uniform int u_HasTexture;\n"
+    "void main() {\n"
+    "    if (u_HasTexture != 0)\n"
+    "        FragColor = texture(u_Texture, vTexCoord) * u_Tint;\n"
+    "    else\n"
+    "        FragColor = u_Tint;\n"
+    "}\n";
+
+void OpenGLRenderer::InitSpriteRenderer() {
+    if (!glCreateShader) return;
+
+    GLuint vs = CompileShaderStage(GL_VERTEX_SHADER, s_SpriteVertSrc);
+    GLuint fs = CompileShaderStage(GL_FRAGMENT_SHADER, s_SpriteFragSrc);
+    m_SpriteShader = LinkProgram(vs, fs);
+
+    // Unit quad: 2D position + UV
+    float spriteVerts[] = {
+        0, 0,  0, 0,
+        1, 0,  1, 0,
+        1, 1,  1, 1,
+        0, 0,  0, 0,
+        1, 1,  1, 1,
+        0, 1,  0, 1,
+    };
+
+    glGenVertexArrays(1, &m_SpriteVAO);
+    glGenBuffers(1, &m_SpriteVBO);
+    glBindVertexArray(m_SpriteVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_SpriteVBO);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(sizeof(spriteVerts)),
+                 spriteVerts, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), reinterpret_cast<void*>(0));
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float),
+                          reinterpret_cast<void*>(2*sizeof(float)));
     glEnableVertexAttribArray(1);
     glBindVertexArray(0);
 
-    GV_LOG_INFO("Built-in plane primitive created.");
+    GV_LOG_INFO("Sprite renderer initialised.");
 }
+
+void OpenGLRenderer::CleanupSpriteRenderer() {
+    if (m_SpriteVAO)    { glDeleteVertexArrays(1, &m_SpriteVAO); m_SpriteVAO = 0; }
+    if (m_SpriteVBO)    { glDeleteBuffers(1, &m_SpriteVBO);      m_SpriteVBO = 0; }
+    if (m_SpriteShader) { glDeleteProgram(m_SpriteShader);        m_SpriteShader = 0; }
+}
+
+void OpenGLRenderer::DrawRect(f32 x, f32 y, f32 w, f32 h, const Vec4& colour) {
+    if (!m_SpriteShader || !m_SpriteVAO) return;
+
+    // Orthographic projection for screen-space
+    Mat4 proj = Mat4::Ortho(0, static_cast<f32>(m_Width), static_cast<f32>(m_Height), 0, -1, 1);
+
+    // Model: translate + scale
+    Mat4 model = Mat4::Identity();
+    // Scale
+    model.m[0] = w; model.m[5] = h;
+    // Translate
+    model.m[12] = x; model.m[13] = y;
+
+    glDisable(GL_DEPTH_TEST);
+    glUseProgram(m_SpriteShader);
+    glUniformMatrix4fv(glGetUniformLocation(m_SpriteShader, "u_Projection"), 1, GL_FALSE, proj.m);
+    glUniformMatrix4fv(glGetUniformLocation(m_SpriteShader, "u_Model"), 1, GL_FALSE, model.m);
+    glUniform4f(glGetUniformLocation(m_SpriteShader, "u_Tint"), colour.x, colour.y, colour.z, colour.w);
+    glUniform1i(glGetUniformLocation(m_SpriteShader, "u_HasTexture"), 0);
+
+    glBindVertexArray(m_SpriteVAO);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+    glUseProgram(0);
+    glEnable(GL_DEPTH_TEST);
+}
+
+void OpenGLRenderer::DrawTexture(u32 textureID, f32 x, f32 y, f32 w, f32 h) {
+    if (!m_SpriteShader || !m_SpriteVAO) return;
+
+    Mat4 proj = Mat4::Ortho(0, static_cast<f32>(m_Width), static_cast<f32>(m_Height), 0, -1, 1);
+    Mat4 model = Mat4::Identity();
+    model.m[0] = w; model.m[5] = h;
+    model.m[12] = x; model.m[13] = y;
+
+    glDisable(GL_DEPTH_TEST);
+    glUseProgram(m_SpriteShader);
+    glUniformMatrix4fv(glGetUniformLocation(m_SpriteShader, "u_Projection"), 1, GL_FALSE, proj.m);
+    glUniformMatrix4fv(glGetUniformLocation(m_SpriteShader, "u_Model"), 1, GL_FALSE, model.m);
+    glUniform4f(glGetUniformLocation(m_SpriteShader, "u_Tint"), 1, 1, 1, 1);
+    glUniform1i(glGetUniformLocation(m_SpriteShader, "u_HasTexture"), 1);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, textureID);
+    glUniform1i(glGetUniformLocation(m_SpriteShader, "u_Texture"), 0);
+
+    glBindVertexArray(m_SpriteVAO);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+    glUseProgram(0);
+    glEnable(GL_DEPTH_TEST);
+}
+
+// ============================================================================
+// Debug Draw
+// ============================================================================
+void OpenGLRenderer::DrawDebugLine(const Vec3& from, const Vec3& to, const Vec4& colour) {
+    m_DebugLines.push_back({from, to, colour});
+}
+
+void OpenGLRenderer::DrawDebugBox(const Vec3& center, const Vec3& half, const Vec4& colour) {
+    // 12 edges of a box
+    Vec3 corners[8] = {
+        center + Vec3(-half.x, -half.y, -half.z),
+        center + Vec3( half.x, -half.y, -half.z),
+        center + Vec3( half.x,  half.y, -half.z),
+        center + Vec3(-half.x,  half.y, -half.z),
+        center + Vec3(-half.x, -half.y,  half.z),
+        center + Vec3( half.x, -half.y,  half.z),
+        center + Vec3( half.x,  half.y,  half.z),
+        center + Vec3(-half.x,  half.y,  half.z),
+    };
+    int edges[][2] = {{0,1},{1,2},{2,3},{3,0},{4,5},{5,6},{6,7},{7,4},{0,4},{1,5},{2,6},{3,7}};
+    for (auto& e : edges)
+        m_DebugLines.push_back({corners[e[0]], corners[e[1]], colour});
+}
+
+void OpenGLRenderer::DrawDebugSphere(const Vec3& center, f32 radius, const Vec4& colour) {
+    // Approximate sphere with 3 axis-aligned circles (16 segments each)
+    const int N = 16;
+    const float PI2 = 6.28318530718f;
+    for (int axis = 0; axis < 3; ++axis) {
+        for (int i = 0; i < N; ++i) {
+            float a0 = static_cast<float>(i) / N * PI2;
+            float a1 = static_cast<float>(i+1) / N * PI2;
+            Vec3 p0, p1;
+            if (axis == 0) { // YZ circle
+                p0 = center + Vec3(0, std::cos(a0)*radius, std::sin(a0)*radius);
+                p1 = center + Vec3(0, std::cos(a1)*radius, std::sin(a1)*radius);
+            } else if (axis == 1) { // XZ circle
+                p0 = center + Vec3(std::cos(a0)*radius, 0, std::sin(a0)*radius);
+                p1 = center + Vec3(std::cos(a1)*radius, 0, std::sin(a1)*radius);
+            } else { // XY circle
+                p0 = center + Vec3(std::cos(a0)*radius, std::sin(a0)*radius, 0);
+                p1 = center + Vec3(std::cos(a1)*radius, std::sin(a1)*radius, 0);
+            }
+            m_DebugLines.push_back({p0, p1, colour});
+        }
+    }
+}
+
+void OpenGLRenderer::FlushDebugDraw(Camera& camera) {
+    if (m_DebugLines.empty() || !m_LineShader || !m_LineVAO) return;
+
+    Mat4 vp = camera.GetProjectionMatrix() * camera.GetViewMatrix();
+
+    // Build line data: pos(3) + color(3) per vertex, 2 verts per line
+    std::vector<float> data;
+    data.reserve(m_DebugLines.size() * 12);
+    for (auto& dl : m_DebugLines) {
+        data.insert(data.end(), {dl.from.x, dl.from.y, dl.from.z,
+                                  dl.colour.x, dl.colour.y, dl.colour.z});
+        data.insert(data.end(), {dl.to.x, dl.to.y, dl.to.z,
+                                  dl.colour.x, dl.colour.y, dl.colour.z});
+    }
+
+    glUseProgram(m_LineShader);
+    glUniformMatrix4fv(glGetUniformLocation(m_LineShader, "u_VP"), 1, GL_FALSE, vp.m);
+
+    glBindVertexArray(m_LineVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_LineVBO);
+
+    // Upload in chunks if needed
+    GLsizeiptr dataSize = static_cast<GLsizeiptr>(data.size() * sizeof(float));
+    if (dataSize <= 8192 * static_cast<GLsizeiptr>(sizeof(float))) {
+        glBufferSubData(GL_ARRAY_BUFFER, 0, dataSize, data.data());
+    } else {
+        glBufferData(GL_ARRAY_BUFFER, dataSize, data.data(), GL_DYNAMIC_DRAW);
+    }
+
+    glLineWidth(2.0f);
+    glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(m_DebugLines.size() * 2));
+    glLineWidth(1.0f);
+
+    glBindVertexArray(0);
+    glUseProgram(0);
+
+    m_DebugLines.clear();
+}
+
+// ============================================================================
+// Cleanup, Skybox, Grid, Gizmo, Highlight (same as before with minor fixes)
+// ============================================================================
 
 void OpenGLRenderer::CleanupScene() {
     if (m_TriVAO)      { glDeleteVertexArrays(1, &m_TriVAO);   m_TriVAO = 0; }
@@ -601,10 +1530,12 @@ void OpenGLRenderer::CleanupScene() {
     if (m_LineVBO)     { glDeleteBuffers(1, &m_LineVBO);         m_LineVBO = 0; }
     if (m_GridVAO)     { glDeleteVertexArrays(1, &m_GridVAO);   m_GridVAO = 0; }
     if (m_GridVBO)     { glDeleteBuffers(1, &m_GridVBO);         m_GridVBO = 0; }
-    if (m_HighlightShader) { glDeleteProgram(m_HighlightShader); m_HighlightShader = 0; }
+    if (m_HighlightShader && m_HighlightShader != m_SceneShader) {
+        glDeleteProgram(m_HighlightShader); m_HighlightShader = 0;
+    }
 }
 
-// ── Procedural Skybox ──────────────────────────────────────────────────────
+// ── Skybox ─────────────────────────────────────────────────────────────────
 
 static const char* s_SkyVertSrc =
     "#version 330 core\n"
@@ -614,7 +1545,7 @@ static const char* s_SkyVertSrc =
     "void main() {\n"
     "    vDir = aPos;\n"
     "    vec4 pos = u_VP * vec4(aPos, 1.0);\n"
-    "    gl_Position = pos.xyww;\n"  // depth = 1.0 (behind everything)
+    "    gl_Position = pos.xyww;\n"
     "}\n";
 
 static const char* s_SkyFragSrc =
@@ -624,19 +1555,17 @@ static const char* s_SkyFragSrc =
     "uniform float u_Time;\n"
     "void main() {\n"
     "    vec3 dir = normalize(vDir);\n"
-    "    float t = dir.y * 0.5 + 0.5;\n"                     // 0 at horizon, 1 at zenith
+    "    float t = dir.y * 0.5 + 0.5;\n"
     "    vec3 horizonCol = vec3(0.7, 0.82, 0.92);\n"
     "    vec3 zenithCol  = vec3(0.2, 0.35, 0.75);\n"
     "    vec3 groundCol  = vec3(0.25, 0.22, 0.2);\n"
     "    vec3 sky = mix(horizonCol, zenithCol, clamp(t, 0.0, 1.0));\n"
     "    if (dir.y < 0.0) sky = mix(horizonCol, groundCol, clamp(-dir.y*4.0, 0.0, 1.0));\n"
-    // simple sun disc
     "    float sunAngle = u_Time * 0.02;\n"
     "    vec3 sunDir = normalize(vec3(cos(sunAngle)*0.4, 0.8, sin(sunAngle)*0.4));\n"
     "    float sunDot = max(dot(dir, sunDir), 0.0);\n"
-    "    sky += vec3(1.0, 0.9, 0.7) * pow(sunDot, 256.0) * 2.0;\n"  // sun
-    "    sky += vec3(1.0, 0.85, 0.6) * pow(sunDot, 8.0) * 0.15;\n"  // glow
-    // wispy clouds
+    "    sky += vec3(1.0, 0.9, 0.7) * pow(sunDot, 256.0) * 2.0;\n"
+    "    sky += vec3(1.0, 0.85, 0.6) * pow(sunDot, 8.0) * 0.15;\n"
     "    float cx = dir.x / max(dir.y, 0.01) * 2.0 + u_Time * 0.01;\n"
     "    float cz = dir.z / max(dir.y, 0.01) * 2.0;\n"
     "    float cloud = sin(cx*1.2)*sin(cz*1.5)*0.5+0.5;\n"
@@ -647,15 +1576,10 @@ static const char* s_SkyFragSrc =
 
 void OpenGLRenderer::InitSkybox() {
     if (!glCreateShader) return;
-    GLuint vs = CompileDemoStage(GL_VERTEX_SHADER, s_SkyVertSrc);
-    GLuint fs = CompileDemoStage(GL_FRAGMENT_SHADER, s_SkyFragSrc);
-    m_SkyShader = glCreateProgram();
-    glAttachShader(m_SkyShader, vs);
-    glAttachShader(m_SkyShader, fs);
-    glLinkProgram(m_SkyShader);
-    glDeleteShader(vs); glDeleteShader(fs);
+    GLuint vs = CompileShaderStage(GL_VERTEX_SHADER, s_SkyVertSrc);
+    GLuint fs = CompileShaderStage(GL_FRAGMENT_SHADER, s_SkyFragSrc);
+    m_SkyShader = LinkProgram(vs, fs);
 
-    // Unit cube for skybox
     float skyVerts[] = {
         -1,1,-1, -1,-1,-1, 1,-1,-1, 1,-1,-1, 1,1,-1, -1,1,-1,
         -1,-1,1, -1,-1,-1, -1,1,-1, -1,1,-1, -1,1,1, -1,-1,1,
@@ -678,14 +1602,12 @@ void OpenGLRenderer::InitSkybox() {
 void OpenGLRenderer::RenderSkybox(Camera& camera, f32 dt) {
     if (!m_SkyShader || !m_SkyVAO) return;
     m_SkyRotation += dt;
-
     Mat4 view = camera.GetViewMatrix();
-    // Remove translation from view matrix — skybox is always centered on camera
     view.m[12] = 0; view.m[13] = 0; view.m[14] = 0;
     Mat4 proj = camera.GetProjectionMatrix();
     Mat4 vp = proj * view;
 
-    glDepthFunc(GL_LEQUAL);   // draw at depth=1.0
+    glDepthFunc(GL_LEQUAL);
     glUseProgram(m_SkyShader);
     glUniformMatrix4fv(glGetUniformLocation(m_SkyShader, "u_VP"), 1, GL_FALSE, vp.m);
     glUniform1f(glGetUniformLocation(m_SkyShader, "u_Time"), m_SkyRotation);
@@ -717,28 +1639,22 @@ static const char* s_LineFragSrc =
 
 void OpenGLRenderer::InitLineShader() {
     if (!glCreateShader) return;
-    GLuint vs = CompileDemoStage(GL_VERTEX_SHADER, s_LineVertSrc);
-    GLuint fs = CompileDemoStage(GL_FRAGMENT_SHADER, s_LineFragSrc);
-    m_LineShader = glCreateProgram();
-    glAttachShader(m_LineShader, vs);
-    glAttachShader(m_LineShader, fs);
-    glLinkProgram(m_LineShader);
-    glDeleteShader(vs); glDeleteShader(fs);
+    GLuint vs = CompileShaderStage(GL_VERTEX_SHADER, s_LineVertSrc);
+    GLuint fs = CompileShaderStage(GL_FRAGMENT_SHADER, s_LineFragSrc);
+    m_LineShader = LinkProgram(vs, fs);
 
-    // Dynamic VBO for line drawing (updated each frame)
     glGenVertexArrays(1, &m_LineVAO);
     glGenBuffers(1, &m_LineVBO);
     glBindVertexArray(m_LineVAO);
     glBindBuffer(GL_ARRAY_BUFFER, m_LineVBO);
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(8192 * sizeof(float)), nullptr, GL_DYNAMIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(65536 * sizeof(float)), nullptr, GL_DYNAMIC_DRAW);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6*sizeof(float), reinterpret_cast<void*>(0));
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6*sizeof(float), reinterpret_cast<void*>(3*sizeof(float)));
     glEnableVertexAttribArray(1);
     glBindVertexArray(0);
 
-    // Highlight shader: draws object slightly scaled with flat color + wireframe
-    m_HighlightShader = m_SceneShader; // reuse scene shader — we'll just set u_Color
+    m_HighlightShader = m_SceneShader;
     GV_LOG_INFO("Line/gizmo shader initialised.");
 }
 
@@ -750,11 +1666,8 @@ void OpenGLRenderer::RenderGizmo(Camera& camera, const Vec3& pos, GizmoMode mode
     glUniformMatrix4fv(glGetUniformLocation(m_LineShader, "u_VP"), 1, GL_FALSE, vp.m);
 
     f32 len = 1.5f;
-    f32 hl = 0.15f; // arrowhead length
-
-    // Line data: pos(3) + color(3) per vertex, 2 vertices per line
-    // Rotation mode: 3 circles × 24 segments = 72 lines × 2 verts × 6 floats = 864
-    float lines[864 + 72]; // extra room for translate/scale
+    f32 hl = 0.15f;
+    float lines[864 + 72];
     int idx = 0;
 
     auto pushLine = [&](Vec3 a, Vec3 b, Vec3 col) {
@@ -769,7 +1682,6 @@ void OpenGLRenderer::RenderGizmo(Camera& camera, const Vec3& pos, GizmoMode mode
     Vec3 zCol = (activeAxis == 2) ? Vec3(1, 1, 0) : Vec3(0.2f, 0.2f, 1);
 
     if (mode == GizmoMode::Translate) {
-        // Arrows along each axis
         pushLine(pos, pos + Vec3(len, 0, 0), xCol);
         pushLine(pos + Vec3(len, 0, 0), pos + Vec3(len - hl, hl, 0), xCol);
         pushLine(pos, pos + Vec3(0, len, 0), yCol);
@@ -777,7 +1689,6 @@ void OpenGLRenderer::RenderGizmo(Camera& camera, const Vec3& pos, GizmoMode mode
         pushLine(pos, pos + Vec3(0, 0, len), zCol);
         pushLine(pos + Vec3(0, 0, len), pos + Vec3(0, hl, len - hl), zCol);
     } else if (mode == GizmoMode::Scale) {
-        // Lines with squares at end
         pushLine(pos, pos + Vec3(len, 0, 0), xCol);
         pushLine(pos + Vec3(len-hl, -hl, 0), pos + Vec3(len+hl, hl, 0), xCol);
         pushLine(pos, pos + Vec3(0, len, 0), yCol);
@@ -785,19 +1696,15 @@ void OpenGLRenderer::RenderGizmo(Camera& camera, const Vec3& pos, GizmoMode mode
         pushLine(pos, pos + Vec3(0, 0, len), zCol);
         pushLine(pos + Vec3(0, -hl, len-hl), pos + Vec3(0, hl, len+hl), zCol);
     } else {
-        // Rotate — circles (approximate with line segments)
         const int N = 24;
         for (int i = 0; i < N; ++i) {
             f32 a0 = (float)i / (float)N * 6.2832f;
             f32 a1 = (float)(i+1) / (float)N * 6.2832f;
             f32 r = 1.0f;
-            // X circle (YZ plane)
             pushLine(pos + Vec3(0, std::cos(a0)*r, std::sin(a0)*r),
                      pos + Vec3(0, std::cos(a1)*r, std::sin(a1)*r), xCol);
-            // Y circle (XZ plane)  
             pushLine(pos + Vec3(std::cos(a0)*r, 0, std::sin(a0)*r),
                      pos + Vec3(std::cos(a1)*r, 0, std::sin(a1)*r), yCol);
-            // Z circle (XY plane)
             pushLine(pos + Vec3(std::cos(a0)*r, std::sin(a0)*r, 0),
                      pos + Vec3(std::cos(a1)*r, std::sin(a1)*r, 0), zCol);
         }
@@ -817,7 +1724,6 @@ void OpenGLRenderer::RenderGizmo(Camera& camera, const Vec3& pos, GizmoMode mode
 }
 
 void OpenGLRenderer::RenderHighlight(Camera& camera, const Mat4& model, PrimitiveType type) {
-    // Draw wireframe outline of the selected object
     if (!m_SceneShader) return;
     Mat4 view = camera.GetViewMatrix();
     Mat4 proj = camera.GetProjectionMatrix();
@@ -835,11 +1741,11 @@ void OpenGLRenderer::RenderHighlight(Camera& camera, const Mat4& model, Primitiv
 
     if (type == PrimitiveType::Cube) {
         glBindVertexArray(m_CubeVAO);
-        glDrawElements(GL_TRIANGLES, m_CubeIndexCount, GL_UNSIGNED_INT, reinterpret_cast<void*>(0));
+        glDrawElements(GL_TRIANGLES, m_CubeIndexCount, GL_UNSIGNED_INT, nullptr);
         glBindVertexArray(0);
     } else if (type == PrimitiveType::Plane) {
         glBindVertexArray(m_PlaneVAO);
-        glDrawElements(GL_TRIANGLES, m_PlaneIndexCount, GL_UNSIGNED_INT, reinterpret_cast<void*>(0));
+        glDrawElements(GL_TRIANGLES, m_PlaneIndexCount, GL_UNSIGNED_INT, nullptr);
         glBindVertexArray(0);
     } else if (type == PrimitiveType::Triangle) {
         glBindVertexArray(m_TriVAO);
@@ -853,7 +1759,7 @@ void OpenGLRenderer::RenderHighlight(Camera& camera, const Mat4& model, Primitiv
     glUseProgram(0);
 }
 
-// ── Grid (XZ plane) ───────────────────────────────────────────────────────
+// ── Grid ───────────────────────────────────────────────────────────────────
 
 void OpenGLRenderer::InitGrid() {
     if (!glGenVertexArrays) return;
@@ -866,10 +1772,8 @@ void OpenGLRenderer::InitGrid() {
         float fi = static_cast<float>(i) * step;
         float limit = static_cast<float>(halfSize) * step;
         float alpha = (i == 0) ? 0.5f : 0.22f;
-        // Line along Z
         gridVerts.insert(gridVerts.end(), { fi, 0, -limit, alpha, alpha, alpha });
         gridVerts.insert(gridVerts.end(), { fi, 0,  limit, alpha, alpha, alpha });
-        // Line along X
         gridVerts.insert(gridVerts.end(), { -limit, 0, fi, alpha, alpha, alpha });
         gridVerts.insert(gridVerts.end(), {  limit, 0, fi, alpha, alpha, alpha });
     }
@@ -902,7 +1806,9 @@ void OpenGLRenderer::RenderGrid(Camera& camera) {
 
 #endif // GV_HAS_GLFW
 
-// ── Shader ─────────────────────────────────────────────────────────────────
+// ============================================================================
+// Shader class implementation
+// ============================================================================
 
 bool Shader::Compile(const std::string& vertexSrc, const std::string& fragmentSrc) {
 #ifdef GV_HAS_GLFW

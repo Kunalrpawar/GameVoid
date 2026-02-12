@@ -3,30 +3,94 @@
 // ============================================================================
 #include "assets/Assets.h"
 
+#ifdef GV_HAS_GLFW
+#include "core/GLDefs.h"
+#include "stb/stb_image.h"
+#endif
+
+#include <cmath>
+
 namespace gv {
 
 // ── Texture ────────────────────────────────────────────────────────────────
 
 bool Texture::Load(const std::string& path) {
     m_Path = path;
-    // In production: stb_image or similar
-    //   unsigned char* data = stbi_load(path.c_str(), &w, &h, &channels, 0);
-    //   glGenTextures(1, &m_TextureID);
-    //   glBindTexture(GL_TEXTURE_2D, m_TextureID);
-    //   glTexImage2D(...)
-    //   stbi_image_free(data);
-    GV_LOG_INFO("Texture loaded (placeholder): " + path);
+#ifdef GV_HAS_GLFW
+    if (!glGenTextures) {
+        GV_LOG_WARN("Texture::Load — GL not available, skipping: " + path);
+        return false;
+    }
+
+    stbi_set_flip_vertically_on_load(1);
+    int w, h, channels;
+    unsigned char* data = stbi_load(path.c_str(), &w, &h, &channels, 0);
+    if (!data) {
+        GV_LOG_WARN("Texture::Load — failed to load image: " + path);
+        // Create a 1x1 white fallback texture
+        glGenTextures(1, &m_TextureID);
+        glBindTexture(GL_TEXTURE_2D, m_TextureID);
+        unsigned char white[] = { 255, 255, 255, 255 };
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, white);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        m_Width = 1; m_Height = 1; m_Channels = 4;
+        return false;
+    }
+
+    m_Width    = static_cast<u32>(w);
+    m_Height   = static_cast<u32>(h);
+    m_Channels = static_cast<u32>(channels);
+
+    GLenum internalFmt = GL_RGBA8;
+    GLenum format = GL_RGBA;
+    if (channels == 1) { internalFmt = GL_RED;  format = GL_RED;  }
+    else if (channels == 3) { internalFmt = GL_RGB8; format = GL_RGB; }
+    else if (channels == 4) { internalFmt = GL_RGBA8; format = GL_RGBA; }
+
+    glGenTextures(1, &m_TextureID);
+    glBindTexture(GL_TEXTURE_2D, m_TextureID);
+
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(internalFmt),
+                 static_cast<GLsizei>(w), static_cast<GLsizei>(h), 0,
+                 format, GL_UNSIGNED_BYTE, data);
+
+    if (glGenerateMipmap) glGenerateMipmap(GL_TEXTURE_2D);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+    stbi_image_free(data);
+
+    GV_LOG_INFO("Texture loaded: " + path + " (" + std::to_string(w) + "x" +
+                std::to_string(h) + ", " + std::to_string(channels) + "ch)");
     return true;
+#else
+    GV_LOG_INFO("Texture loaded (no GPU): " + path);
+    return true;
+#endif
 }
 
 void Texture::Bind(u32 unit) const {
-    // glActiveTexture(GL_TEXTURE0 + unit);
-    // glBindTexture(GL_TEXTURE_2D, m_TextureID);
+#ifdef GV_HAS_GLFW
+    if (glActiveTexture && m_TextureID) {
+        glActiveTexture(GL_TEXTURE0 + unit);
+        glBindTexture(GL_TEXTURE_2D, m_TextureID);
+    }
+#else
     (void)unit;
+#endif
 }
 
 void Texture::Unbind() const {
-    // glBindTexture(GL_TEXTURE_2D, 0);
+#ifdef GV_HAS_GLFW
+    glBindTexture(GL_TEXTURE_2D, 0);
+#endif
 }
 
 // ── Mesh ───────────────────────────────────────────────────────────────────
@@ -43,41 +107,209 @@ bool Mesh::LoadFromFile(const std::string& path) {
 void Mesh::Build(const std::vector<Vertex>& vertices, const std::vector<u32>& indices) {
     m_Vertices = vertices;
     m_Indices  = indices;
-    // glGenVertexArrays(1, &m_VAO);
-    // glGenBuffers(1, &m_VBO);
-    // glGenBuffers(1, &m_EBO);
-    // upload to GPU …
+#ifdef GV_HAS_GLFW
+    if (glGenVertexArrays) {
+        if (m_VAO) { glDeleteVertexArrays(1, &m_VAO); m_VAO = 0; }
+        if (m_VBO) { glDeleteBuffers(1, &m_VBO);      m_VBO = 0; }
+        if (m_EBO) { glDeleteBuffers(1, &m_EBO);      m_EBO = 0; }
+
+        glGenVertexArrays(1, &m_VAO);
+        glGenBuffers(1, &m_VBO);
+        glGenBuffers(1, &m_EBO);
+        glBindVertexArray(m_VAO);
+
+        glBindBuffer(GL_ARRAY_BUFFER, m_VBO);
+        glBufferData(GL_ARRAY_BUFFER,
+                     static_cast<GLsizeiptr>(vertices.size() * sizeof(Vertex)),
+                     vertices.data(), GL_STATIC_DRAW);
+
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_EBO);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                     static_cast<GLsizeiptr>(indices.size() * sizeof(u32)),
+                     indices.data(), GL_STATIC_DRAW);
+
+        // Vertex layout: position(3) + normal(3) + texCoord(2) + tangent(3) + bitangent(3)
+        // = 14 floats = 56 bytes per vertex
+        GLsizei stride = sizeof(Vertex);
+
+        // location 0: position
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride,
+                              reinterpret_cast<void*>(offsetof(Vertex, position)));
+        glEnableVertexAttribArray(0);
+        // location 1: normal
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride,
+                              reinterpret_cast<void*>(offsetof(Vertex, normal)));
+        glEnableVertexAttribArray(1);
+        // location 2: texCoord
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride,
+                              reinterpret_cast<void*>(offsetof(Vertex, texCoord)));
+        glEnableVertexAttribArray(2);
+        // location 3: tangent
+        glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, stride,
+                              reinterpret_cast<void*>(offsetof(Vertex, tangent)));
+        glEnableVertexAttribArray(3);
+        // location 4: bitangent
+        glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, stride,
+                              reinterpret_cast<void*>(offsetof(Vertex, bitangent)));
+        glEnableVertexAttribArray(4);
+
+        glBindVertexArray(0);
+    }
+#endif
     GV_LOG_DEBUG("Mesh '" + m_Name + "' built: " + std::to_string(vertices.size()) +
                  " verts, " + std::to_string(indices.size()) + " indices.");
 }
 
-void Mesh::Bind()   const { /* glBindVertexArray(m_VAO); */ }
-void Mesh::Unbind() const { /* glBindVertexArray(0); */ }
+void Mesh::Bind()   const {
+#ifdef GV_HAS_GLFW
+    if (m_VAO && glBindVertexArray) glBindVertexArray(m_VAO);
+#endif
+}
+
+void Mesh::Unbind() const {
+#ifdef GV_HAS_GLFW
+    if (glBindVertexArray) glBindVertexArray(0);
+#endif
+}
+
+// ── Helper: compute tangent/bitangent for a triangle ───────────────────────
+static void ComputeTangents(Vertex& v0, Vertex& v1, Vertex& v2) {
+    Vec3 e1 = v1.position - v0.position;
+    Vec3 e2 = v2.position - v0.position;
+    float du1 = v1.texCoord.x - v0.texCoord.x;
+    float dv1 = v1.texCoord.y - v0.texCoord.y;
+    float du2 = v2.texCoord.x - v0.texCoord.x;
+    float dv2 = v2.texCoord.y - v0.texCoord.y;
+
+    float f = 1.0f / (du1 * dv2 - du2 * dv1 + 1e-8f);
+    Vec3 tangent(f * (dv2 * e1.x - dv1 * e2.x),
+                 f * (dv2 * e1.y - dv1 * e2.y),
+                 f * (dv2 * e1.z - dv1 * e2.z));
+    Vec3 bitangent(f * (-du2 * e1.x + du1 * e2.x),
+                   f * (-du2 * e1.y + du1 * e2.y),
+                   f * (-du2 * e1.z + du1 * e2.z));
+    tangent = tangent.Normalized();
+    bitangent = bitangent.Normalized();
+
+    v0.tangent = v1.tangent = v2.tangent = tangent;
+    v0.bitangent = v1.bitangent = v2.bitangent = bitangent;
+}
 
 Shared<Mesh> Mesh::CreateCube() {
     auto mesh = MakeShared<Mesh>("Cube");
-    // 24 vertices (4 per face × 6 faces), 36 indices
-    // Placeholder — populate with unit-cube geometry.
-    GV_LOG_DEBUG("Primitive 'Cube' created.");
+
+    // 6 faces × 4 vertices, with positions + normals + UVs
+    std::vector<Vertex> verts;
+    std::vector<u32> indices;
+
+    struct FaceData { Vec3 normal; Vec3 right; Vec3 up; };
+    FaceData faces[] = {
+        { { 0, 0, 1}, { 1, 0, 0}, {0, 1, 0} },  // front
+        { { 0, 0,-1}, {-1, 0, 0}, {0, 1, 0} },  // back
+        { { 0, 1, 0}, { 1, 0, 0}, {0, 0,-1} },  // top
+        { { 0,-1, 0}, { 1, 0, 0}, {0, 0, 1} },  // bottom
+        { { 1, 0, 0}, { 0, 0,-1}, {0, 1, 0} },  // right
+        { {-1, 0, 0}, { 0, 0, 1}, {0, 1, 0} },  // left
+    };
+
+    for (int f = 0; f < 6; ++f) {
+        Vec3 n = faces[f].normal;
+        Vec3 r = faces[f].right;
+        Vec3 u = faces[f].up;
+        u32 base = static_cast<u32>(verts.size());
+
+        Vec3 center = n * 0.5f;
+        verts.push_back({center - r*0.5f - u*0.5f, n, {0,0}, r, u});
+        verts.push_back({center + r*0.5f - u*0.5f, n, {1,0}, r, u});
+        verts.push_back({center + r*0.5f + u*0.5f, n, {1,1}, r, u});
+        verts.push_back({center - r*0.5f + u*0.5f, n, {0,1}, r, u});
+
+        indices.push_back(base+0); indices.push_back(base+1); indices.push_back(base+2);
+        indices.push_back(base+2); indices.push_back(base+3); indices.push_back(base+0);
+    }
+
+    mesh->Build(verts, indices);
+    GV_LOG_DEBUG("Primitive 'Cube' created (24 verts).");
     return mesh;
 }
 
 Shared<Mesh> Mesh::CreateSphere(u32 segments, u32 rings) {
     auto mesh = MakeShared<Mesh>("Sphere");
-    (void)segments; (void)rings;
+    const float PI = 3.14159265358979f;
+    std::vector<Vertex> verts;
+    std::vector<u32> indices;
+
+    for (u32 y = 0; y <= rings; ++y) {
+        for (u32 x = 0; x <= segments; ++x) {
+            float xf = static_cast<float>(x) / static_cast<float>(segments);
+            float yf = static_cast<float>(y) / static_cast<float>(rings);
+            float theta = xf * 2.0f * PI;
+            float phi   = yf * PI;
+
+            float sinPhi = std::sin(phi);
+            float cosPhi = std::cos(phi);
+            float sinTheta = std::sin(theta);
+            float cosTheta = std::cos(theta);
+
+            Vec3 pos(cosTheta * sinPhi, cosPhi, sinTheta * sinPhi);
+            Vec3 normal = pos.Normalized();
+            Vec2 uv(xf, yf);
+            Vec3 tangent(-sinTheta, 0.0f, cosTheta);
+            tangent = tangent.Normalized();
+            Vec3 bitangent = normal.Cross(tangent).Normalized();
+
+            verts.push_back({pos * 0.5f, normal, uv, tangent, bitangent});
+        }
+    }
+
+    for (u32 y = 0; y < rings; ++y) {
+        for (u32 x = 0; x < segments; ++x) {
+            u32 a = y * (segments + 1) + x;
+            u32 b = a + segments + 1;
+            indices.push_back(a); indices.push_back(b);     indices.push_back(a+1);
+            indices.push_back(b); indices.push_back(b+1); indices.push_back(a+1);
+        }
+    }
+
+    mesh->Build(verts, indices);
     GV_LOG_DEBUG("Primitive 'Sphere' created.");
     return mesh;
 }
 
 Shared<Mesh> Mesh::CreatePlane(f32 width, f32 depth) {
     auto mesh = MakeShared<Mesh>("Plane");
-    (void)width; (void)depth;
+    float hw = width * 0.5f, hd = depth * 0.5f;
+
+    Vec3 n(0, 1, 0);
+    Vec3 t(1, 0, 0);
+    Vec3 b(0, 0, 1);
+
+    std::vector<Vertex> verts = {
+        { {-hw, 0, -hd}, n, {0,0}, t, b },
+        { { hw, 0, -hd}, n, {1,0}, t, b },
+        { { hw, 0,  hd}, n, {1,1}, t, b },
+        { {-hw, 0,  hd}, n, {0,1}, t, b },
+    };
+    std::vector<u32> indices = { 0, 1, 2, 2, 3, 0 };
+    mesh->Build(verts, indices);
     GV_LOG_DEBUG("Primitive 'Plane' created.");
     return mesh;
 }
 
 Shared<Mesh> Mesh::CreateQuad() {
     auto mesh = MakeShared<Mesh>("Quad");
+    Vec3 n(0, 0, 1);
+    Vec3 t(1, 0, 0);
+    Vec3 b(0, 1, 0);
+
+    std::vector<Vertex> verts = {
+        { {-0.5f, -0.5f, 0}, n, {0,0}, t, b },
+        { { 0.5f, -0.5f, 0}, n, {1,0}, t, b },
+        { { 0.5f,  0.5f, 0}, n, {1,1}, t, b },
+        { {-0.5f,  0.5f, 0}, n, {0,1}, t, b },
+    };
+    std::vector<u32> indices = { 0, 1, 2, 2, 3, 0 };
+    mesh->Build(verts, indices);
     GV_LOG_DEBUG("Primitive 'Quad' created.");
     return mesh;
 }
@@ -85,13 +317,45 @@ Shared<Mesh> Mesh::CreateQuad() {
 // ── Material ───────────────────────────────────────────────────────────────
 
 void Material::Apply() const {
-    // Bind textures, upload uniform values to the active shader.
-    // shader.SetVec3("u_Albedo", albedo);
-    // shader.SetFloat("u_Metallic", metallic);
-    // shader.SetFloat("u_Roughness", roughness);
-    // if (diffuseMap)  diffuseMap->Bind(0);
-    // if (normalMap)   normalMap->Bind(1);
-    // if (specularMap) specularMap->Bind(2);
+#ifdef GV_HAS_GLFW
+    // Upload PBR material uniforms to the currently-bound shader program
+    GLint prog = 0;
+    glGetIntegerv(0x8B8D, &prog);  // GL_CURRENT_PROGRAM
+    if (prog <= 0) return;
+
+    GLint loc;
+    loc = glGetUniformLocation(static_cast<GLuint>(prog), "u_Material.albedo");
+    if (loc >= 0) glUniform3f(loc, albedo.x, albedo.y, albedo.z);
+    loc = glGetUniformLocation(static_cast<GLuint>(prog), "u_Material.metallic");
+    if (loc >= 0) glUniform1f(loc, metallic);
+    loc = glGetUniformLocation(static_cast<GLuint>(prog), "u_Material.roughness");
+    if (loc >= 0) glUniform1f(loc, roughness);
+    loc = glGetUniformLocation(static_cast<GLuint>(prog), "u_Material.shininess");
+    if (loc >= 0) glUniform1f(loc, shininess);
+
+    // Bind textures
+    if (diffuseMap && diffuseMap->GetID()) {
+        diffuseMap->Bind(0);
+        loc = glGetUniformLocation(static_cast<GLuint>(prog), "u_AlbedoMap");
+        if (loc >= 0) glUniform1i(loc, 0);
+        loc = glGetUniformLocation(static_cast<GLuint>(prog), "u_HasAlbedoMap");
+        if (loc >= 0) glUniform1i(loc, 1);
+    }
+    if (normalMap && normalMap->GetID()) {
+        normalMap->Bind(1);
+        loc = glGetUniformLocation(static_cast<GLuint>(prog), "u_NormalMap");
+        if (loc >= 0) glUniform1i(loc, 1);
+        loc = glGetUniformLocation(static_cast<GLuint>(prog), "u_HasNormalMap");
+        if (loc >= 0) glUniform1i(loc, 1);
+    }
+    if (specularMap && specularMap->GetID()) {
+        specularMap->Bind(2);
+        loc = glGetUniformLocation(static_cast<GLuint>(prog), "u_RoughnessMap");
+        if (loc >= 0) glUniform1i(loc, 2);
+        loc = glGetUniformLocation(static_cast<GLuint>(prog), "u_HasRoughnessMap");
+        if (loc >= 0) glUniform1i(loc, 1);
+    }
+#endif
 }
 
 // ── AssetManager ───────────────────────────────────────────────────────────

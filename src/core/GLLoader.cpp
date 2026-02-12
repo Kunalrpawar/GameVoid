@@ -76,6 +76,13 @@ PFN_glRenderbufferStorage      glRenderbufferStorage      = nullptr;
 PFN_glFramebufferRenderbuffer  glFramebufferRenderbuffer  = nullptr;
 PFN_glBlitFramebuffer          glBlitFramebuffer          = nullptr;
 
+// Instanced drawing
+PFN_glDrawArraysInstanced      glDrawArraysInstanced      = nullptr;
+PFN_glDrawElementsInstanced    glDrawElementsInstanced    = nullptr;
+
+// Texture parameter float
+PFN_glTexParameterfv           glTexParameterfv           = nullptr;
+
 // ── Loader implementation ──────────────────────────────────────────────────
 
 #define GV_LOAD(name) \
@@ -148,6 +155,14 @@ bool gvLoadGL() {
     GV_LOAD(glRenderbufferStorage);
     GV_LOAD(glFramebufferRenderbuffer);
     GV_LOAD(glBlitFramebuffer);
+
+    // Instanced drawing
+    GV_LOAD(glDrawArraysInstanced);
+    GV_LOAD(glDrawElementsInstanced);
+
+    // Texture parameter float
+    glTexParameterfv = (PFN_glTexParameterfv)glfwGetProcAddress("glTexParameterfv");
+    // glTexParameterfv may not load on some drivers — not critical
 
     return ok;
 }

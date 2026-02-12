@@ -312,33 +312,22 @@ void EditorUI::DrawToolbar() {
     }
 
     ImGui::SameLine(); ImGui::Separator(); ImGui::SameLine();
-    if (ImGui::Button("+ Cube"))  AddCube();
-    ImGui::SameLine();
-    if (ImGui::Button("+ Light")) AddLight();
-    ImGui::SameLine();
-    if (ImGui::Button("+ Terrain")) AddTerrain();
-    ImGui::SameLine();
-    if (ImGui::Button("+ Particles")) AddParticleEmitter();
-    ImGui::SameLine();
-    if (ImGui::Button("+ Floor")) {
-        if (m_Scene) {
-            auto* obj = m_Scene->CreateGameObject("FloorPlane");
-            obj->GetTransform().SetPosition(0, 0, 0);
-            obj->GetTransform().SetScale(40.0f, 1.0f, 40.0f);
-            auto* mr = obj->AddComponent<MeshRenderer>();
-            mr->primitiveType = PrimitiveType::Plane;
-            mr->color = Vec4(0.4f, 0.4f, 0.42f, 1.0f);
-            auto* rb = obj->AddComponent<RigidBody>();
-            rb->bodyType = RigidBodyType::Static;
-            rb->useGravity = false;
-            auto* col = obj->AddComponent<Collider>();
-            col->type = ColliderType::Box;
-            col->boxHalfExtents = Vec3(0.5f, 0.01f, 0.5f);
-            m_Physics->RegisterBody(rb);
-            m_Selected = obj;
-            PushLog("[Editor] Added floor plane with collision.");
+
+    // Placement buttons — highlight active placement type
+    auto placeBtn = [&](const char* label, PlacementType pt) {
+        bool active = (m_PlacementType == pt);
+        if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.7f, 0.3f, 1.0f));
+        if (ImGui::Button(label)) {
+            if (active) CancelPlacement(); else BeginPlacement(pt);
         }
-    }
+        if (active) ImGui::PopStyleColor();
+        ImGui::SameLine();
+    };
+    placeBtn("+ Cube",      PlacementType::Cube);
+    placeBtn("+ Light",     PlacementType::Light);
+    placeBtn("+ Terrain",   PlacementType::Terrain);
+    placeBtn("+ Particles", PlacementType::Particles);
+    placeBtn("+ Floor",     PlacementType::Floor);
     ImGui::SameLine(); ImGui::Separator(); ImGui::SameLine();
     ImGui::Checkbox("Snap", &m_SnapToGrid);
     if (m_SnapToGrid) {
@@ -965,10 +954,47 @@ void EditorUI::DrawViewport(f32 dt) {
         m_OrbitCam.ApplyToTransform(cam->GetOwner()->GetTransform());
     }
 
+    // ── Placement mode: preview + click-to-place ─────────────────────────
+    if (m_PlacementType != PlacementType::None && cam) {
+        // Update preview each frame
+        UpdatePlacement(cam, mousePos.x, mousePos.y);
+
+        // Draw placement hint in overlay
+        if (m_PlacementValid) {
+            const char* typeNames[] = { "", "Cube", "Light", "Terrain", "Particles", "Floor" };
+            std::string hint = std::string("Placing ") + typeNames[static_cast<int>(m_PlacementType)] +
+                " - Click to place, Right-click/Esc to cancel";
+            ImVec2 txtSz = ImGui::CalcTextSize(hint.c_str());
+            ImGui::GetForegroundDrawList()->AddRectFilled(
+                ImVec2(m_VpScreenX + 8, m_VpScreenY + 8),
+                ImVec2(m_VpScreenX + txtSz.x + 20, m_VpScreenY + txtSz.y + 16),
+                IM_COL32(20, 20, 20, 200), 4.0f);
+            ImGui::GetForegroundDrawList()->AddText(
+                ImVec2(m_VpScreenX + 14, m_VpScreenY + 12),
+                IM_COL32(100, 255, 100, 255), hint.c_str());
+
+            // Draw crosshair at mouse position
+            ImGui::GetForegroundDrawList()->AddCircle(
+                mousePos, 8.0f, IM_COL32(100, 255, 100, 200), 12, 2.0f);
+        }
+
+        // Left-click: commit placement
+        if (vpHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && m_PlacementValid
+            && !m_OrbitActive && !m_PanActive && !ImGui::GetIO().KeyAlt) {
+            FinishPlacement();
+        }
+
+        // Right-click or Escape: cancel placement
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            CancelPlacement();
+        }
+    }
+
     // ── Object Picking via ray-cast ────────────────────────────────────────
-    // Only pick on Left-click when NOT orbiting/panning
+    // Only pick on Left-click when NOT orbiting/panning and NOT placing
     if (vpHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && cam
-        && !m_Dragging && !m_OrbitActive && !m_PanActive && !ImGui::GetIO().KeyAlt) {
+        && !m_Dragging && !m_OrbitActive && !m_PanActive && !ImGui::GetIO().KeyAlt
+        && m_PlacementType == PlacementType::None) {
         // Convert mouse to viewport-local NDC
         f32 mx = (mousePos.x - m_VpScreenX) / m_VpScreenW;
         f32 my = (mousePos.y - m_VpScreenY) / m_VpScreenH;
@@ -2228,37 +2254,142 @@ void EditorUI::ResizeViewport(u32 w, u32 h) {
 // ── Add / Delete helpers ───────────────────────────────────────────────────
 
 void EditorUI::AddCube() {
-    if (!m_Scene) return;
-    static i32 cubeN = 0;
-    cubeN++;
-    std::string name = "Cube_" + std::to_string(cubeN);
-    auto* obj = m_Scene->CreateGameObject(name);
-    obj->GetTransform().SetPosition(0, 2.0f, 0);
-    auto* mr = obj->AddComponent<MeshRenderer>();
-    mr->primitiveType = PrimitiveType::Cube;
-    mr->color = Vec4(0.4f + static_cast<f32>(std::rand() % 60) / 100.0f,
-                     0.4f + static_cast<f32>(std::rand() % 60) / 100.0f,
-                     0.4f + static_cast<f32>(std::rand() % 60) / 100.0f, 1.0f);
-    auto* rb = obj->AddComponent<RigidBody>();
-    rb->useGravity = true;
-    obj->AddComponent<Collider>()->type = ColliderType::Box;
-    if (m_Physics) m_Physics->RegisterBody(rb);
-    m_Selected = obj;
-    PushLog("[Editor] Added '" + name + "'.");
+    BeginPlacement(PlacementType::Cube);
 }
 
 void EditorUI::AddLight() {
-    if (!m_Scene) return;
-    static i32 lightN = 0;
-    lightN++;
-    std::string name = "PointLight_" + std::to_string(lightN);
-    auto* obj = m_Scene->CreateGameObject(name);
-    obj->GetTransform().SetPosition(0, 3.0f, 0);
-    auto* pl = obj->AddComponent<PointLight>();
-    pl->colour = Vec3(1, 1, 1);
-    pl->intensity = 1.0f;
-    m_Selected = obj;
-    PushLog("[Editor] Added '" + name + "'.");
+    BeginPlacement(PlacementType::Light);
+}
+
+// ── Placement Mode ─────────────────────────────────────────────────────────
+
+void EditorUI::BeginPlacement(PlacementType type) {
+    m_PlacementType = type;
+    m_PlacementPreviewPos = Vec3(0, 0, 0);
+    m_PlacementValid = false;
+    const char* names[] = { "", "Cube", "Light", "Terrain", "Particles", "Floor" };
+    PushLog("[Editor] Click in viewport to place " + std::string(names[static_cast<int>(type)]) + " (Right-click or Esc to cancel).");
+}
+
+void EditorUI::CancelPlacement() {
+    if (m_PlacementType != PlacementType::None) {
+        PushLog("[Editor] Placement cancelled.");
+        m_PlacementType = PlacementType::None;
+    }
+}
+
+Vec3 EditorUI::RaycastGroundPlane(Camera* cam, f32 ndcX, f32 ndcY, f32 planeY) {
+    Mat4 invVP = (cam->GetProjectionMatrix() * cam->GetViewMatrix()).Inverse();
+    Vec3 nearPt = invVP.TransformPoint(Vec3(ndcX, ndcY, -1.0f));
+    Vec3 farPt  = invVP.TransformPoint(Vec3(ndcX, ndcY,  1.0f));
+    Vec3 dir = (farPt - nearPt).Normalized();
+
+    // Intersect with horizontal plane y = planeY
+    if (std::fabs(dir.y) < 0.0001f) return Vec3(0, planeY, 0); // parallel
+    f32 t = (planeY - nearPt.y) / dir.y;
+    if (t < 0) t = 0; // behind camera — clamp
+    return nearPt + dir * t;
+}
+
+void EditorUI::UpdatePlacement(Camera* cam, f32 mousePosX, f32 mousePosY) {
+    if (m_PlacementType == PlacementType::None || !cam) return;
+
+    f32 mx = (mousePosX - m_VpScreenX) / m_VpScreenW;
+    f32 my = (mousePosY - m_VpScreenY) / m_VpScreenH;
+    if (mx < 0 || mx > 1 || my < 0 || my > 1) { m_PlacementValid = false; return; }
+
+    f32 ndcX = mx * 2.0f - 1.0f;
+    f32 ndcY = 1.0f - my * 2.0f;
+
+    Vec3 hit = RaycastGroundPlane(cam, ndcX, ndcY, 0.0f);
+
+    // Snap to grid if enabled
+    if (m_SnapToGrid && m_GridSize > 0.01f) {
+        hit.x = std::round(hit.x / m_GridSize) * m_GridSize;
+        hit.z = std::round(hit.z / m_GridSize) * m_GridSize;
+    }
+
+    // Objects sit on top of the ground plane
+    if (m_PlacementType == PlacementType::Cube)
+        hit.y = 0.5f;  // half-cube height
+    else if (m_PlacementType == PlacementType::Light)
+        hit.y = 3.0f;  // lights float above
+    else if (m_PlacementType == PlacementType::Particles)
+        hit.y = 1.0f;
+    // Terrain and Floor stay at y=0
+
+    m_PlacementPreviewPos = hit;
+    m_PlacementValid = true;
+}
+
+void EditorUI::FinishPlacement() {
+    if (m_PlacementType == PlacementType::None || !m_Scene) return;
+
+    Vec3 pos = m_PlacementPreviewPos;
+
+    switch (m_PlacementType) {
+    case PlacementType::Cube: {
+        static i32 cubeN = 0;
+        cubeN++;
+        std::string name = "Cube_" + std::to_string(cubeN);
+        auto* obj = m_Scene->CreateGameObject(name);
+        obj->GetTransform().SetPosition(pos.x, pos.y, pos.z);
+        auto* mr = obj->AddComponent<MeshRenderer>();
+        mr->primitiveType = PrimitiveType::Cube;
+        mr->color = Vec4(0.4f + static_cast<f32>(std::rand() % 60) / 100.0f,
+                         0.4f + static_cast<f32>(std::rand() % 60) / 100.0f,
+                         0.4f + static_cast<f32>(std::rand() % 60) / 100.0f, 1.0f);
+        auto* rb = obj->AddComponent<RigidBody>();
+        rb->useGravity = true;
+        obj->AddComponent<Collider>()->type = ColliderType::Box;
+        if (m_Physics) m_Physics->RegisterBody(rb);
+        m_Selected = obj;
+        PushLog("[Editor] Placed '" + name + "' at (" +
+                std::to_string((int)pos.x) + ", " + std::to_string((int)pos.y) + ", " + std::to_string((int)pos.z) + ").");
+        break;
+    }
+    case PlacementType::Light: {
+        static i32 lightN = 0;
+        lightN++;
+        std::string name = "PointLight_" + std::to_string(lightN);
+        auto* obj = m_Scene->CreateGameObject(name);
+        obj->GetTransform().SetPosition(pos.x, pos.y, pos.z);
+        auto* pl = obj->AddComponent<PointLight>();
+        pl->colour = Vec3(1, 1, 1);
+        pl->intensity = 1.0f;
+        m_Selected = obj;
+        PushLog("[Editor] Placed '" + name + "'.");
+        break;
+    }
+    case PlacementType::Terrain:
+        AddTerrain();  // terrain is special, uses its own logic
+        break;
+    case PlacementType::Particles:
+        AddParticleEmitter();
+        if (m_Selected) m_Selected->GetTransform().SetPosition(pos.x, pos.y, pos.z);
+        break;
+    case PlacementType::Floor: {
+        auto* obj = m_Scene->CreateGameObject("FloorPlane");
+        obj->GetTransform().SetPosition(pos.x, 0, pos.z);
+        obj->GetTransform().SetScale(40.0f, 1.0f, 40.0f);
+        auto* mr = obj->AddComponent<MeshRenderer>();
+        mr->primitiveType = PrimitiveType::Plane;
+        mr->color = Vec4(0.4f, 0.4f, 0.42f, 1.0f);
+        auto* rb = obj->AddComponent<RigidBody>();
+        rb->bodyType = RigidBodyType::Static;
+        rb->useGravity = false;
+        auto* col = obj->AddComponent<Collider>();
+        col->type = ColliderType::Box;
+        col->boxHalfExtents = Vec3(0.5f, 0.01f, 0.5f);
+        if (m_Physics) m_Physics->RegisterBody(rb);
+        m_Selected = obj;
+        PushLog("[Editor] Placed floor plane.");
+        break;
+    }
+    default: break;
+    }
+
+    m_PlacementType = PlacementType::None;
 }
 
 void EditorUI::DeleteSelected() {

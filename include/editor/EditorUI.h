@@ -154,6 +154,17 @@ private:
     GizmoMode       m_GizmoMode = GizmoMode::Translate;
     bool            m_Playing  = false;
 
+    // ── Placement mode (drag-to-place objects) ─────────────────────────────
+    enum class PlacementType { None, Cube, Light, Terrain, Particles, Floor };
+    PlacementType m_PlacementType = PlacementType::None;
+    Vec3 m_PlacementPreviewPos { 0, 0, 0 };  // ghost position under cursor
+    bool m_PlacementValid = false;            // true when cursor is over valid ground
+    void BeginPlacement(PlacementType type);
+    void UpdatePlacement(Camera* cam, f32 mousePosX, f32 mousePosY);
+    void FinishPlacement();
+    void CancelPlacement();
+    Vec3 RaycastGroundPlane(Camera* cam, f32 ndcX, f32 ndcY, f32 planeY = 0.0f);
+
     // ── Object picking / drag ──────────────────────────────────────────────
     bool m_Dragging      = false;
     i32  m_DragAxis      = -1;       // 0=X, 1=Y, 2=Z, -1=none

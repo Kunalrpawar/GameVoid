@@ -178,6 +178,31 @@ typedef ptrdiff_t      GLintptr;
 #define GL_READ_FRAMEBUFFER         0x8CA8
 #define GL_DRAW_FRAMEBUFFER         0x8CA9
 
+// HDR / float textures
+#define GL_R16F                     0x822D
+#define GL_RG16F                    0x822F
+#define GL_RGBA16F                  0x881A
+#define GL_RGB16F                   0x881B
+#define GL_R32F                     0x822E
+#define GL_RGBA32F                  0x8814
+#define GL_RED                      0x1903
+#define GL_RG                       0x8227
+#define GL_HALF_FLOAT               0x140B
+#define GL_CLAMP_TO_BORDER          0x812D
+#define GL_TEXTURE_BORDER_COLOR     0x1004
+
+// Shadow mapping
+#define GL_DEPTH_COMPONENT          0x1902
+#define GL_DEPTH_COMPONENT16        0x81A5
+#define GL_DEPTH_COMPONENT32F       0x8CAC
+#define GL_TEXTURE_COMPARE_MODE     0x884C
+#define GL_TEXTURE_COMPARE_FUNC     0x884D
+#define GL_COMPARE_REF_TO_TEXTURE   0x884E
+#define GL_NONE                     0
+
+// Instancing
+#define GL_UNPACK_ALIGNMENT         0x0CF5
+
 // ============================================================================
 // GL 1.1 Functions  (linked from opengl32.lib — no runtime loading needed)
 // ============================================================================
@@ -215,6 +240,8 @@ extern "C" {
     GV_GL_IMPORT void     APIENTRY glFinish(void);
     GV_GL_IMPORT void     APIENTRY glFlush(void);
     GV_GL_IMPORT GLboolean APIENTRY glIsEnabled(GLenum cap);
+    GV_GL_IMPORT void     APIENTRY glDrawBuffer(GLenum mode);
+    GV_GL_IMPORT void     APIENTRY glReadBuffer(GLenum mode);
 }
 
 // ============================================================================
@@ -299,6 +326,14 @@ typedef void   (APIENTRY *PFN_glBlitFramebuffer)(GLint srcX0, GLint srcY0, GLint
                                                   GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                                                   GLbitfield mask, GLenum filter);
 
+// Instanced drawing
+typedef void   (APIENTRY *PFN_glDrawArraysInstanced)(GLenum mode, GLint first, GLsizei count,
+                                                      GLsizei instancecount);
+typedef void   (APIENTRY *PFN_glDrawElementsInstanced)(GLenum mode, GLsizei count, GLenum type,
+                                                        const void* indices, GLsizei instancecount);
+// Texture parameter float
+typedef void   (APIENTRY *PFN_glTexParameterfv)(GLenum target, GLenum pname, const GLfloat* params);
+
 // ── Extern function pointers ───────────────────────────────────────────────
 
 // Shaders
@@ -364,6 +399,13 @@ extern PFN_glBindRenderbuffer         glBindRenderbuffer;
 extern PFN_glRenderbufferStorage      glRenderbufferStorage;
 extern PFN_glFramebufferRenderbuffer  glFramebufferRenderbuffer;
 extern PFN_glBlitFramebuffer          glBlitFramebuffer;
+
+// Instanced drawing
+extern PFN_glDrawArraysInstanced      glDrawArraysInstanced;
+extern PFN_glDrawElementsInstanced    glDrawElementsInstanced;
+
+// Texture parameter float
+extern PFN_glTexParameterfv           glTexParameterfv;
 
 // ── Loader ─────────────────────────────────────────────────────────────────
 /// Load all GL 2.0+ / 3.3 function pointers.

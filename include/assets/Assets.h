@@ -43,11 +43,13 @@ private:
 // ============================================================================
 // Vertex & Mesh
 // ============================================================================
-/// Single vertex with position, normal, and UV.
+/// Single vertex with position, normal, UV, tangent, and bitangent.
 struct Vertex {
     Vec3 position;
     Vec3 normal;
     Vec2 texCoord;
+    Vec3 tangent;    // for normal mapping (TBN matrix)
+    Vec3 bitangent;  // for normal mapping (TBN matrix)
 };
 
 /// A mesh is a collection of vertices and indices uploaded to the GPU.

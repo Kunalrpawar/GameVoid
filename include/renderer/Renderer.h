@@ -10,6 +10,7 @@
 #include "core/Types.h"
 #include "core/Math.h"
 #include <string>
+#include <vector>
 
 #ifdef GV_HAS_GLFW
 class Window;  // avoid including Window.h here
@@ -53,29 +54,17 @@ public:
 
     // ── Drawing primitives (2D & 3D) ───────────────────────────────────────
     /// Draw a 2D rectangle (screen-space).  Used for UI overlays, sprites.
-    virtual void DrawRect(f32 x, f32 y, f32 w, f32 h, const Vec4& colour) {
-        (void)x; (void)y; (void)w; (void)h; (void)colour;
-    }
+    virtual void DrawRect(f32 x, f32 y, f32 w, f32 h, const Vec4& colour);
 
     /// Draw a 2D textured quad.
-    virtual void DrawTexture(u32 textureID, f32 x, f32 y, f32 w, f32 h) {
-        (void)textureID; (void)x; (void)y; (void)w; (void)h;
-    }
+    virtual void DrawTexture(u32 textureID, f32 x, f32 y, f32 w, f32 h);
 
     /// Draw a wireframe / solid 3D shape for debugging (box, sphere).
-    virtual void DrawDebugBox(const Vec3& center, const Vec3& halfExtents, const Vec4& colour) {
-        (void)center; (void)halfExtents; (void)colour;
-    }
-    virtual void DrawDebugSphere(const Vec3& center, f32 radius, const Vec4& colour) {
-        (void)center; (void)radius; (void)colour;
-    }
-    virtual void DrawDebugLine(const Vec3& from, const Vec3& to, const Vec4& colour) {
-        (void)from; (void)to; (void)colour;
-    }
+    virtual void DrawDebugBox(const Vec3& center, const Vec3& halfExtents, const Vec4& colour);
+    virtual void DrawDebugSphere(const Vec3& center, f32 radius, const Vec4& colour);
+    virtual void DrawDebugLine(const Vec3& from, const Vec3& to, const Vec4& colour);
 
     // ── Lighting pass ──────────────────────────────────────────────────────
-    /// Collect all light components from the scene and upload their data to
-    /// the active shader as uniforms.  Called internally by RenderScene().
     virtual void ApplyLighting(Scene& scene) { (void)scene; }
 
     /// Check whether the window should close.
@@ -87,10 +76,16 @@ public:
     /// Get the window dimensions.
     virtual u32 GetWidth()  const = 0;
     virtual u32 GetHeight() const = 0;
+
+    /// Set the active camera for debug draw calls
+    virtual void SetDebugCamera(Camera* cam) { m_DebugCamera = cam; }
+
+protected:
+    Camera* m_DebugCamera = nullptr;
 };
 
 // ============================================================================
-// OpenGL Renderer (skeleton)
+// OpenGL Renderer
 // ============================================================================
 class OpenGLRenderer : public IRenderer {
 public:
@@ -112,6 +107,28 @@ public:
     u32  GetWidth()  const override { return m_Width; }
     u32  GetHeight() const override { return m_Height; }
 
+    // ── Debug draw (overrides) ─────────────────────────────────────────────
+    void DrawDebugBox(const Vec3& center, const Vec3& halfExtents, const Vec4& colour) override;
+    void DrawDebugSphere(const Vec3& center, f32 radius, const Vec4& colour) override;
+    void DrawDebugLine(const Vec3& from, const Vec3& to, const Vec4& colour) override;
+    void DrawRect(f32 x, f32 y, f32 w, f32 h, const Vec4& colour) override;
+    void DrawTexture(u32 textureID, f32 x, f32 y, f32 w, f32 h) override;
+
+    // ── Post-processing ────────────────────────────────────────────────────
+    void SetBloomEnabled(bool e)       { m_BloomEnabled = e; }
+    void SetToneMappingEnabled(bool e) { m_ToneMappingEnabled = e; }
+    void SetFXAAEnabled(bool e)        { m_FXAAEnabled = e; }
+    bool IsBloomEnabled() const        { return m_BloomEnabled; }
+    bool IsToneMappingEnabled() const  { return m_ToneMappingEnabled; }
+    bool IsFXAAEnabled() const         { return m_FXAAEnabled; }
+    void SetBloomThreshold(f32 t)      { m_BloomThreshold = t; }
+    void SetBloomIntensity(f32 i)      { m_BloomIntensity = i; }
+    void SetExposure(f32 e)            { m_Exposure = e; }
+
+    // ── Shadow mapping ─────────────────────────────────────────────────────
+    void SetShadowsEnabled(bool e)     { m_ShadowsEnabled = e; }
+    bool IsShadowsEnabled() const      { return m_ShadowsEnabled; }
+
 #ifdef GV_HAS_GLFW
     /// Draw the built-in demo triangle (call from Engine game loop).
     void RenderDemo(f32 dt);
@@ -128,6 +145,17 @@ private:
     bool m_LightingEnabled = true;
     Window* m_Window = nullptr;
 
+    // ── Post-processing settings ───────────────────────────────────────────
+    bool m_BloomEnabled       = false;
+    bool m_ToneMappingEnabled = true;
+    bool m_FXAAEnabled        = false;
+    f32  m_BloomThreshold     = 1.0f;
+    f32  m_BloomIntensity     = 0.3f;
+    f32  m_Exposure           = 1.0f;
+
+    // ── Shadow settings ────────────────────────────────────────────────────
+    bool m_ShadowsEnabled = true;
+
 #ifdef GV_HAS_GLFW
     // Built-in demo triangle (proves GL context works)
     u32 m_DemoVAO    = 0;
@@ -136,8 +164,8 @@ private:
     void InitDemo();
     void CleanupDemo();
 
-    // ── Scene-rendering resources ──────────────────────────────────────────
-    u32 m_SceneShader = 0;   // flat-colour MVP shader program
+    // ── Scene-rendering resources (PBR) ────────────────────────────────────
+    u32 m_SceneShader = 0;   // PBR shader program
 
     // Built-in primitives (triangle + cube + plane):
     u32 m_TriVAO = 0, m_TriVBO = 0;
@@ -145,6 +173,46 @@ private:
     i32 m_CubeIndexCount = 0;
     u32 m_PlaneVAO = 0, m_PlaneVBO = 0, m_PlaneEBO = 0;
     i32 m_PlaneIndexCount = 0;
+
+    // ── Shadow Mapping ─────────────────────────────────────────────────────
+    u32 m_ShadowFBO = 0;
+    u32 m_ShadowMap = 0;       // depth texture
+    u32 m_ShadowShader = 0;    // depth-only pass shader
+    u32 m_ShadowMapSize = 2048;
+    Mat4 m_LightSpaceMatrix;
+    void InitShadowMap();
+    void RenderShadowPass(Scene& scene, const Vec3& lightDir);
+    void CleanupShadowMap();
+
+    // ── Post-Processing Pipeline ───────────────────────────────────────────
+    u32 m_HDR_FBO = 0;           // HDR framebuffer
+    u32 m_HDR_ColorTex = 0;      // RGBA16F colour attachment
+    u32 m_HDR_BrightTex = 0;     // brightness extraction for bloom
+    u32 m_HDR_DepthRBO = 0;      // depth renderbuffer
+    u32 m_BloomFBO[2] = {0, 0};  // ping-pong blur FBOs
+    u32 m_BloomTex[2] = {0, 0};  // ping-pong blur textures
+    u32 m_BrightPassShader = 0;
+    u32 m_BlurShader = 0;
+    u32 m_TonemapShader = 0;
+    u32 m_FXAAShader = 0;
+    u32 m_ScreenQuadVAO = 0, m_ScreenQuadVBO = 0;
+    void InitPostProcessing();
+    void BeginHDRPass();
+    void EndHDRPass();
+    void RenderPostProcessing();
+    void CleanupPostProcessing();
+    void InitScreenQuad();
+
+    // ── Sprite/2D Rendering ────────────────────────────────────────────────
+    u32 m_SpriteShader = 0;
+    u32 m_SpriteVAO = 0, m_SpriteVBO = 0;
+    void InitSpriteRenderer();
+    void CleanupSpriteRenderer();
+
+    // ── Debug Draw ─────────────────────────────────────────────────────────
+    struct DebugLine { Vec3 from, to; Vec4 colour; };
+    std::vector<DebugLine> m_DebugLines;
+    void FlushDebugDraw(Camera& camera);
 
     // ── Skybox ─────────────────────────────────────────────────────────────
     u32 m_SkyShader = 0;
@@ -182,7 +250,7 @@ public:
 };
 
 // ============================================================================
-// Shader (placeholder)
+// Shader
 // ============================================================================
 /// Represents a compiled GPU shader program (vertex + fragment).
 class Shader {
@@ -197,7 +265,7 @@ public:
     void Bind() const;
     void Unbind() const;
 
-    /// Set uniform values (placeholders — real impl uses glUniform*).
+    /// Set uniform values.
     void SetFloat(const std::string& name, f32 value);
     void SetInt(const std::string& name, i32 value);
     void SetVec3(const std::string& name, const Vec3& value);
