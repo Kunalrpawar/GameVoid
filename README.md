@@ -25,25 +25,7 @@ cmake --build .
 # With Gemini AI key
 ./GameVoid --api-key YOUR_GEMINI_API_KEY
 ```
-
-## CLI Editor Commands
-
-| Command | Description |
-|---------|-------------|
-| `help` | List all commands |
-| `spawn <type> <name>` | Spawn an object (cube, sphere, plane, light, camera, empty) |
-| `list` | List all scene objects |
-| `inspect <name>` | Show object details and components |
-| `setpos <name> x y z` | Set object position |
-| `setrot <name> pitch yaw roll` | Set rotation (degrees) |
-| `setscale <name> x y z` | Set scale |
-| `delete <name>` | Remove an object |
-| `physics step [dt]` | Run one physics tick |
-| `ai <prompt>` | Send a prompt to Gemini |
-| `aigenlevel <desc>` | Generate a level from text |
-| `run <script.lua>` | Execute a Lua script |
-| `dump` | Print scene hierarchy |
-| `exit` | Quit |
+|
 
 ## Modules
 

@@ -1,5 +1,6 @@
 # GameVoid Engine
 deps/
+
 *.exe
 *.o
 *.obj
