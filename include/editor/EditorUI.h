@@ -115,6 +115,7 @@ private:
     void DrawParticlePanel();
     void DrawAnimationPanel();
     void DrawNodeScriptPanel();
+    void DrawCodeScriptPanel();        // inline script code editor
     void DrawBehaviorPanel();          // new: behavior editor panel
 
     // ── Inspector sub-sections ─────────────────────────────────────────────
@@ -211,7 +212,7 @@ private:
     char   m_AIKeyBuf[256] = {};        // API key input buffer
 
     // ── Bottom tab state ───────────────────────────────────────────────────
-    i32 m_BottomTab = 0;   // 0=Console, 1=Terrain, 2=Material, 3=Particle, 4=Animation, 5=Script, 6=Behavior
+    i32 m_BottomTab = 0;   // 0=Console, 1=Terrain, 2=Material, 3=Particle, 4=Animation, 5=NodeScript, 6=Behavior, 7=CodeScript
 
     // ── Terrain editor state ───────────────────────────────────────────────
     i32  m_TerrainRes       = 64;
@@ -253,7 +254,9 @@ private:
     bool m_OrbitActive     = false;    // true while orbiting (MMB or RMB drag)
     bool m_PanActive       = false;    // true while panning  (Shift+MMB)
     Vec2 m_LastMousePos    {};         // previous mouse pos for delta calc
-
+    // ── Code Script editor state ────────────────────────────────────────
+    char m_ScriptCodeBuf[4096] = {};   // inline script source editor
+    char m_ScriptPathBuf[256]  = {};   // script file path
     // ── Behavior editor state ──────────────────────────────────────────────
     i32  m_AddComponentIdx = 0;        // "Add Component" dropdown index
     i32  m_AddBehaviorIdx  = 0;        // behavior dropdown index

@@ -64,7 +64,7 @@ private:
 };
 
 // ============================================================================
-// Audio Engine (placeholder)
+// Audio Engine (miniaudio-backed)
 // ============================================================================
 class AudioEngine {
 public:
@@ -77,13 +77,34 @@ public:
     /// Play spatial 3D audio at a world position.
     void PlaySound3D(const std::string& path, const Vec3& position, f32 volume = 1.0f);
 
+    /// Play a looping background music track. Stops previous music.
+    void PlayMusic(const std::string& path, f32 volume = 1.0f);
+
+    /// Stop the currently playing music.
+    void StopMusic();
+
     /// Set the listener position (usually the camera).
     void SetListenerPosition(const Vec3& position, const Vec3& forward, const Vec3& up);
 
     void SetMasterVolume(f32 volume);
+    f32  GetMasterVolume() const { return m_MasterVolume; }
+    bool IsInitialised() const { return m_Initialised; }
+
+    /// Stop all currently playing sounds.
+    void StopAll();
+
+    /// Update audio sources (call once per frame to clean up finished sounds).
+    void Update();
+
+private:
+    bool m_Initialised = false;
+    f32  m_MasterVolume = 1.0f;
+    // In production: ma_engine* m_Engine — see Placeholders.cpp for real impl
+    void* m_Engine = nullptr;
+    void* m_MusicSound = nullptr;   // pointer to ma_sound for music track
 };
 
-/// Component for attaching a looping audio source to a GameObject.
+/// Component for attaching an audio source to a GameObject.
 class AudioSource : public Component {
 public:
     std::string clipPath;
@@ -94,26 +115,62 @@ public:
     bool loop     = false;
     bool playOnStart = false;
     bool spatial   = true;
+    bool isPlaying = false;
 
     std::string GetTypeName() const override { return "AudioSource"; }
-    void OnStart() override  { /* if (playOnStart) play(); */ }
-    void OnUpdate(f32) override { /* update spatial position */ }
+    void OnStart() override;
+    void OnUpdate(f32 dt) override;
+    void OnDetach() override;
+
+    void Play();
+    void Stop();
+
+private:
+    void* m_Sound = nullptr;   // pointer to ma_sound
 };
 
 // ============================================================================
-// Network Manager (placeholder)
+// Network Manager (Winsock TCP client-server)
 // ============================================================================
 class NetworkManager {
 public:
     bool StartServer(u16 port);
     bool ConnectToServer(const std::string& address, u16 port);
     void Disconnect();
+
+    /// Send a message on a named channel.
     void SendMessage(const std::string& channel, const std::string& data);
-    void Poll();     // process incoming packets
+
+    /// Process incoming packets (call once per frame).
+    void Poll();
+
+    /// Broadcast a message to all connected clients (server only).
+    void Broadcast(const std::string& channel, const std::string& data);
+
     bool IsConnected() const { return m_Connected; }
+    bool IsServer()    const { return m_IsServer; }
+
+    /// Get received messages since last Poll().
+    struct NetMessage {
+        std::string channel;
+        std::string data;
+        u32 senderID = 0;
+    };
+    const std::vector<NetMessage>& GetMessages() const { return m_Messages; }
+
+    /// Get number of connected clients (server only).
+    u32 GetClientCount() const { return static_cast<u32>(m_ClientSockets.size()); }
+
+    void Shutdown();
 
 private:
     bool m_Connected = false;
+    bool m_IsServer  = false;
+    u64  m_ServerSocket = 0;
+    u64  m_ClientSocket = 0;
+    std::vector<u64> m_ClientSockets;   // connected clients (server)
+    std::vector<NetMessage> m_Messages; // incoming messages
+    bool m_WinsockInit = false;
 };
 
 // ============================================================================

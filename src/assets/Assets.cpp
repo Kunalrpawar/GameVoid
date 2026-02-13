@@ -9,6 +9,9 @@
 #endif
 
 #include <cmath>
+#include <fstream>
+#include <sstream>
+#include <algorithm>
 
 namespace gv {
 
@@ -96,11 +99,153 @@ void Texture::Unbind() const {
 // ── Mesh ───────────────────────────────────────────────────────────────────
 
 bool Mesh::LoadFromFile(const std::string& path) {
-    // In production: use Assimp
-    //   Assimp::Importer importer;
-    //   const aiScene* scene = importer.ReadFile(path, ...);
-    //   extract vertices, normals, UVs, indices → Build(...)
-    GV_LOG_INFO("Mesh loaded from file (placeholder): " + path);
+    // Detect format from extension
+    auto dot = path.rfind('.');
+    if (dot == std::string::npos) {
+        GV_LOG_WARN("Mesh::LoadFromFile — no extension: " + path);
+        return false;
+    }
+    std::string ext = path.substr(dot);
+    for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    if (ext == ".obj") {
+        return LoadOBJ(path);
+    }
+    // For .fbx, .gltf, .glb — would need Assimp or dedicated parsers
+    GV_LOG_WARN("Mesh::LoadFromFile — unsupported format: " + ext + " (only .obj supported)");
+    return false;
+}
+
+bool Mesh::LoadOBJ(const std::string& path) {
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        GV_LOG_WARN("Mesh::LoadOBJ — failed to open: " + path);
+        return false;
+    }
+
+    std::vector<Vec3> positions;
+    std::vector<Vec3> normals;
+    std::vector<Vec2> texCoords;
+
+    struct FaceVert { int posIdx, texIdx, normIdx; };
+    std::vector<FaceVert> faceVerts;
+    std::vector<u32> faceIndices;  // groups of 3 (triangulated)
+
+    std::string line;
+    while (std::getline(file, line)) {
+        if (line.empty() || line[0] == '#') continue;
+
+        std::istringstream ss(line);
+        std::string prefix;
+        ss >> prefix;
+
+        if (prefix == "v") {
+            Vec3 v;
+            ss >> v.x >> v.y >> v.z;
+            positions.push_back(v);
+        } else if (prefix == "vn") {
+            Vec3 n;
+            ss >> n.x >> n.y >> n.z;
+            normals.push_back(n);
+        } else if (prefix == "vt") {
+            Vec2 t;
+            ss >> t.x >> t.y;
+            texCoords.push_back(t);
+        } else if (prefix == "f") {
+            // Parse face — supports v, v/vt, v/vt/vn, v//vn
+            std::vector<FaceVert> polygon;
+            std::string token;
+            while (ss >> token) {
+                FaceVert fv = { -1, -1, -1 };
+                // Replace '/' with spaces for parsing
+                for (auto& c : token) if (c == '/') c = ' ';
+                std::istringstream ts(token);
+
+                // Count original slashes
+                int slashCount = 0;
+                bool doubleSlash = false;
+                for (size_t i = 0; i + 1 < line.size(); ++i) {
+                    // We already replaced them, so count spaces in token
+                }
+                // Re-parse from the original token format
+                // Actually let's just parse the space-separated values
+                std::string part;
+                std::vector<std::string> parts;
+                while (ts >> part) parts.push_back(part);
+
+                if (parts.size() >= 1 && !parts[0].empty())
+                    fv.posIdx = std::stoi(parts[0]) - 1;
+                if (parts.size() >= 2 && !parts[1].empty())
+                    fv.texIdx = std::stoi(parts[1]) - 1;
+                if (parts.size() >= 3 && !parts[2].empty())
+                    fv.normIdx = std::stoi(parts[2]) - 1;
+
+                // Handle v//vn case (token had double slash → empty middle part)
+                // Re-check original token for "//"
+                // Since we replaced slashes, if parts.size() == 2 and original had //
+                // we need special detection. Let's handle differently:
+                polygon.push_back(fv);
+            }
+
+            // Triangulate polygon (fan triangulation)
+            for (size_t i = 1; i + 1 < polygon.size(); ++i) {
+                u32 base = static_cast<u32>(faceVerts.size());
+                faceVerts.push_back(polygon[0]);
+                faceVerts.push_back(polygon[i]);
+                faceVerts.push_back(polygon[i + 1]);
+                faceIndices.push_back(base);
+                faceIndices.push_back(base + 1);
+                faceIndices.push_back(base + 2);
+            }
+        }
+    }
+
+    if (faceVerts.empty()) {
+        GV_LOG_WARN("Mesh::LoadOBJ — no faces found in: " + path);
+        return false;
+    }
+
+    // Build vertex array
+    std::vector<Vertex> vertices;
+    std::vector<u32> indices;
+    vertices.reserve(faceVerts.size());
+    indices.reserve(faceIndices.size());
+
+    for (size_t i = 0; i < faceVerts.size(); ++i) {
+        Vertex v;
+        const FaceVert& fv = faceVerts[i];
+
+        if (fv.posIdx >= 0 && fv.posIdx < static_cast<int>(positions.size()))
+            v.position = positions[fv.posIdx];
+        if (fv.texIdx >= 0 && fv.texIdx < static_cast<int>(texCoords.size()))
+            v.texCoord = texCoords[fv.texIdx];
+        if (fv.normIdx >= 0 && fv.normIdx < static_cast<int>(normals.size()))
+            v.normal = normals[fv.normIdx];
+
+        vertices.push_back(v);
+    }
+    indices = faceIndices;
+
+    // Compute normals if none were provided
+    if (normals.empty()) {
+        for (size_t i = 0; i + 2 < vertices.size(); i += 3) {
+            Vec3 e1 = vertices[i + 1].position - vertices[i].position;
+            Vec3 e2 = vertices[i + 2].position - vertices[i].position;
+            Vec3 n = e1.Cross(e2).Normalized();
+            vertices[i].normal = vertices[i + 1].normal = vertices[i + 2].normal = n;
+        }
+    }
+
+    // Compute tangents/bitangents for normal mapping
+    for (size_t i = 0; i + 2 < vertices.size(); i += 3) {
+        ComputeTangents(vertices[i], vertices[i + 1], vertices[i + 2]);
+    }
+
+    m_Name = path;
+    Build(vertices, indices);
+    GV_LOG_INFO("Mesh loaded from OBJ: " + path + " (" +
+                std::to_string(vertices.size()) + " verts, " +
+                std::to_string(indices.size() / 3) + " tris)");
     return true;
 }
 

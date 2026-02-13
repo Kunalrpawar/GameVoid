@@ -85,6 +85,9 @@ private:
 
     // GPU handles (OpenGL)
     u32 m_VAO = 0, m_VBO = 0, m_EBO = 0;
+
+    /// Internal OBJ file parser.
+    bool LoadOBJ(const std::string& path);
 };
 
 // ============================================================================

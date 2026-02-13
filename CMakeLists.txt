@@ -40,12 +40,14 @@ add_executable(${PROJECT_NAME} ${ENGINE_SOURCES})
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/deps
+    ${CMAKE_SOURCE_DIR}/deps/miniaudio
 )
 
 # ── Platform-specific libraries ────────────────────────────────────────────
 # WinInet for Gemini API integration on Windows
+# ws2_32 for Winsock networking
 if(WIN32)
-    target_link_libraries(${PROJECT_NAME} PRIVATE wininet)
+    target_link_libraries(${PROJECT_NAME} PRIVATE wininet ws2_32)
 endif()
 
 # target_link_libraries(${PROJECT_NAME} PRIVATE OpenGL::GL glfw glm assimp lua curl)

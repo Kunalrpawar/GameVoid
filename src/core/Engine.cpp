@@ -228,6 +228,9 @@ void Engine::Run() {
 
             scene->Update(dt);
 
+            // ── Audio update ───────────────────────────────────────────
+            m_Audio.Update();
+
             // ── ImGui frame (scene is rendered to FBO inside DrawViewport) ──
             m_EditorUI.BeginFrame();
             m_EditorUI.Render(dt);
@@ -345,6 +348,7 @@ void Engine::Run() {
 
         // ── Logic ──────────────────────────────────────────────────────
         scene->Update(dt);
+        m_Audio.Update();
 
         // ── Render ─────────────────────────────────────────────────────
         m_Renderer->Clear(bgR, bgG, bgB, 1.0f);

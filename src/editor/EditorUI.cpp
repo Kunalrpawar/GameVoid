@@ -37,6 +37,9 @@
 #include <cstdio>
 #include <cmath>
 #include <cfloat>
+#include <fstream>
+#include <sstream>
+#include <cstring>
 
 namespace gv {
 
@@ -248,6 +251,7 @@ void EditorUI::DrawMenuBar() {
             if (ImGui::MenuItem("Animation"))   { m_BottomTab = 4; }
             if (ImGui::MenuItem("Node Script")) { m_BottomTab = 5; }
             if (ImGui::MenuItem("Behaviors"))   { m_BottomTab = 6; }
+            if (ImGui::MenuItem("Code Script")) { m_BottomTab = 7; }
             ImGui::Separator();
             if (ImGui::MenuItem("Editor Settings")) { m_ShowEditorSettings = true; }
             ImGui::EndMenu();
@@ -682,14 +686,16 @@ void EditorUI::DrawInspectorScripts() {
             ImGui::Separator();
         }
 
-        // List ScriptComponents (Lua scripts)
+        // List ScriptComponents (GVScript)
         for (auto& comp : m_Selected->GetComponents()) {
             if (comp->GetTypeName() == "ScriptComponent") {
                 hasAny = true;
                 auto* sc = dynamic_cast<ScriptComponent*>(comp.get());
                 if (sc) {
-                    ImGui::BulletText("Lua Script: %s",
+                    ImGui::BulletText("Script: %s",
                         sc->GetScriptPath().empty() ? "(inline)" : sc->GetScriptPath().c_str());
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("Edit Code")) { m_BottomTab = 7; }
                 }
             }
         }
@@ -697,6 +703,17 @@ void EditorUI::DrawInspectorScripts() {
         if (!hasAny) {
             ImGui::TextDisabled("No scripts attached.");
         }
+
+        // Quick-add Script button (prominently visible)
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.45f, 0.65f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.55f, 0.75f, 1.0f));
+        if (ImGui::Button("+ Add Code Script", ImVec2(-1, 24))) {
+            m_Selected->AddComponent<ScriptComponent>();
+            PushLog("[Inspector] Added ScriptComponent to " + m_Selected->GetName());
+            m_BottomTab = 7;  // switch to the Code Script editor tab
+        }
+        ImGui::PopStyleColor(2);
 
         // Behavior dropdown: add new behavior
         ImGui::Separator();
@@ -795,7 +812,7 @@ void EditorUI::DrawInspectorAddComponent() {
                 PushLog("[Inspector] Added MeshRenderer.");
             }
         }
-        if (ImGui::MenuItem("Script (Lua)")) {
+        if (ImGui::MenuItem("Code Script")) {
             m_Selected->AddComponent<ScriptComponent>();
             PushLog("[Inspector] Added ScriptComponent.");
         }
@@ -1498,6 +1515,12 @@ void EditorUI::DrawBottomTabs() {
             ImGui::EndTabItem();
         }
 
+        if (ImGui::BeginTabItem("Code Script")) {
+            m_BottomTab = 7;
+            DrawCodeScriptPanel();
+            ImGui::EndTabItem();
+        }
+
         ImGui::EndTabBar();
     }
 
@@ -1927,6 +1950,103 @@ void EditorUI::DrawAnimationPanel() {
 }
 
 // ── Behavior Editor Panel ──────────────────────────────────────────────────
+
+// ── Code Script Panel (inline script editor) ──────────────────────────────
+
+void EditorUI::DrawCodeScriptPanel() {
+    ImGui::Columns(2, "CodeScriptCols", true);
+    ImGui::SetColumnWidth(0, 250);
+
+    // Column 1: Script file management
+    ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1), "Script Files");
+    ImGui::Separator();
+
+    ImGui::InputText("Path", m_ScriptPathBuf, sizeof(m_ScriptPathBuf));
+
+    if (ImGui::Button("Load File", ImVec2(-1, 24))) {
+        std::string path(m_ScriptPathBuf);
+        if (!path.empty() && m_Script) {
+            std::ifstream file(path);
+            if (file.is_open()) {
+                std::stringstream ss;
+                ss << file.rdbuf();
+                std::string src = ss.str();
+                size_t len = src.size();
+                if (len >= sizeof(m_ScriptCodeBuf)) len = sizeof(m_ScriptCodeBuf) - 1;
+                std::memcpy(m_ScriptCodeBuf, src.c_str(), len);
+                m_ScriptCodeBuf[len] = '\0';
+                PushLog("[Script] Loaded: " + path);
+            } else {
+                PushLog("[Script] ERROR: Cannot open " + path);
+            }
+        }
+    }
+
+    if (ImGui::Button("Save File", ImVec2(-1, 24))) {
+        std::string path(m_ScriptPathBuf);
+        if (!path.empty()) {
+            std::ofstream file(path);
+            if (file.is_open()) {
+                file << m_ScriptCodeBuf;
+                PushLog("[Script] Saved: " + path);
+            } else {
+                PushLog("[Script] ERROR: Cannot write " + path);
+            }
+        }
+    }
+
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(1, 0.9f, 0.3f, 1), "Quick Actions");
+
+    if (ImGui::Button("Run Script", ImVec2(-1, 24))) {
+        if (m_Script) {
+            std::string code(m_ScriptCodeBuf);
+            if (m_Script->Execute(code)) {
+                PushLog("[Script] Executed successfully.");
+            } else {
+                PushLog("[Script] ERROR: " + m_Script->GetLastError());
+            }
+        }
+    }
+
+    if (ImGui::Button("Attach to Selected", ImVec2(-1, 24))) {
+        if (m_Selected) {
+            auto* sc = m_Selected->GetComponent<ScriptComponent>();
+            if (!sc) sc = m_Selected->AddComponent<ScriptComponent>();
+            sc->SetSource(std::string(m_ScriptCodeBuf));
+            PushLog("[Script] Attached to " + m_Selected->GetName());
+        } else {
+            PushLog("[Script] No object selected.");
+        }
+    }
+
+    ImGui::Separator();
+    ImGui::TextDisabled("GVScript Syntax:");
+    ImGui::TextWrapped(
+        "var x = 10\n"
+        "func greet(name) {\n"
+        "  print(\"Hello\", name)\n"
+        "}\n"
+        "if (x > 5) { ... }\n"
+        "while (x > 0) { ... }\n"
+        "Built-ins: print, sin, cos,\n"
+        "sqrt, abs, random, spawn,\n"
+        "find, destroy, set_position\n"
+    );
+
+    ImGui::NextColumn();
+
+    // Column 2: Code editor
+    ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1), "Script Editor");
+    ImGui::Separator();
+
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    ImGui::InputTextMultiline("##ScriptCode", m_ScriptCodeBuf, sizeof(m_ScriptCodeBuf),
+        ImVec2(avail.x, avail.y - 4),
+        ImGuiInputTextFlags_AllowTabInput);
+
+    ImGui::Columns(1);
+}
 
 void EditorUI::DrawBehaviorPanel() {
     ImGui::Columns(2, "BehaviorCols", true);

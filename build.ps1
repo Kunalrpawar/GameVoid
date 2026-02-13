@@ -33,6 +33,7 @@ $commonSources = @(
     "src/terrain/Terrain.cpp",
     "src/effects/ParticleSystem.cpp",
     "src/animation/Animation.cpp",
+    "src/animation/SkeletalAnimation.cpp",
     "src/future/Placeholders.cpp"
 )
 
@@ -40,7 +41,7 @@ if ($CliOnly) {
     # ── CLI-only build (no GLFW, no window) ─────────────────────────────────
     Write-Host "=== Building GameVoid Engine (CLI-Only) ===" -ForegroundColor Cyan
     $srcList = ($commonSources + "src/core/Window.cpp", "src/core/GLLoader.cpp") -join " "
-    $cmd = "g++ -std=c++17 -Iinclude -o GameVoid.exe $srcList -lwininet"
+    $cmd = "g++ -std=c++17 -Iinclude -o GameVoid.exe $srcList -lwininet -lws2_32"
     Write-Host $cmd
     Invoke-Expression $cmd
 } else {
@@ -66,7 +67,7 @@ if ($CliOnly) {
         "deps/imgui/imgui_impl_opengl3.cpp"
     )
     $srcList = ($commonSources + $windowSources + $imguiSources) -join " "
-    $cmd = "g++ -std=c++17 -DGV_HAS_GLFW -DIMGUI_DISABLE_WIN32_FUNCTIONS -O2 -Iinclude -Ideps -Ideps/glfw/include -Ideps/imgui -Ldeps/glfw/lib -o GameVoid.exe $srcList -lglfw3 -lopengl32 -lgdi32 -lwininet"
+    $cmd = "g++ -std=c++17 -DGV_HAS_GLFW -DIMGUI_DISABLE_WIN32_FUNCTIONS -O2 -Iinclude -Ideps -Ideps/glfw/include -Ideps/imgui -Ideps/miniaudio -Ldeps/glfw/lib -o GameVoid.exe $srcList -lglfw3 -lopengl32 -lgdi32 -lwininet -lws2_32"
     Write-Host $cmd
     Invoke-Expression $cmd
 }
