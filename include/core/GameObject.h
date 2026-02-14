@@ -91,7 +91,22 @@ public:
 
     void AddChild(Shared<GameObject> child) {
         child->SetParent(this);
+        child->GetTransform().SetParentTransform(&m_Transform);
         m_Children.push_back(std::move(child));
+    }
+
+    /// Remove a child by pointer (does not destroy — returns the shared_ptr).
+    Shared<GameObject> RemoveChild(GameObject* child) {
+        for (auto it = m_Children.begin(); it != m_Children.end(); ++it) {
+            if (it->get() == child) {
+                Shared<GameObject> removed = std::move(*it);
+                m_Children.erase(it);
+                removed->SetParent(nullptr);
+                removed->GetTransform().SetParentTransform(nullptr);
+                return removed;
+            }
+        }
+        return nullptr;
     }
 
     const std::vector<Shared<GameObject>>& GetChildren() const { return m_Children; }

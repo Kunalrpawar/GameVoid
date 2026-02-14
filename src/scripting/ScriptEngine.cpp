@@ -4,6 +4,7 @@
 #include "scripting/ScriptEngine.h"
 #include "core/Scene.h"
 #include "core/GameObject.h"
+#include "core/EventSystem.h"
 #include "renderer/MeshRenderer.h"
 #include <fstream>
 #include <sstream>
@@ -11,6 +12,7 @@
 #include <cstdlib>
 #include <cctype>
 #include <algorithm>
+#include <chrono>
 
 namespace gv {
 
@@ -41,15 +43,41 @@ bool ScriptValue::AsBool() const {
 // ScriptComponent
 // ============================================================================
 void ScriptComponent::OnStart() {
-    if (!m_Loaded) {
+    if (!m_Loaded && m_Engine && m_Engine->IsInitialised()) {
         GV_LOG_INFO("ScriptComponent::OnStart — " +
                     (m_ScriptPath.empty() ? "(inline source)" : m_ScriptPath));
+
+        // Set self-object context so script bindings know which object "self" refers to
+        m_Engine->SetSelfObject(GetOwner());
+
+        // Load from file or execute inline source
+        if (!m_ScriptPath.empty()) {
+            m_Engine->LoadFile(m_ScriptPath);
+        } else if (!m_Source.empty()) {
+            m_Engine->Execute(m_Source);
+        }
+
+        // Call on_start() if the script defines it
+        m_Engine->CallFunction("on_start");
+
         m_Loaded = true;
     }
 }
 
-void ScriptComponent::OnUpdate(f32 dt) { (void)dt; }
-void ScriptComponent::OnDetach()       { m_Loaded = false; }
+void ScriptComponent::OnUpdate(f32 dt) {
+    if (!m_Engine || !m_Engine->IsInitialised()) return;
+
+    // Ensure script is loaded (late-attach)
+    if (!m_Loaded) { OnStart(); }
+
+    // Set self-object context for this frame
+    m_Engine->SetSelfObject(GetOwner());
+
+    // Call the script's on_update(dt) function
+    m_Engine->CallFunction("on_update", dt);
+}
+
+void ScriptComponent::OnDetach() { m_Loaded = false; }
 
 // ============================================================================
 // ScriptEngine — Init / Shutdown
@@ -295,6 +323,48 @@ void ScriptEngine::BindSceneAPI(Scene& scene) {
 
 void ScriptEngine::BindGameObjectAPI() {
     GV_LOG_DEBUG("ScriptEngine — GameObject API bound.");
+}
+
+void ScriptEngine::BindEventAPI() {
+    // emit(signal_name)  or  emit(signal_name, data_string)
+    RegisterFunction("emit", [this](const std::vector<ScriptValue>& args) -> ScriptValue {
+        if (args.empty()) return {};
+        std::string sig = args[0].AsString();
+        std::string data = args.size() >= 2 ? args[1].AsString() : "";
+        EventBus::Instance().EmitSignal(sig, data, m_SelfObject);
+        return {};
+    });
+
+    // on_collision(callback_func_name)  — sugar: calls callback_func_name when self collides
+    // The callback function will be invoked with no args; the script can use
+    // get_position_x/y/z to inspect the collision objects.
+    RegisterFunction("on_collision", [this](const std::vector<ScriptValue>& args) -> ScriptValue {
+        if (args.empty()) return {};
+        std::string funcName = args[0].AsString();
+        GameObject* self = m_SelfObject;
+        ScriptEngine* engine = this;
+        EventBus::Instance().Subscribe(EventType::CollisionEnter,
+            [engine, funcName, self](const Event& e) {
+                engine->SetSelfObject(e.objectA == self ? e.objectA : e.objectB);
+                engine->CallFunction(funcName);
+            }, self);
+        return {};
+    });
+
+    // get_delta_time() — returns the dt variable set during on_update
+    RegisterFunction("get_delta_time", [this](const std::vector<ScriptValue>&) -> ScriptValue {
+        return GetVariable("dt");
+    });
+
+    // get_time() — returns elapsed time from clock
+    RegisterFunction("get_time", [](const std::vector<ScriptValue>&) -> ScriptValue {
+        static auto start = std::chrono::high_resolution_clock::now();
+        auto now = std::chrono::high_resolution_clock::now();
+        f64 elapsed = std::chrono::duration<f64>(now - start).count();
+        return ScriptValue(elapsed);
+    });
+
+    GV_LOG_DEBUG("ScriptEngine — Event API bound.");
 }
 
 void ScriptEngine::EnableHotReload(bool enable) {

@@ -90,6 +90,9 @@ public:
     f32  GetMasterVolume() const { return m_MasterVolume; }
     bool IsInitialised() const { return m_Initialised; }
 
+    /// Get the raw miniaudio engine handle (ma_engine*) for AudioSource use.
+    void* GetEngineHandle() const { return m_Engine; }
+
     /// Stop all currently playing sounds.
     void StopAll();
 
@@ -125,8 +128,13 @@ public:
     void Play();
     void Stop();
 
+    /// Set the AudioEngine so this component can init sounds.
+    void SetAudioEngine(AudioEngine* engine) { m_AudioEngine = engine; }
+    AudioEngine* GetAudioEngine() const      { return m_AudioEngine; }
+
 private:
     void* m_Sound = nullptr;   // pointer to ma_sound
+    AudioEngine* m_AudioEngine = nullptr;
 };
 
 // ============================================================================

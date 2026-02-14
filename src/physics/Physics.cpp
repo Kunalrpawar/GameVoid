@@ -150,46 +150,217 @@ void PhysicsWorld::DetectCollisions() {
             Collider* colB = b->GetOwner()->GetComponent<Collider>();
             if (!colA || !colB) continue;
 
-            // Only AABB-AABB (Box) for now
-            if (colA->type != ColliderType::Box ||
-                colB->type != ColliderType::Box) continue;
-
             Vec3 posA = a->GetOwner()->GetTransform().position;
             Vec3 posB = b->GetOwner()->GetTransform().position;
             Vec3 sclA = a->GetOwner()->GetTransform().scale;
             Vec3 sclB = b->GetOwner()->GetTransform().scale;
 
-            // Effective half-extents (collider half-size × transform scale)
-            Vec3 halfA(colA->boxHalfExtents.x * sclA.x,
-                       colA->boxHalfExtents.y * sclA.y,
-                       colA->boxHalfExtents.z * sclA.z);
-            Vec3 halfB(colB->boxHalfExtents.x * sclB.x,
-                       colB->boxHalfExtents.y * sclB.y,
-                       colB->boxHalfExtents.z * sclB.z);
+            CollisionInfo info;
+            info.objectA = a->GetOwner();
+            info.objectB = b->GetOwner();
+            bool collided = false;
 
-            f32 dx = posB.x - posA.x;
-            f32 dy = posB.y - posA.y;
-            f32 dz = posB.z - posA.z;
-            f32 overlapX = (halfA.x + halfB.x) - std::fabs(dx);
-            f32 overlapY = (halfA.y + halfB.y) - std::fabs(dy);
-            f32 overlapZ = (halfA.z + halfB.z) - std::fabs(dz);
+            // ── Box vs Box ─────────────────────────────────────────────
+            if (colA->type == ColliderType::Box && colB->type == ColliderType::Box) {
+                Vec3 halfA(colA->boxHalfExtents.x * sclA.x,
+                           colA->boxHalfExtents.y * sclA.y,
+                           colA->boxHalfExtents.z * sclA.z);
+                Vec3 halfB(colB->boxHalfExtents.x * sclB.x,
+                           colB->boxHalfExtents.y * sclB.y,
+                           colB->boxHalfExtents.z * sclB.z);
 
-            if (overlapX > 0 && overlapY > 0 && overlapZ > 0) {
-                CollisionInfo info;
-                info.objectA = a->GetOwner();
-                info.objectB = b->GetOwner();
+                f32 dx = posB.x - posA.x;
+                f32 dy = posB.y - posA.y;
+                f32 dz = posB.z - posA.z;
+                f32 overlapX = (halfA.x + halfB.x) - std::fabs(dx);
+                f32 overlapY = (halfA.y + halfB.y) - std::fabs(dy);
+                f32 overlapZ = (halfA.z + halfB.z) - std::fabs(dz);
 
-                // Resolve along axis of least penetration
-                if (overlapX <= overlapY && overlapX <= overlapZ) {
-                    info.contactNormal = Vec3(dx > 0 ? 1.0f : -1.0f, 0, 0);
-                    info.penetrationDepth = overlapX;
-                } else if (overlapY <= overlapX && overlapY <= overlapZ) {
-                    info.contactNormal = Vec3(0, dy > 0 ? 1.0f : -1.0f, 0);
-                    info.penetrationDepth = overlapY;
-                } else {
-                    info.contactNormal = Vec3(0, 0, dz > 0 ? 1.0f : -1.0f);
-                    info.penetrationDepth = overlapZ;
+                if (overlapX > 0 && overlapY > 0 && overlapZ > 0) {
+                    if (overlapX <= overlapY && overlapX <= overlapZ) {
+                        info.contactNormal = Vec3(dx > 0 ? 1.0f : -1.0f, 0, 0);
+                        info.penetrationDepth = overlapX;
+                    } else if (overlapY <= overlapX && overlapY <= overlapZ) {
+                        info.contactNormal = Vec3(0, dy > 0 ? 1.0f : -1.0f, 0);
+                        info.penetrationDepth = overlapY;
+                    } else {
+                        info.contactNormal = Vec3(0, 0, dz > 0 ? 1.0f : -1.0f);
+                        info.penetrationDepth = overlapZ;
+                    }
+                    collided = true;
                 }
+            }
+            // ── Sphere vs Sphere ───────────────────────────────────────
+            else if (colA->type == ColliderType::Sphere && colB->type == ColliderType::Sphere) {
+                f32 rA = colA->radius * sclA.x; // uniform scale assumption
+                f32 rB = colB->radius * sclB.x;
+                Vec3 diff = posB - posA;
+                f32 dist2 = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
+                f32 sumR = rA + rB;
+                if (dist2 < sumR * sumR && dist2 > 1e-8f) {
+                    f32 dist = std::sqrt(dist2);
+                    info.contactNormal = diff * (1.0f / dist);
+                    info.penetrationDepth = sumR - dist;
+                    collided = true;
+                }
+            }
+            // ── Sphere vs Box (or Box vs Sphere) ───────────────────────
+            else if ((colA->type == ColliderType::Sphere && colB->type == ColliderType::Box) ||
+                     (colA->type == ColliderType::Box && colB->type == ColliderType::Sphere)) {
+                // Identify which is sphere and which is box
+                bool aIsSphere = (colA->type == ColliderType::Sphere);
+                Vec3 sPos = aIsSphere ? posA : posB;
+                Vec3 bPos = aIsSphere ? posB : posA;
+                Vec3 bScl = aIsSphere ? sclB : sclA;
+                Collider* sCol = aIsSphere ? colA : colB;
+                Collider* bCol = aIsSphere ? colB : colA;
+
+                f32 sR = sCol->radius * (aIsSphere ? sclA.x : sclB.x);
+                Vec3 halfB(bCol->boxHalfExtents.x * bScl.x,
+                           bCol->boxHalfExtents.y * bScl.y,
+                           bCol->boxHalfExtents.z * bScl.z);
+                Vec3 boxMin = bPos - halfB;
+                Vec3 boxMax = bPos + halfB;
+
+                auto clamp = [](f32 v, f32 lo, f32 hi) { return v < lo ? lo : (v > hi ? hi : v); };
+                Vec3 closest(clamp(sPos.x, boxMin.x, boxMax.x),
+                             clamp(sPos.y, boxMin.y, boxMax.y),
+                             clamp(sPos.z, boxMin.z, boxMax.z));
+                Vec3 diff = sPos - closest;
+                f32 dist2 = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
+                if (dist2 < sR * sR && dist2 > 1e-8f) {
+                    f32 dist = std::sqrt(dist2);
+                    Vec3 normal = diff * (1.0f / dist);
+                    if (!aIsSphere) normal = normal * -1.0f; // ensure A→B direction
+                    info.contactNormal = normal;
+                    info.penetrationDepth = sR - dist;
+                    collided = true;
+                }
+            }
+            // ── Capsule vs Sphere ──────────────────────────────────────
+            else if ((colA->type == ColliderType::Capsule && colB->type == ColliderType::Sphere) ||
+                     (colA->type == ColliderType::Sphere && colB->type == ColliderType::Capsule)) {
+                bool aIsCapsule = (colA->type == ColliderType::Capsule);
+                Collider* capCol = aIsCapsule ? colA : colB;
+                Collider* sphCol = aIsCapsule ? colB : colA;
+                Vec3 capPos = aIsCapsule ? posA : posB;
+                Vec3 sphPos = aIsCapsule ? posB : posA;
+                f32 capScl = aIsCapsule ? sclA.x : sclB.x;
+                f32 sphScl = aIsCapsule ? sclB.x : sclA.x;
+
+                f32 capR = capCol->radius * capScl;
+                f32 halfH = (capCol->capsuleHeight * capScl * 0.5f) - capR;
+                if (halfH < 0) halfH = 0;
+                Vec3 capTop = capPos + Vec3(0, halfH, 0);
+                Vec3 capBot = capPos - Vec3(0, halfH, 0);
+                f32 sR = sphCol->radius * sphScl;
+
+                // Closest point on capsule line segment to sphere center
+                Vec3 seg = capTop - capBot;
+                f32 segLen2 = seg.x * seg.x + seg.y * seg.y + seg.z * seg.z;
+                f32 t = 0.5f;
+                if (segLen2 > 1e-8f) {
+                    Vec3 d = sphPos - capBot;
+                    t = (d.x * seg.x + d.y * seg.y + d.z * seg.z) / segLen2;
+                    if (t < 0) t = 0; if (t > 1) t = 1;
+                }
+                Vec3 closest = capBot + seg * t;
+                Vec3 diff = sphPos - closest;
+                f32 dist2 = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
+                f32 sumR = capR + sR;
+                if (dist2 < sumR * sumR && dist2 > 1e-8f) {
+                    f32 dist = std::sqrt(dist2);
+                    info.contactNormal = diff * (1.0f / dist);
+                    if (!aIsCapsule) info.contactNormal = info.contactNormal * -1.0f;
+                    info.penetrationDepth = sumR - dist;
+                    collided = true;
+                }
+            }
+            // ── Capsule vs Box ─────────────────────────────────────────
+            else if ((colA->type == ColliderType::Capsule && colB->type == ColliderType::Box) ||
+                     (colA->type == ColliderType::Box && colB->type == ColliderType::Capsule)) {
+                // Approximate: treat capsule as a sphere at closest point on its axis
+                bool aIsCapsule = (colA->type == ColliderType::Capsule);
+                Collider* capCol = aIsCapsule ? colA : colB;
+                Collider* boxCol = aIsCapsule ? colB : colA;
+                Vec3 capPos = aIsCapsule ? posA : posB;
+                Vec3 boxPos = aIsCapsule ? posB : posA;
+                Vec3 boxScl = aIsCapsule ? sclB : sclA;
+                f32 capScl = aIsCapsule ? sclA.x : sclB.x;
+
+                f32 capR = capCol->radius * capScl;
+                f32 halfH = (capCol->capsuleHeight * capScl * 0.5f) - capR;
+                if (halfH < 0) halfH = 0;
+
+                Vec3 halfB(boxCol->boxHalfExtents.x * boxScl.x,
+                           boxCol->boxHalfExtents.y * boxScl.y,
+                           boxCol->boxHalfExtents.z * boxScl.z);
+                Vec3 boxMin = boxPos - halfB;
+                Vec3 boxMax = boxPos + halfB;
+
+                // Test sphere at top and bottom of capsule, take nearest
+                auto clampF = [](f32 v, f32 lo, f32 hi) { return v < lo ? lo : (v > hi ? hi : v); };
+                auto testSphereBox = [&](Vec3 sc) -> bool {
+                    Vec3 cl(clampF(sc.x, boxMin.x, boxMax.x),
+                            clampF(sc.y, boxMin.y, boxMax.y),
+                            clampF(sc.z, boxMin.z, boxMax.z));
+                    Vec3 d = sc - cl;
+                    f32 d2 = d.x * d.x + d.y * d.y + d.z * d.z;
+                    if (d2 < capR * capR && d2 > 1e-8f) {
+                        f32 dist = std::sqrt(d2);
+                        info.contactNormal = d * (1.0f / dist);
+                        if (!aIsCapsule) info.contactNormal = info.contactNormal * -1.0f;
+                        info.penetrationDepth = capR - dist;
+                        return true;
+                    }
+                    return false;
+                };
+                Vec3 capTop = capPos + Vec3(0, halfH, 0);
+                Vec3 capBot = capPos - Vec3(0, halfH, 0);
+                collided = testSphereBox(capPos) || testSphereBox(capTop) || testSphereBox(capBot);
+            }
+            // ── Capsule vs Capsule ─────────────────────────────────────
+            else if (colA->type == ColliderType::Capsule && colB->type == ColliderType::Capsule) {
+                f32 rA = colA->radius * sclA.x;
+                f32 hA = (colA->capsuleHeight * sclA.x * 0.5f) - rA;
+                if (hA < 0) hA = 0;
+                f32 rB = colB->radius * sclB.x;
+                f32 hB = (colB->capsuleHeight * sclB.x * 0.5f) - rB;
+                if (hB < 0) hB = 0;
+
+                Vec3 a1 = posA - Vec3(0, hA, 0), a2 = posA + Vec3(0, hA, 0);
+                Vec3 b1 = posB - Vec3(0, hB, 0), b2 = posB + Vec3(0, hB, 0);
+
+                // Closest points between two line segments (simplified)
+                Vec3 dA = a2 - a1, dB = b2 - b1;
+                Vec3 r0 = a1 - b1;
+                f32 aa = dA.x*dA.x + dA.y*dA.y + dA.z*dA.z;
+                f32 ee = dB.x*dB.x + dB.y*dB.y + dB.z*dB.z;
+                f32 bb = dA.x*dB.x + dA.y*dB.y + dA.z*dB.z;
+                f32 cc = dA.x*r0.x + dA.y*r0.y + dA.z*r0.z;
+                f32 ff = dB.x*r0.x + dB.y*r0.y + dB.z*r0.z;
+                f32 denom = aa * ee - bb * bb;
+                f32 sN = 0, tN = 0;
+                if (std::fabs(denom) > 1e-8f) {
+                    sN = (bb * ff - ee * cc) / denom;
+                    tN = (aa * ff - bb * cc) / denom;
+                }
+                if (sN < 0) sN = 0; if (sN > 1) sN = 1;
+                if (tN < 0) tN = 0; if (tN > 1) tN = 1;
+                Vec3 cpA = a1 + dA * sN;
+                Vec3 cpB = b1 + dB * tN;
+                Vec3 diff = cpB - cpA;
+                f32 dist2 = diff.x*diff.x + diff.y*diff.y + diff.z*diff.z;
+                f32 sumR = rA + rB;
+                if (dist2 < sumR * sumR && dist2 > 1e-8f) {
+                    f32 dist = std::sqrt(dist2);
+                    info.contactNormal = diff * (1.0f / dist);
+                    info.penetrationDepth = sumR - dist;
+                    collided = true;
+                }
+            }
+
+            if (collided) {
                 info.contactPoint = Vec3(
                     (posA.x + posB.x) * 0.5f,
                     (posA.y + posB.y) * 0.5f,

@@ -28,7 +28,9 @@
 #include "animation/Animation.h"
 #include "scripting/NodeGraph.h"
 #include "scripting/NativeScript.h"
+#include "core/SceneSerializer.h"
 #include "scripting/ScriptEngine.h"
+#include "editor/UndoRedo.h"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -147,6 +149,21 @@ bool EditorUI::WantsCaptureMouse() const {
 // ── Main Render ────────────────────────────────────────────────────────────
 
 void EditorUI::Render(f32 dt) {
+    // ── Keyboard shortcuts ─────────────────────────────────────────────────
+    ImGuiIO& io = ImGui::GetIO();
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z) && !io.WantTextInput) {
+        if (m_UndoStack.CanUndo()) {
+            m_UndoStack.Undo();
+            PushLog("[Edit] Undo");
+        }
+    }
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y) && !io.WantTextInput) {
+        if (m_UndoStack.CanRedo()) {
+            m_UndoStack.Redo();
+            PushLog("[Edit] Redo");
+        }
+    }
+
     // FPS counter
     m_FPSAccum += dt;
     m_FPSCount++;
@@ -232,6 +249,20 @@ void EditorUI::DrawMenuBar() {
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Edit")) {
+            // Undo / Redo
+            std::string undoLabel = "Undo";
+            if (m_UndoStack.CanUndo()) undoLabel += " (" + m_UndoStack.GetUndoDescription() + ")";
+            if (ImGui::MenuItem(undoLabel.c_str(), "Ctrl+Z", false, m_UndoStack.CanUndo())) {
+                m_UndoStack.Undo();
+                PushLog("[Edit] Undo: " + m_UndoStack.GetRedoDescription());
+            }
+            std::string redoLabel = "Redo";
+            if (m_UndoStack.CanRedo()) redoLabel += " (" + m_UndoStack.GetRedoDescription() + ")";
+            if (ImGui::MenuItem(redoLabel.c_str(), "Ctrl+Y", false, m_UndoStack.CanRedo())) {
+                m_UndoStack.Redo();
+                PushLog("[Edit] Redo");
+            }
+            ImGui::Separator();
             if (ImGui::MenuItem("Add Cube"))        { AddCube(); }
             if (ImGui::MenuItem("Add Light"))       { AddLight(); }
             if (ImGui::MenuItem("Add Terrain"))     { AddTerrain(); }
@@ -252,6 +283,26 @@ void EditorUI::DrawMenuBar() {
             if (ImGui::MenuItem("Node Script")) { m_BottomTab = 5; }
             if (ImGui::MenuItem("Behaviors"))   { m_BottomTab = 6; }
             if (ImGui::MenuItem("Code Script")) { m_BottomTab = 7; }
+            ImGui::Separator();
+            if (ImGui::BeginMenu("Post-Processing")) {
+                if (m_Renderer) {
+                    bool bloom = m_Renderer->IsBloomEnabled();
+                    if (ImGui::Checkbox("Bloom", &bloom)) {
+                        m_Renderer->SetBloomEnabled(bloom);
+                        PushLog(bloom ? "[Render] Bloom ON" : "[Render] Bloom OFF");
+                    }
+                    bool tonemap = m_Renderer->IsToneMappingEnabled();
+                    if (ImGui::Checkbox("Tone Mapping (ACES)", &tonemap)) {
+                        m_Renderer->SetToneMappingEnabled(tonemap);
+                        PushLog(tonemap ? "[Render] Tone Mapping ON" : "[Render] Tone Mapping OFF");
+                    }
+                    f32 exposure = m_Renderer->GetExposure();
+                    if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f, "%.2f")) {
+                        m_Renderer->SetExposure(exposure);
+                    }
+                }
+                ImGui::EndMenu();
+            }
             ImGui::Separator();
             if (ImGui::MenuItem("Editor Settings")) { m_ShowEditorSettings = true; }
             ImGui::EndMenu();
@@ -709,7 +760,8 @@ void EditorUI::DrawInspectorScripts() {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.45f, 0.65f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.55f, 0.75f, 1.0f));
         if (ImGui::Button("+ Add Code Script", ImVec2(-1, 24))) {
-            m_Selected->AddComponent<ScriptComponent>();
+            auto* sc = m_Selected->AddComponent<ScriptComponent>();
+            if (m_Script) sc->SetEngine(m_Script);
             PushLog("[Inspector] Added ScriptComponent to " + m_Selected->GetName());
             m_BottomTab = 7;  // switch to the Code Script editor tab
         }
@@ -813,7 +865,8 @@ void EditorUI::DrawInspectorAddComponent() {
             }
         }
         if (ImGui::MenuItem("Code Script")) {
-            m_Selected->AddComponent<ScriptComponent>();
+            auto* sc2 = m_Selected->AddComponent<ScriptComponent>();
+            if (m_Script) sc2->SetEngine(m_Script);
             PushLog("[Inspector] Added ScriptComponent.");
         }
 
@@ -2012,7 +2065,10 @@ void EditorUI::DrawCodeScriptPanel() {
     if (ImGui::Button("Attach to Selected", ImVec2(-1, 24))) {
         if (m_Selected) {
             auto* sc = m_Selected->GetComponent<ScriptComponent>();
-            if (!sc) sc = m_Selected->AddComponent<ScriptComponent>();
+            if (!sc) {
+                sc = m_Selected->AddComponent<ScriptComponent>();
+                if (m_Script) sc->SetEngine(m_Script);
+            }
             sc->SetSource(std::string(m_ScriptCodeBuf));
             PushLog("[Script] Attached to " + m_Selected->GetName());
         } else {
@@ -2521,12 +2577,28 @@ void EditorUI::DeleteSelected() {
 }
 
 void EditorUI::SaveScene(const std::string& path) {
-    // Minimal serialisation: dump object list
-    PushLog("[Editor] Save scene to '" + path + "' (placeholder).");
+    if (!m_Scene) {
+        PushLog("[Editor] No scene to save.");
+        return;
+    }
+    if (SceneSerializer::SaveScene(*m_Scene, path)) {
+        PushLog("[Editor] Scene saved to '" + path + "'.");
+    } else {
+        PushLog("[Editor] Failed to save scene to '" + path + "'.");
+    }
 }
 
 void EditorUI::LoadScene(const std::string& path) {
-    PushLog("[Editor] Load scene from '" + path + "' (placeholder).");
+    if (!m_Scene) {
+        PushLog("[Editor] No scene target for loading.");
+        return;
+    }
+    if (SceneSerializer::LoadScene(*m_Scene, path, m_Physics)) {
+        PushLog("[Editor] Scene loaded from '" + path + "'.");
+        m_Selected = nullptr;
+    } else {
+        PushLog("[Editor] Failed to load scene from '" + path + "'.");
+    }
 }
 
 } // namespace gv

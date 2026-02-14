@@ -4,6 +4,12 @@
 #include "future/Placeholders.h"
 #include "miniaudio/miniaudio.h"
 #include <algorithm>
+#include <cmath>
+
+#ifdef GV_HAS_GLFW
+#define GLFW_INCLUDE_NONE
+#include <GLFW/glfw3.h>
+#endif
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -195,14 +201,33 @@ void AudioSource::OnDetach() {
 
 void AudioSource::Play() {
     if (clipPath.empty()) return;
-    // Get engine from Engine singleton
-    // For now we create a standalone sound
-    // In production, get the ma_engine* from AudioEngine
+
+    // Get the ma_engine* from the AudioEngine
+    ma_engine* engine = nullptr;
+    if (m_AudioEngine && m_AudioEngine->GetEngineHandle()) {
+        engine = static_cast<ma_engine*>(m_AudioEngine->GetEngineHandle());
+    }
+
+    if (!engine) {
+        GV_LOG_WARN("AudioSource — no AudioEngine available, cannot play: " + clipPath);
+        return;
+    }
+
+    // Initialize the sound from file if needed
     if (!m_Sound) {
         m_Sound = new ma_sound();
-        // Sound init will be done when AudioEngine provides the engine pointer
-        GV_LOG_INFO("AudioSource — Play requested: " + clipPath);
+        ma_result res = ma_sound_init_from_file(engine, clipPath.c_str(),
+            MA_SOUND_FLAG_DECODE, nullptr, nullptr, static_cast<ma_sound*>(m_Sound));
+        if (res != MA_SUCCESS) {
+            GV_LOG_ERROR("AudioSource — failed to load: " + clipPath +
+                         " (code " + std::to_string(res) + ")");
+            delete static_cast<ma_sound*>(m_Sound);
+            m_Sound = nullptr;
+            return;
+        }
+        GV_LOG_INFO("AudioSource — loaded sound: " + clipPath);
     }
+
     if (m_Sound) {
         ma_sound_set_volume(static_cast<ma_sound*>(m_Sound), volume);
         ma_sound_set_pitch(static_cast<ma_sound*>(m_Sound), pitch);
@@ -465,8 +490,14 @@ void NetworkManager::Shutdown() {}
 #endif
 
 // ── Input Manager ──────────────────────────────────────────────────────────
-void InputManager::Init()   {}
-void InputManager::Update() {}
+void InputManager::Init()   {
+    GV_LOG_INFO("InputManager initialised.");
+}
+
+void InputManager::Update() {
+    // Gamepad state is polled via GLFW in the IsGamepadConnected / GetGamepadAxis etc.
+}
+
 bool InputManager::IsKeyDown(i32 keyCode) const     { (void)keyCode; return false; }
 bool InputManager::IsKeyPressed(i32 keyCode) const   { (void)keyCode; return false; }
 bool InputManager::IsKeyReleased(i32 keyCode) const  { (void)keyCode; return false; }
@@ -474,9 +505,45 @@ bool InputManager::IsMouseButtonDown(i32 btn) const   { (void)btn; return false;
 Vec2 InputManager::GetMousePosition() const  { return {}; }
 Vec2 InputManager::GetMouseDelta() const     { return {}; }
 f32  InputManager::GetMouseScrollDelta() const { return 0; }
-bool InputManager::IsGamepadConnected(i32 idx) const { (void)idx; return false; }
-f32  InputManager::GetGamepadAxis(i32 idx, i32 axis) const { (void)idx; (void)axis; return 0; }
-bool InputManager::IsGamepadButtonDown(i32 idx, i32 btn) const { (void)idx; (void)btn; return false; }
+
+bool InputManager::IsGamepadConnected(i32 idx) const {
+#ifdef GV_HAS_GLFW
+    return glfwJoystickPresent(idx) == GLFW_TRUE;
+#else
+    (void)idx; return false;
+#endif
+}
+
+f32 InputManager::GetGamepadAxis(i32 idx, i32 axis) const {
+#ifdef GV_HAS_GLFW
+    GLFWgamepadstate state;
+    if (glfwGetGamepadState(idx, &state)) {
+        if (axis >= 0 && axis <= GLFW_GAMEPAD_AXIS_LAST) {
+            f32 val = state.axes[axis];
+            // Apply deadzone
+            if (std::fabs(val) < 0.15f) val = 0.0f;
+            return val;
+        }
+    }
+#else
+    (void)idx; (void)axis;
+#endif
+    return 0;
+}
+
+bool InputManager::IsGamepadButtonDown(i32 idx, i32 btn) const {
+#ifdef GV_HAS_GLFW
+    GLFWgamepadstate state;
+    if (glfwGetGamepadState(idx, &state)) {
+        if (btn >= 0 && btn <= GLFW_GAMEPAD_BUTTON_LAST) {
+            return state.buttons[btn] == GLFW_PRESS;
+        }
+    }
+#else
+    (void)idx; (void)btn;
+#endif
+    return false;
+}
 
 // ── UI System ──────────────────────────────────────────────────────────────
 void UISystem::Init(u32 w, u32 h) { m_ScreenWidth = w; m_ScreenHeight = h; }

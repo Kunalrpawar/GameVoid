@@ -124,6 +124,7 @@ public:
     void SetBloomThreshold(f32 t)      { m_BloomThreshold = t; }
     void SetBloomIntensity(f32 i)      { m_BloomIntensity = i; }
     void SetExposure(f32 e)            { m_Exposure = e; }
+    f32  GetExposure() const           { return m_Exposure; }
 
     // ── Shadow mapping ─────────────────────────────────────────────────────
     void SetShadowsEnabled(bool e)     { m_ShadowsEnabled = e; }

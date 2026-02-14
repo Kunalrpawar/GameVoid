@@ -3,12 +3,14 @@
 // ============================================================================
 #include "core/Engine.h"
 #include "core/FPSCamera.h"
+#include "core/EventSystem.h"
 #include "physics/Physics.h"
 #include "renderer/Camera.h"
 #include "renderer/Lighting.h"
 #include "renderer/MeshRenderer.h"
 #include "renderer/MaterialComponent.h"
 #include "scripting/NativeScript.h"
+#include "scripting/ScriptEngine.h"
 #ifdef GV_HAS_GLFW
 #include "core/GLDefs.h"
 #endif
@@ -129,6 +131,7 @@ bool Engine::Init(const EngineConfig& config) {
     if (config.enableScripting) {
         m_Scripting.Init();
         m_Scripting.BindSceneAPI(*defaultScene);
+        m_Scripting.BindEventAPI();
     }
 
     // ── AI ─────────────────────────────────────────────────────────────────
@@ -223,8 +226,31 @@ void Engine::Run() {
             // In editor-gui mode the orbit camera in EditorUI handles all camera movement.
 
             // Physics (when playing)
-            if (m_Config.enablePhysics && m_EditorUI.IsPlaying())
+            if (m_Config.enablePhysics && m_EditorUI.IsPlaying()) {
                 m_Physics.Step(dt);
+                // Dispatch collision events
+                for (auto& col : m_Physics.GetCollisions()) {
+                    Event e;
+                    e.type = EventType::CollisionEnter;
+                    e.objectA = col.objectA;
+                    e.objectB = col.objectB;
+                    e.contactPoint = col.contactPoint;
+                    e.contactNormal = col.contactNormal;
+                    e.penetration = col.penetrationDepth;
+                    EventBus::Instance().QueueEvent(e);
+                }
+                EventBus::Instance().FlushQueue();
+            }
+
+            // Auto-wire ScriptComponents to the ScriptEngine
+            if (m_Config.enableScripting) {
+                for (auto& obj : scene->GetAllObjects()) {
+                    auto* sc = obj->GetComponent<ScriptComponent>();
+                    if (sc && !sc->GetEngine()) {
+                        sc->SetEngine(&m_Scripting);
+                    }
+                }
+            }
 
             scene->Update(dt);
 
@@ -344,7 +370,40 @@ void Engine::Run() {
         }
 
         // ── Physics ────────────────────────────────────────────────────
-        if (m_Config.enablePhysics) m_Physics.Step(dt);
+        if (m_Config.enablePhysics) {
+            m_Physics.Step(dt);
+
+            // Dispatch collision events via the EventBus
+            for (auto& col : m_Physics.GetCollisions()) {
+                Event e;
+                e.type = EventType::CollisionEnter;
+                e.objectA = col.objectA;
+                e.objectB = col.objectB;
+                e.contactPoint = col.contactPoint;
+                e.contactNormal = col.contactNormal;
+                e.penetration = col.penetrationDepth;
+                EventBus::Instance().QueueEvent(e);
+            }
+            EventBus::Instance().FlushQueue();
+        }
+
+        // ── Auto-wire ScriptComponents to the ScriptEngine ────────────
+        if (m_Config.enableScripting) {
+            for (auto& obj : scene->GetAllObjects()) {
+                auto* sc = obj->GetComponent<ScriptComponent>();
+                if (sc && !sc->GetEngine()) {
+                    sc->SetEngine(&m_Scripting);
+                }
+            }
+        }
+
+        // ── Auto-wire AudioSource components to AudioEngine ───────────
+        for (auto& obj : scene->GetAllObjects()) {
+            auto* as = obj->GetComponent<AudioSource>();
+            if (as && !as->GetAudioEngine()) {
+                as->SetAudioEngine(&m_Audio);
+            }
+        }
 
         // ── Logic ──────────────────────────────────────────────────────
         scene->Update(dt);
@@ -356,12 +415,22 @@ void Engine::Run() {
 
         // Draw built-in demo triangle (proves GL works)
 #ifdef GV_HAS_GLFW
-        static_cast<OpenGLRenderer*>(m_Renderer.get())->RenderDemo(dt);
+        auto* glr = static_cast<OpenGLRenderer*>(m_Renderer.get());
+        glr->RenderDemo(dt);
+
+        // Begin HDR pass (post-processing: bloom + tone mapping)
+        glr->BeginHDRPass();
 #endif
 
         if (scene->GetActiveCamera())
             m_Renderer->RenderScene(*scene, *scene->GetActiveCamera());
         scene->Render();
+
+#ifdef GV_HAS_GLFW
+        glr->EndHDRPass();
+        glr->RenderPostProcessing();
+#endif
+
         m_Renderer->EndFrame();
 
         // ── FPS counter in title bar ───────────────────────────────────

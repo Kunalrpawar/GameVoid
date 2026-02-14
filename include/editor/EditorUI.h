@@ -26,6 +26,7 @@
 #include "ai/AIManager.h"
 #include "scripting/NativeScript.h"
 #include "editor/OrbitCamera.h"
+#include "editor/UndoRedo.h"
 #include <string>
 #include <vector>
 #include <deque>
@@ -154,6 +155,9 @@ private:
     GameObject*     m_Selected = nullptr;
     GizmoMode       m_GizmoMode = GizmoMode::Translate;
     bool            m_Playing  = false;
+
+    // ── Undo/Redo ──────────────────────────────────────────────────────────
+    UndoStack       m_UndoStack;
 
     // ── Placement mode (drag-to-place objects) ─────────────────────────────
     enum class PlacementType { None, Cube, Light, Terrain, Particles, Floor };

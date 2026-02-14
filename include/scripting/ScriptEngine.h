@@ -72,6 +72,10 @@ public:
     void SetSource(const std::string& source) { m_Source = source; }
     const std::string& GetSource() const      { return m_Source; }
 
+    /// Bind the ScriptEngine so this component can execute scripts.
+    void SetEngine(ScriptEngine* engine) { m_Engine = engine; }
+    ScriptEngine* GetEngine() const      { return m_Engine; }
+
     // ── Lifecycle (called by ScriptEngine) ─────────────────────────────────
     void OnStart() override;
     void OnUpdate(f32 dt) override;
@@ -81,6 +85,7 @@ private:
     std::string m_ScriptPath;
     std::string m_Source;
     bool m_Loaded = false;
+    ScriptEngine* m_Engine = nullptr;
 };
 
 // ============================================================================
@@ -123,6 +128,9 @@ public:
 
     /// Expose the GameObject API (get/set transform, add component, etc.).
     void BindGameObjectAPI();
+
+    /// Expose the Event API (on, emit, off) so scripts can use events.
+    void BindEventAPI();
 
     /// Set the "self" object for script execution context.
     void SetSelfObject(GameObject* obj) { m_SelfObject = obj; }

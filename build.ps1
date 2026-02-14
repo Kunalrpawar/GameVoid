@@ -18,6 +18,7 @@ $commonSources = @(
     "src/main.cpp",
     "src/core/Engine.cpp",
     "src/core/FPSCamera.cpp",
+    "src/core/SceneSerializer.cpp",
     "src/renderer/Renderer.cpp",
     "src/renderer/Camera.cpp",
     "src/renderer/Material.cpp",

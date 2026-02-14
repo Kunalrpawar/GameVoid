@@ -9,6 +9,7 @@
 #include "renderer/Lighting.h"
 #include "renderer/MeshRenderer.h"
 #include "renderer/MaterialComponent.h"
+#include "renderer/Frustum.h"
 #include "core/Scene.h"
 #include "core/GameObject.h"
 
@@ -182,6 +183,11 @@ void OpenGLRenderer::RenderScene(Scene& scene, Camera& camera) {
     // ── 3. Main PBR pass ───────────────────────────────────────────────────
     Mat4 view = camera.GetViewMatrix();
     Mat4 proj = camera.GetProjectionMatrix();
+    Mat4 viewProj = proj * view;
+
+    // Extract frustum planes for culling
+    Frustum frustum;
+    frustum.ExtractFromVP(viewProj);
 
     glUseProgram(m_SceneShader);
 
@@ -269,13 +275,23 @@ void OpenGLRenderer::RenderScene(Scene& scene, Camera& camera) {
     GLint locHasNormal = glGetUniformLocation(m_SceneShader, "u_HasNormalMap");
 
     i32 drawCount = 0;
+    i32 culledCount = 0;
 
     for (auto& obj : scene.GetAllObjects()) {
         if (!obj->IsActive()) continue;
 
         MeshRenderer* mr = obj->GetComponent<MeshRenderer>();
         if (!mr) continue;
-        if (mr->primitiveType == PrimitiveType::None) continue;
+        // Skip if no primitive type AND no custom mesh
+        if (mr->primitiveType == PrimitiveType::None && !mr->GetMesh()) continue;
+
+        // Frustum culling: test object bounding sphere
+        Vec3 objPos = obj->GetTransform().GetWorldPosition();
+        f32  objScale = obj->GetTransform().scale.x; // approximate with x scale
+        if (!frustum.TestObject(objPos, objScale)) {
+            culledCount++;
+            continue;
+        }
 
         Mat4 model = obj->GetTransform().GetModelMatrix();
         glUniformMatrix4fv(locModel, 1, GL_FALSE, model.m);
@@ -318,8 +334,15 @@ void OpenGLRenderer::RenderScene(Scene& scene, Camera& camera) {
             glUniform1i(locHasNormal, 0);
         }
 
-        // Draw the built-in primitive
-        if (mr->primitiveType == PrimitiveType::Triangle) {
+        // Draw the built-in primitive or custom mesh
+        if (mr->GetMesh() && mr->GetMesh()->GetIndexCount() > 0) {
+            // Custom loaded mesh (e.g. OBJ)
+            mr->GetMesh()->Bind();
+            glDrawElements(GL_TRIANGLES,
+                           static_cast<GLsizei>(mr->GetMesh()->GetIndexCount()),
+                           GL_UNSIGNED_INT, reinterpret_cast<void*>(0));
+            mr->GetMesh()->Unbind();
+        } else if (mr->primitiveType == PrimitiveType::Triangle) {
             glBindVertexArray(m_TriVAO);
             glDrawArrays(GL_TRIANGLES, 0, 3);
             glBindVertexArray(0);
@@ -941,22 +964,32 @@ void OpenGLRenderer::RenderShadowPass(Scene& scene, const Vec3& lightDir) {
     for (auto& obj : scene.GetAllObjects()) {
         if (!obj->IsActive()) continue;
         MeshRenderer* mr = obj->GetComponent<MeshRenderer>();
-        if (!mr || mr->primitiveType == PrimitiveType::None) continue;
+        if (!mr) continue;
+        if (mr->primitiveType == PrimitiveType::None && !mr->GetMesh()) continue;
 
         Mat4 model = obj->GetTransform().GetModelMatrix();
         glUniformMatrix4fv(locModel, 1, GL_FALSE, model.m);
 
-        if (mr->primitiveType == PrimitiveType::Cube) {
+        if (mr->GetMesh() && mr->GetMesh()->GetIndexCount() > 0) {
+            // Custom loaded mesh shadow
+            mr->GetMesh()->Bind();
+            glDrawElements(GL_TRIANGLES,
+                           static_cast<GLsizei>(mr->GetMesh()->GetIndexCount()),
+                           GL_UNSIGNED_INT, nullptr);
+            mr->GetMesh()->Unbind();
+        } else if (mr->primitiveType == PrimitiveType::Cube) {
             glBindVertexArray(m_CubeVAO);
             glDrawElements(GL_TRIANGLES, m_CubeIndexCount, GL_UNSIGNED_INT, nullptr);
+            glBindVertexArray(0);
         } else if (mr->primitiveType == PrimitiveType::Plane) {
             glBindVertexArray(m_PlaneVAO);
             glDrawElements(GL_TRIANGLES, m_PlaneIndexCount, GL_UNSIGNED_INT, nullptr);
+            glBindVertexArray(0);
         } else if (mr->primitiveType == PrimitiveType::Triangle) {
             glBindVertexArray(m_TriVAO);
             glDrawArrays(GL_TRIANGLES, 0, 3);
+            glBindVertexArray(0);
         }
-        glBindVertexArray(0);
     }
 
     glCullFace(GL_BACK);

@@ -33,9 +33,41 @@ public:
     }
 
     // ── Matrix generation ──────────────────────────────────────────────────
-    /// Builds the TRS (Translation × Rotation × Scale) model matrix.
-    Mat4 GetModelMatrix() const {
+    /// Builds the local TRS (Translation × Rotation × Scale) model matrix.
+    Mat4 GetLocalMatrix() const {
         return Mat4::Translate(position) * rotation.ToMat4() * Mat4::Scale(scale);
+    }
+
+    /// Builds the TRS model matrix. If a parent transform is set,
+    /// returns parentWorldMatrix * localMatrix (recursive hierarchy).
+    Mat4 GetModelMatrix() const {
+        Mat4 local = GetLocalMatrix();
+        if (m_Parent) return m_Parent->GetModelMatrix() * local;
+        return local;
+    }
+
+    // ── Hierarchy ──────────────────────────────────────────────────────────
+    void SetParentTransform(Transform* parent) { m_Parent = parent; }
+    Transform* GetParentTransform() const      { return m_Parent; }
+
+    /// Get position in world space (extracts translation from the world matrix).
+    Vec3 GetWorldPosition() const {
+        Mat4 world = GetModelMatrix();
+        return Vec3(world.m[12], world.m[13], world.m[14]);
+    }
+
+    /// Set position in world space (converts to local space if parented).
+    void SetWorldPosition(const Vec3& worldPos) {
+        if (!m_Parent) {
+            position = worldPos;
+        } else {
+            // Compute inverse parent world transform and convert
+            Mat4 parentWorld = m_Parent->GetModelMatrix();
+            // Simple inverse for TRS: scale^-1 * rot^-1 * translate^-1
+            // For now, use the position delta approach
+            Vec3 parentWorldPos(parentWorld.m[12], parentWorld.m[13], parentWorld.m[14]);
+            position = worldPos - parentWorldPos;
+        }
     }
 
     // ── Movement helpers ───────────────────────────────────────────────────
@@ -48,6 +80,9 @@ public:
            << "Scl(" << scale.x    << ", " << scale.y    << ", " << scale.z    << ")";
         return ss.str();
     }
+
+private:
+    Transform* m_Parent = nullptr;   // parent transform for hierarchy
 };
 
 } // namespace gv
