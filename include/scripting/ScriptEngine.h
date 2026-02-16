@@ -21,13 +21,13 @@
 #include <unordered_map>
 #include <functional>
 #include <vector>
-#include <variant>
 
 namespace gv {
 
 // Forward declarations
 class Scene;
 class GameObject;
+class ScriptEngine;
 
 // ============================================================================
 // Script Value — variant type for script variables

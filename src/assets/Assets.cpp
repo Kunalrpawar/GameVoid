@@ -15,6 +15,9 @@
 
 namespace gv {
 
+// Forward declaration (defined later in file)
+static void ComputeTangents(Vertex& v0, Vertex& v1, Vertex& v2);
+
 // ── Texture ────────────────────────────────────────────────────────────────
 
 bool Texture::Load(const std::string& path) {

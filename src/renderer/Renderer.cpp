@@ -10,6 +10,7 @@
 #include "renderer/MeshRenderer.h"
 #include "renderer/MaterialComponent.h"
 #include "renderer/Frustum.h"
+#include "assets/Assets.h"
 #include "core/Scene.h"
 #include "core/GameObject.h"
 
@@ -942,6 +943,12 @@ void OpenGLRenderer::InitShadowMap() {
 }
 
 void OpenGLRenderer::RenderShadowPass(Scene& scene, const Vec3& lightDir) {
+    // Save current FBO and viewport so we can restore after shadow pass
+    GLint prevFBO = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
+    GLint prevViewport[4];
+    glGetIntegerv(GL_VIEWPORT_ENUM, prevViewport);
+
     // Compute light-space matrix (orthographic projection for directional light)
     float extent = 30.0f;
     Mat4 lightProj = Mat4::Ortho(-extent, extent, -extent, extent, 0.1f, 100.0f);
@@ -994,8 +1001,10 @@ void OpenGLRenderer::RenderShadowPass(Scene& scene, const Vec3& lightDir) {
 
     glCullFace(GL_BACK);
     glDisable(GL_CULL_FACE);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glViewport(0, 0, static_cast<GLsizei>(m_Width), static_cast<GLsizei>(m_Height));
+
+    // Restore the previously-bound FBO and viewport (critical for editor viewport)
+    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFBO));
+    glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
     glUseProgram(0);
 }
 

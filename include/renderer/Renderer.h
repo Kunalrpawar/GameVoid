@@ -198,11 +198,15 @@ private:
     u32 m_FXAAShader = 0;
     u32 m_ScreenQuadVAO = 0, m_ScreenQuadVBO = 0;
     void InitPostProcessing();
+    void CleanupPostProcessing();
+    void InitScreenQuad();
+
+public:
     void BeginHDRPass();
     void EndHDRPass();
     void RenderPostProcessing();
-    void CleanupPostProcessing();
-    void InitScreenQuad();
+
+private:
 
     // ── Sprite/2D Rendering ────────────────────────────────────────────────
     u32 m_SpriteShader = 0;

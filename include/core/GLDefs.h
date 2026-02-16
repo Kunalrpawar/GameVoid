@@ -164,8 +164,10 @@ typedef ptrdiff_t      GLintptr;
 #define GL_RGB8                     0x8051
 #define GL_RGBA8                    0x8058
 
-// Framebuffer (future use)
+// Framebuffer
 #define GL_FRAMEBUFFER              0x8D40
+#define GL_FRAMEBUFFER_BINDING      0x8CA6
+#define GL_VIEWPORT_ENUM            0x0BA2
 #define GL_RENDERBUFFER             0x8D41
 #define GL_COLOR_ATTACHMENT0        0x8CE0
 #define GL_DEPTH_ATTACHMENT         0x8D00

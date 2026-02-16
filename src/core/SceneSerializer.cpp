@@ -176,7 +176,7 @@ bool PrefabLibrary::SaveToFile(const std::string& path) const {
 
     f << "{\n  \"prefabs\": [\n";
     size_t idx = 0;
-    for (auto& [name, prefab] : m_Prefabs) {
+    for (auto it = m_Prefabs.begin(); it != m_Prefabs.end(); ++it) {
         f << "    " << SceneSerializer::SerializeObject(nullptr, 4);
         // Use prefab name as a marker
         if (++idx < m_Prefabs.size()) f << ",";

@@ -2,19 +2,27 @@
 // GameVoid Engine — Future Placeholders Implementation
 // ============================================================================
 #include "future/Placeholders.h"
+#include "core/GameObject.h"
 #include "miniaudio/miniaudio.h"
 #include <algorithm>
 #include <cmath>
-
-#ifdef GV_HAS_GLFW
-#define GLFW_INCLUDE_NONE
-#include <GLFW/glfw3.h>
-#endif
 
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
+// Undefine Windows macros that conflict with our method names
+#ifdef PlaySound
+#undef PlaySound
+#endif
+#ifdef SendMessage
+#undef SendMessage
+#endif
+#endif
+
+#ifdef GV_HAS_GLFW
+#define GLFW_INCLUDE_NONE
+#include <GLFW/glfw3.h>
 #endif
 
 namespace gv {
@@ -322,7 +330,7 @@ bool NetworkManager::ConnectToServer(const std::string& address, u16 port) {
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
-    inet_pton(AF_INET, address.c_str(), &addr.sin_addr);
+    addr.sin_addr.s_addr = inet_addr(address.c_str());
 
     if (connect(sock, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
         GV_LOG_ERROR("NetworkManager — Failed to connect to " + address + ":" + std::to_string(port));

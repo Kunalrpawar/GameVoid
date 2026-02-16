@@ -106,6 +106,7 @@ private:
 // Scene Serializer — JSON-based scene save/load
 // ============================================================================
 class SceneSerializer {
+    friend class PrefabLibrary;
 public:
     /// Serialize a scene to a JSON file.
     static bool SaveScene(const Scene& scene, const std::string& path);
