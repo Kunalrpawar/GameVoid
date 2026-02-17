@@ -68,6 +68,8 @@ private:
     void CmdAddPhysics(const std::vector<std::string>& args);
     void CmdCount(const std::vector<std::string>& args);
     void CmdRename(const std::vector<std::string>& args);
+    void CmdSave(const std::vector<std::string>& args);
+    void CmdLoad(const std::vector<std::string>& args);
 
     /// Tokenise a raw input line into command + arguments.
     static std::vector<std::string> Tokenise(const std::string& input);

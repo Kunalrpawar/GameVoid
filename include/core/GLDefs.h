@@ -205,6 +205,16 @@ typedef ptrdiff_t      GLintptr;
 // Instancing
 #define GL_UNPACK_ALIGNMENT         0x0CF5
 
+// Multiple Render Targets (MRT) — for deferred rendering G-buffer
+#define GL_COLOR_ATTACHMENT1        0x8CE1
+#define GL_COLOR_ATTACHMENT2        0x8CE2
+#define GL_COLOR_ATTACHMENT3        0x8CE3
+#define GL_COLOR_ATTACHMENT4        0x8CE4
+#define GL_MAX_COLOR_ATTACHMENTS    0x8CDF
+#define GL_MAX_DRAW_BUFFERS         0x8824
+#define GL_RG8                      0x822B
+#define GL_TEXTURE_CUBE_MAP         0x8513
+
 // ============================================================================
 // GL 1.1 Functions  (linked from opengl32.lib — no runtime loading needed)
 // ============================================================================
@@ -336,6 +346,13 @@ typedef void   (APIENTRY *PFN_glDrawElementsInstanced)(GLenum mode, GLsizei coun
 // Texture parameter float
 typedef void   (APIENTRY *PFN_glTexParameterfv)(GLenum target, GLenum pname, const GLfloat* params);
 
+// Integer vertex attributes (for bone IDs)
+typedef void   (APIENTRY *PFN_glVertexAttribIPointer)(GLuint index, GLint size, GLenum type,
+                                                       GLsizei stride, const void* pointer);
+
+// Multiple render targets (deferred rendering)
+typedef void   (APIENTRY *PFN_glDrawBuffers)(GLsizei n, const GLenum* bufs);
+
 // ── Extern function pointers ───────────────────────────────────────────────
 
 // Shaders
@@ -408,6 +425,12 @@ extern PFN_glDrawElementsInstanced    glDrawElementsInstanced;
 
 // Texture parameter float
 extern PFN_glTexParameterfv           glTexParameterfv;
+
+// Integer vertex attributes (for bone IDs)
+extern PFN_glVertexAttribIPointer     glVertexAttribIPointer;
+
+// MRT draw buffers
+extern PFN_glDrawBuffers              glDrawBuffers;
 
 // ── Loader ─────────────────────────────────────────────────────────────────
 /// Load all GL 2.0+ / 3.3 function pointers.

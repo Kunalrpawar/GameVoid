@@ -96,6 +96,7 @@ void PhysicsWorld::IntegrateBodies(f32 dt) {
         if (!rb->GetOwner()) continue;
 
         Transform& t = rb->GetOwner()->GetTransform();
+        Collider* col = rb->GetOwner()->GetComponent<Collider>();
 
         // Apply gravity
         if (rb->useGravity) {
@@ -114,8 +115,52 @@ void PhysicsWorld::IntegrateBodies(f32 dt) {
         // Integrate position
         t.position = t.position + rb->velocity * dt;
 
+        // ── Angular dynamics ───────────────────────────────────────────
+        // Apply torque: τ = Iα → α = I⁻¹τ
+        if (col && rb->mass > 0.0f) {
+            Vec3 invInertia = rb->GetInverseInertiaTensor(col, t.scale);
+            // Angular acceleration = I⁻¹ * torque
+            Vec3 angAccel(rb->torque.x * invInertia.x,
+                          rb->torque.y * invInertia.y,
+                          rb->torque.z * invInertia.z);
+            rb->angularVelocity = rb->angularVelocity + angAccel * dt;
+        }
+
+        // Angular drag
+        rb->angularVelocity = rb->angularVelocity * (1.0f / (1.0f + rb->angularDrag * dt));
+
+        // Integrate rotation (quaternion integration)
+        // dq/dt = 0.5 * w * q  (where w is angular velocity as a quaternion with w=0)
+        f32 avLen = std::sqrt(rb->angularVelocity.x * rb->angularVelocity.x +
+                              rb->angularVelocity.y * rb->angularVelocity.y +
+                              rb->angularVelocity.z * rb->angularVelocity.z);
+        if (avLen > 1e-6f) {
+            f32 halfAngle = avLen * dt * 0.5f;
+            f32 sinHA = std::sin(halfAngle) / avLen;
+            Quaternion deltaQ;
+            deltaQ.w = std::cos(halfAngle);
+            deltaQ.x = rb->angularVelocity.x * sinHA;
+            deltaQ.y = rb->angularVelocity.y * sinHA;
+            deltaQ.z = rb->angularVelocity.z * sinHA;
+
+            // Multiply: rotation = deltaQ * rotation
+            Quaternion& q = t.rotation;
+            Quaternion newQ;
+            newQ.w = deltaQ.w * q.w - deltaQ.x * q.x - deltaQ.y * q.y - deltaQ.z * q.z;
+            newQ.x = deltaQ.w * q.x + deltaQ.x * q.w + deltaQ.y * q.z - deltaQ.z * q.y;
+            newQ.y = deltaQ.w * q.y - deltaQ.x * q.z + deltaQ.y * q.w + deltaQ.z * q.x;
+            newQ.z = deltaQ.w * q.z + deltaQ.x * q.y - deltaQ.y * q.x + deltaQ.z * q.w;
+
+            // Normalize to prevent drift
+            f32 len = std::sqrt(newQ.w*newQ.w + newQ.x*newQ.x + newQ.y*newQ.y + newQ.z*newQ.z);
+            if (len > 1e-8f) {
+                f32 invLen = 1.0f / len;
+                newQ.w *= invLen; newQ.x *= invLen; newQ.y *= invLen; newQ.z *= invLen;
+            }
+            q = newQ;
+        }
+
         // Floor constraint (Y = 0 plane)
-        Collider* col = rb->GetOwner()->GetComponent<Collider>();
         if (col && col->type == ColliderType::Box) {
             f32 halfY = col->boxHalfExtents.y * t.scale.y;
             if (t.position.y - halfY < 0.0f) {
@@ -124,6 +169,8 @@ void PhysicsWorld::IntegrateBodies(f32 dt) {
                     rb->velocity.y = -rb->velocity.y * rb->restitution;
                     if (rb->velocity.y < 0.1f) rb->velocity.y = 0.0f;
                 }
+                // Friction-based angular damping on ground contact
+                rb->angularVelocity = rb->angularVelocity * 0.95f;
             }
         }
 
@@ -398,6 +445,9 @@ void PhysicsWorld::ResolveCollisions() {
         Vec3 normal = c.contactNormal;
         f32  depth  = c.penetrationDepth;
 
+        Collider* colA = c.objectA->GetComponent<Collider>();
+        Collider* colB = c.objectB->GetComponent<Collider>();
+
         // 1. Positional correction — push objects apart
         if (dynA && dynB) {
             tA.position = tA.position - normal * (depth * 0.5f);
@@ -408,9 +458,17 @@ void PhysicsWorld::ResolveCollisions() {
             tB.position = tB.position + normal * depth;
         }
 
-        // 2. Impulse-based velocity response
-        Vec3 relVel = rbB->velocity - rbA->velocity;
-        f32  velAlongNormal = relVel.Dot(normal);
+        // 2. Compute contact point relative to each body's center of mass
+        Vec3 rA = c.contactPoint - tA.position;
+        Vec3 rB = c.contactPoint - tB.position;
+
+        // 3. Compute relative velocity at contact point (includes angular contribution)
+        // v_contact = v_linear + angular_velocity × r
+        Vec3 vA = rbA->velocity + rbA->angularVelocity.Cross(rA);
+        Vec3 vB = rbB->velocity + rbB->angularVelocity.Cross(rB);
+        Vec3 relVel = vB - vA;
+
+        f32 velAlongNormal = relVel.Dot(normal);
         if (velAlongNormal > 0.0f) continue; // already separating
 
         f32 e = (rbA->restitution < rbB->restitution)
@@ -418,11 +476,38 @@ void PhysicsWorld::ResolveCollisions() {
         f32 invMassA = dynA ? (1.0f / rbA->mass) : 0.0f;
         f32 invMassB = dynB ? (1.0f / rbB->mass) : 0.0f;
 
-        f32 j = -(1.0f + e) * velAlongNormal / (invMassA + invMassB);
+        // Compute inverse inertia contributions
+        Vec3 invIA = (dynA && colA) ? rbA->GetInverseInertiaTensor(colA, tA.scale) : Vec3(0, 0, 0);
+        Vec3 invIB = (dynB && colB) ? rbB->GetInverseInertiaTensor(colB, tB.scale) : Vec3(0, 0, 0);
+
+        // Cross products for angular contribution to impulse denominator
+        Vec3 rAxN = rA.Cross(normal);
+        Vec3 rBxN = rB.Cross(normal);
+
+        // Angular contribution: (I⁻¹(r×n)) × r · n
+        Vec3 angTermA(rAxN.x * invIA.x, rAxN.y * invIA.y, rAxN.z * invIA.z);
+        Vec3 angTermB(rBxN.x * invIB.x, rBxN.y * invIB.y, rBxN.z * invIB.z);
+        f32 angDenomA = angTermA.Cross(rA).Dot(normal);
+        f32 angDenomB = angTermB.Cross(rB).Dot(normal);
+
+        f32 j = -(1.0f + e) * velAlongNormal / (invMassA + invMassB + angDenomA + angDenomB);
         Vec3 impulse = normal * j;
 
+        // Apply linear impulse
         if (dynA) rbA->velocity = rbA->velocity - impulse * invMassA;
         if (dynB) rbB->velocity = rbB->velocity + impulse * invMassB;
+
+        // Apply angular impulse: Δω = I⁻¹ * (r × impulse)
+        if (dynA) {
+            Vec3 angImpA = rA.Cross(impulse * -1.0f);
+            rbA->angularVelocity = rbA->angularVelocity + Vec3(
+                angImpA.x * invIA.x, angImpA.y * invIA.y, angImpA.z * invIA.z);
+        }
+        if (dynB) {
+            Vec3 angImpB = rB.Cross(impulse);
+            rbB->angularVelocity = rbB->angularVelocity + Vec3(
+                angImpB.x * invIB.x, angImpB.y * invIB.y, angImpB.z * invIB.z);
+        }
     }
 }
 
@@ -469,6 +554,58 @@ void PhysicsWorld::AddPhysicsComponents(GameObject* obj, RigidBodyType bodyType,
     auto* col = obj->AddComponent<Collider>();
     col->type = colliderType;
     GV_LOG_INFO("Physics components added to '" + obj->GetName() + "'");
+}
+
+// ============================================================================
+// Inertia Tensor Computation
+// ============================================================================
+// Diagonal inertia tensors for simple shapes (uniform density assumed).
+
+Vec3 RigidBody::ComputeInertiaTensor(const Collider* collider, const Vec3& scale) const {
+    if (!collider || mass <= 0.0f) return Vec3(1, 1, 1);
+
+    f32 m = mass;
+
+    switch (collider->type) {
+        case ColliderType::Box: {
+            // Box: I = (m/12) * (h² + d², w² + d², w² + h²)
+            f32 w = 2.0f * collider->boxHalfExtents.x * scale.x;
+            f32 h = 2.0f * collider->boxHalfExtents.y * scale.y;
+            f32 d = 2.0f * collider->boxHalfExtents.z * scale.z;
+            f32 factor = m / 12.0f;
+            return Vec3(factor * (h*h + d*d),
+                        factor * (w*w + d*d),
+                        factor * (w*w + h*h));
+        }
+        case ColliderType::Sphere: {
+            // Solid sphere: I = (2/5) * m * r²
+            f32 r = collider->radius * scale.x;
+            f32 I = 0.4f * m * r * r;
+            return Vec3(I, I, I);
+        }
+        case ColliderType::Capsule: {
+            // Approximate as cylinder + hemisphere end caps
+            f32 r = collider->radius * scale.x;
+            f32 totalH = collider->capsuleHeight * scale.x;
+            f32 cylH = totalH - 2.0f * r;
+            if (cylH < 0) cylH = 0;
+            // Cylinder I_xx = I_zz = m*(3r² + h²)/12, I_yy = m*r²/2
+            f32 Ixx = m * (3.0f * r * r + cylH * cylH) / 12.0f;
+            f32 Iyy = m * r * r * 0.5f;
+            return Vec3(Ixx, Iyy, Ixx);
+        }
+        default:
+            return Vec3(m, m, m); // fallback: unit inertia
+    }
+}
+
+Vec3 RigidBody::GetInverseInertiaTensor(const Collider* collider, const Vec3& scale) const {
+    Vec3 I = ComputeInertiaTensor(collider, scale);
+    return Vec3(
+        (I.x > 1e-8f) ? (1.0f / I.x) : 0.0f,
+        (I.y > 1e-8f) ? (1.0f / I.y) : 0.0f,
+        (I.z > 1e-8f) ? (1.0f / I.z) : 0.0f
+    );
 }
 
 } // namespace gv

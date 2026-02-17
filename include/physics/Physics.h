@@ -66,6 +66,15 @@ public:
     void AddImpulse(const Vec3& impulse) {
         if (mass > 0.0f) velocity = velocity + impulse * (1.0f / mass);
     }
+    void AddAngularImpulse(const Vec3& impulse) {
+        angularVelocity = angularVelocity + impulse;
+    }
+
+    /// Compute the inertia tensor (diagonal approximation) based on the collider shape.
+    Vec3 ComputeInertiaTensor(const Collider* collider, const Vec3& scale) const;
+
+    /// Get the inverse inertia tensor (diagonal).
+    Vec3 GetInverseInertiaTensor(const Collider* collider, const Vec3& scale) const;
 
     std::string GetTypeName() const override { return "RigidBody"; }
 

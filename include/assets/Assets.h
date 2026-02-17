@@ -52,6 +52,17 @@ struct Vertex {
     Vec3 bitangent;  // for normal mapping (TBN matrix)
 };
 
+/// Extended vertex with bone influences for skeletal animation (GPU skinning).
+struct SkinnedVertex {
+    Vec3 position;
+    Vec3 normal;
+    Vec2 texCoord;
+    Vec3 tangent;
+    Vec3 bitangent;
+    i32  boneIDs[4]   = { -1, -1, -1, -1 };
+    f32  boneWeights[4] = { 0, 0, 0, 0 };
+};
+
 /// A mesh is a collection of vertices and indices uploaded to the GPU.
 class Mesh {
 public:
@@ -89,6 +100,48 @@ private:
     /// Internal OBJ file parser.
     bool LoadOBJ(const std::string& path);
 };
+
+// ============================================================================
+// Skinned Mesh (for GPU Skeletal Animation)
+// ============================================================================
+/// A mesh with bone weight data, uploaded to the GPU for hardware skinning.
+class SkinnedMesh {
+public:
+    SkinnedMesh() = default;
+    explicit SkinnedMesh(const std::string& name) : m_Name(name) {}
+
+    /// Build from raw skinned vertex/index data.
+    void Build(const std::vector<SkinnedVertex>& vertices, const std::vector<u32>& indices);
+
+    void Bind() const;
+    void Unbind() const;
+
+    u32 GetVertexCount() const { return static_cast<u32>(m_Vertices.size()); }
+    u32 GetIndexCount()  const { return static_cast<u32>(m_Indices.size()); }
+    const std::string& GetName() const { return m_Name; }
+
+private:
+    std::string              m_Name;
+    std::vector<SkinnedVertex> m_Vertices;
+    std::vector<u32>         m_Indices;
+    u32 m_VAO = 0, m_VBO = 0, m_EBO = 0;
+};
+
+// ============================================================================
+// Minimal glTF 2.0 Loader
+// ============================================================================
+/// Loads meshes and skeletal data from .gltf / .glb files.
+/// Provides a simplified interface — no external dependencies (Assimp-free).
+struct GLTFLoadResult {
+    std::vector<SkinnedVertex> vertices;
+    std::vector<u32>           indices;
+    bool                       hasBones = false;
+    // Bone data (names, hierarchy, inverse bind matrices) can be extracted
+    // into a Skeleton object externally.
+};
+
+/// Load geometry from a glTF/glb file. Returns true on success.
+bool LoadGLTF(const std::string& path, GLTFLoadResult& result);
 
 // ============================================================================
 // Material

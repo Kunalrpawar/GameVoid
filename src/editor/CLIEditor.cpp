@@ -4,6 +4,7 @@
 #include "editor/CLIEditor.h"
 #include "core/Scene.h"
 #include "core/GameObject.h"
+#include "core/SceneSerializer.h"
 #include "physics/Physics.h"
 #include "ai/AIManager.h"
 #include "scripting/ScriptEngine.h"
@@ -72,6 +73,10 @@ void CLIEditor::Init(Scene* scene, PhysicsWorld* physics, AIManager* ai,
         [this](Args a){ CmdCount(a); });
     RegisterCommand("rename",    "rename <old> <new>  — rename an object",
         [this](Args a){ CmdRename(a); });
+    RegisterCommand("save",      "save [file]  — save scene to disk (default: scene.gvs)",
+        [this](Args a){ CmdSave(a); });
+    RegisterCommand("load",      "load [file]  — load scene from disk (default: scene.gvs)",
+        [this](Args a){ CmdLoad(a); });
 
     GV_LOG_INFO("CLIEditor initialised — type 'help' for commands.");
 }
@@ -283,6 +288,24 @@ void CLIEditor::CmdRename(const std::vector<std::string>& args) {
     if (!obj) { std::cout << "Object '" << args[0] << "' not found.\n"; return; }
     obj->SetName(args[1]);
     std::cout << "Renamed to '" << args[1] << "'.\n";
+}
+
+void CLIEditor::CmdSave(const std::vector<std::string>& args) {
+    if (!m_Scene) { std::cout << "No active scene.\n"; return; }
+    std::string path = (args.size() >= 1) ? args[0] : "scene.gvs";
+    if (SceneSerializer::SaveScene(*m_Scene, path))
+        std::cout << "Scene saved to '" << path << "'.\n";
+    else
+        std::cout << "Failed to save scene to '" << path << "'.\n";
+}
+
+void CLIEditor::CmdLoad(const std::vector<std::string>& args) {
+    if (!m_Scene) { std::cout << "No active scene.\n"; return; }
+    std::string path = (args.size() >= 1) ? args[0] : "scene.gvs";
+    if (SceneSerializer::LoadScene(*m_Scene, path))
+        std::cout << "Scene loaded from '" << path << "'.\n";
+    else
+        std::cout << "Failed to load scene from '" << path << "'.\n";
 }
 
 } // namespace gv

@@ -11,6 +11,7 @@
 #include "renderer/MaterialComponent.h"
 #include "renderer/Frustum.h"
 #include "assets/Assets.h"
+#include "animation/SkeletalAnimation.h"
 #include "core/Scene.h"
 #include "core/GameObject.h"
 
@@ -71,6 +72,7 @@ bool OpenGLRenderer::Init(u32 width, u32 height, const std::string& title) {
         InitPostProcessing();
         InitScreenQuad();
         InitSpriteRenderer();
+        InitDeferredPipeline();
     }
 #endif
 
@@ -88,6 +90,7 @@ void OpenGLRenderer::Shutdown() {
     CleanupShadowMap();
     CleanupPostProcessing();
     CleanupSpriteRenderer();
+    CleanupDeferred();
 #endif
     m_Initialised = false;
     GV_LOG_INFO("OpenGLRenderer shut down.");
@@ -362,6 +365,101 @@ void OpenGLRenderer::RenderScene(Scene& scene, Camera& camera) {
     }
 
     glUseProgram(0);
+
+    // ── 4b. Draw skinned mesh objects (GPU bone animation) ─────────────────
+    if (m_SkinnedShader) {
+        glUseProgram(m_SkinnedShader);
+        glUniformMatrix4fv(glGetUniformLocation(m_SkinnedShader, "u_View"), 1, GL_FALSE, view.m);
+        glUniformMatrix4fv(glGetUniformLocation(m_SkinnedShader, "u_Proj"), 1, GL_FALSE, proj.m);
+        glUniform3f(glGetUniformLocation(m_SkinnedShader, "u_CamPos"), camPos.x, camPos.y, camPos.z);
+        glUniform1i(glGetUniformLocation(m_SkinnedShader, "u_LightingEnabled"), m_LightingEnabled ? 1 : 0);
+        glUniform3f(glGetUniformLocation(m_SkinnedShader, "u_LightDir"), lightDir.x, lightDir.y, lightDir.z);
+        glUniform3f(glGetUniformLocation(m_SkinnedShader, "u_LightColor"), lightColor.x, lightColor.y, lightColor.z);
+        glUniform3f(glGetUniformLocation(m_SkinnedShader, "u_AmbientColor"), ambientColor.x, ambientColor.y, ambientColor.z);
+        // Point lights
+        glUniform1i(glGetUniformLocation(m_SkinnedShader, "u_NumPointLights"), numPL);
+        for (i32 i = 0; i < numPL; ++i) {
+            std::string p = "u_PointLights[" + std::to_string(i) + "]";
+            glUniform3f(glGetUniformLocation(m_SkinnedShader, (p + ".position").c_str()),
+                        pointLights[i].position.x, pointLights[i].position.y, pointLights[i].position.z);
+            glUniform3f(glGetUniformLocation(m_SkinnedShader, (p + ".color").c_str()),
+                        pointLights[i].colour.x, pointLights[i].colour.y, pointLights[i].colour.z);
+            glUniform1f(glGetUniformLocation(m_SkinnedShader, (p + ".intensity").c_str()), pointLights[i].intensity);
+            glUniform1f(glGetUniformLocation(m_SkinnedShader, (p + ".constant").c_str()), pointLights[i].constant);
+            glUniform1f(glGetUniformLocation(m_SkinnedShader, (p + ".linear").c_str()), pointLights[i].linear);
+            glUniform1f(glGetUniformLocation(m_SkinnedShader, (p + ".quadratic").c_str()), pointLights[i].quadratic);
+            glUniform1f(glGetUniformLocation(m_SkinnedShader, (p + ".range").c_str()), pointLights[i].range);
+        }
+        // Spot lights
+        glUniform1i(glGetUniformLocation(m_SkinnedShader, "u_NumSpotLights"), numSL);
+        for (i32 i = 0; i < numSL; ++i) {
+            std::string p = "u_SpotLights[" + std::to_string(i) + "]";
+            glUniform3f(glGetUniformLocation(m_SkinnedShader, (p + ".position").c_str()),
+                        spotLights[i].position.x, spotLights[i].position.y, spotLights[i].position.z);
+            glUniform3f(glGetUniformLocation(m_SkinnedShader, (p + ".direction").c_str()),
+                        spotLights[i].direction.x, spotLights[i].direction.y, spotLights[i].direction.z);
+            glUniform3f(glGetUniformLocation(m_SkinnedShader, (p + ".color").c_str()),
+                        spotLights[i].colour.x, spotLights[i].colour.y, spotLights[i].colour.z);
+            glUniform1f(glGetUniformLocation(m_SkinnedShader, (p + ".intensity").c_str()), spotLights[i].intensity);
+            glUniform1f(glGetUniformLocation(m_SkinnedShader, (p + ".innerCos").c_str()), spotLights[i].innerCos);
+            glUniform1f(glGetUniformLocation(m_SkinnedShader, (p + ".outerCos").c_str()), spotLights[i].outerCos);
+        }
+        // Shadow map
+        if (m_ShadowsEnabled && m_ShadowMap) {
+            glActiveTexture(GL_TEXTURE0 + 5);
+            glBindTexture(GL_TEXTURE_2D, m_ShadowMap);
+            glUniform1i(glGetUniformLocation(m_SkinnedShader, "u_ShadowMap"), 5);
+            glUniformMatrix4fv(glGetUniformLocation(m_SkinnedShader, "u_LightSpaceMatrix"),
+                               1, GL_FALSE, m_LightSpaceMatrix.m);
+            glUniform1i(glGetUniformLocation(m_SkinnedShader, "u_ShadowsEnabled"), 1);
+        } else {
+            glUniform1i(glGetUniformLocation(m_SkinnedShader, "u_ShadowsEnabled"), 0);
+        }
+
+        GLint locSkModel = glGetUniformLocation(m_SkinnedShader, "u_Model");
+        GLint locSkColor = glGetUniformLocation(m_SkinnedShader, "u_Color");
+        GLint locSkHasBones = glGetUniformLocation(m_SkinnedShader, "u_HasBones");
+
+        for (auto& obj : scene.GetAllObjects()) {
+            if (!obj->IsActive()) continue;
+            auto* smr = obj->GetComponent<SkinnedMeshRenderer>();
+            if (!smr) continue;
+
+            Mat4 model = obj->GetTransform().GetModelMatrix();
+            glUniformMatrix4fv(locSkModel, 1, GL_FALSE, model.m);
+            glUniform4f(locSkColor, smr->color.x, smr->color.y, smr->color.z, smr->color.w);
+            glUniform1f(glGetUniformLocation(m_SkinnedShader, "u_Metallic"), 0.0f);
+            glUniform1f(glGetUniformLocation(m_SkinnedShader, "u_Roughness"), 0.5f);
+            glUniform3f(glGetUniformLocation(m_SkinnedShader, "u_Emission"), 0, 0, 0);
+            glUniform1f(glGetUniformLocation(m_SkinnedShader, "u_AO"), 1.0f);
+            glUniform1i(glGetUniformLocation(m_SkinnedShader, "u_HasAlbedoMap"), 0);
+            glUniform1i(glGetUniformLocation(m_SkinnedShader, "u_HasNormalMap"), 0);
+
+            // Upload bone matrices
+            auto* animator = obj->GetComponent<SkeletalAnimator>();
+            if (animator && !animator->GetBoneMatrices().empty()) {
+                glUniform1i(locSkHasBones, 1);
+                const auto& bones = animator->GetBoneMatrices();
+                for (size_t bi = 0; bi < bones.size() && bi < 128; ++bi) {
+                    std::string uname = "u_BoneMatrices[" + std::to_string(bi) + "]";
+                    glUniformMatrix4fv(glGetUniformLocation(m_SkinnedShader, uname.c_str()),
+                                       1, GL_FALSE, bones[bi].m);
+                }
+            } else {
+                glUniform1i(locSkHasBones, 0);
+            }
+
+            // Draw — the SkinnedMeshRenderer doesn't have a mesh VAO built-in yet,
+            // so we render it as a cube placeholder if no custom skinned mesh is attached.
+            // Full skinned mesh rendering would use a SkinnedMesh VAO.
+            glBindVertexArray(m_CubeVAO);
+            glDrawElements(GL_TRIANGLES, m_CubeIndexCount, GL_UNSIGNED_INT, nullptr);
+            glBindVertexArray(0);
+
+            drawCount++;
+        }
+        glUseProgram(0);
+    }
 
     // ── 5. Flush debug draw ────────────────────────────────────────────────
     FlushDebugDraw(camera);
@@ -750,6 +848,72 @@ void OpenGLRenderer::InitSceneShader() {
     m_SceneShader = LinkProgram(vs, fs);
 
     GV_LOG_INFO("PBR scene shader compiled (Cook-Torrance BRDF).");
+
+    // Also compile the skinned shader
+    InitSkinnedShader();
+}
+
+// ============================================================================
+// GPU Skinning Shader — PBR vertex shader with bone matrix transforms
+// ============================================================================
+static const char* s_Skinned_VertSrc =
+    "#version 330 core\n"
+    "layout(location = 0) in vec3 aPos;\n"
+    "layout(location = 1) in vec3 aNormal;\n"
+    "layout(location = 2) in vec2 aTexCoord;\n"
+    "layout(location = 3) in vec3 aTangent;\n"
+    "layout(location = 4) in vec3 aBitangent;\n"
+    "layout(location = 5) in ivec4 aBoneIDs;\n"
+    "layout(location = 6) in vec4 aBoneWeights;\n"
+    "\n"
+    "uniform mat4 u_Model;\n"
+    "uniform mat4 u_View;\n"
+    "uniform mat4 u_Proj;\n"
+    "uniform mat4 u_LightSpaceMatrix;\n"
+    "\n"
+    "#define MAX_BONES 128\n"
+    "uniform mat4 u_BoneMatrices[MAX_BONES];\n"
+    "uniform int  u_HasBones;\n"
+    "\n"
+    "out vec3 vWorldPos;\n"
+    "out vec3 vNormal;\n"
+    "out vec2 vTexCoord;\n"
+    "out vec4 vLightSpacePos;\n"
+    "out mat3 vTBN;\n"
+    "\n"
+    "void main() {\n"
+    "    mat4 skinMatrix = mat4(1.0);\n"
+    "    if (u_HasBones != 0) {\n"
+    "        skinMatrix = mat4(0.0);\n"
+    "        for (int i = 0; i < 4; ++i) {\n"
+    "            if (aBoneIDs[i] >= 0 && aBoneIDs[i] < MAX_BONES) {\n"
+    "                skinMatrix += u_BoneMatrices[aBoneIDs[i]] * aBoneWeights[i];\n"
+    "            }\n"
+    "        }\n"
+    "    }\n"
+    "    vec4 skinnedPos = skinMatrix * vec4(aPos, 1.0);\n"
+    "    vec4 worldPos = u_Model * skinnedPos;\n"
+    "    gl_Position = u_Proj * u_View * worldPos;\n"
+    "    vWorldPos = worldPos.xyz;\n"
+    "    mat3 normalMat = mat3(u_Model) * mat3(skinMatrix);\n"
+    "    vNormal = normalize(normalMat * aNormal);\n"
+    "    vTexCoord = aTexCoord;\n"
+    "    vLightSpacePos = u_LightSpaceMatrix * worldPos;\n"
+    "    vec3 T = normalize(normalMat * aTangent);\n"
+    "    vec3 B = normalize(normalMat * aBitangent);\n"
+    "    vec3 N = vNormal;\n"
+    "    vTBN = mat3(T, B, N);\n"
+    "}\n";
+
+void OpenGLRenderer::InitSkinnedShader() {
+    if (!glCreateShader) return;
+
+    GLuint vs = CompileShaderStage(GL_VERTEX_SHADER, s_Skinned_VertSrc);
+    // Uses the same PBR fragment shader as the standard scene shader
+    GLuint fs = CompileShaderStage(GL_FRAGMENT_SHADER, s_PBR_FragSrc);
+    m_SkinnedShader = LinkProgram(vs, fs);
+
+    GV_LOG_INFO("Skinned PBR shader compiled (GPU bone skinning, max 128 bones).");
 }
 
 // ============================================================================
@@ -1343,6 +1507,356 @@ void OpenGLRenderer::CleanupPostProcessing() {
 }
 
 // ============================================================================
+// Deferred Rendering + SSAO
+// ============================================================================
+
+// ── G-Buffer geometry pass fragment shader (MRT output) ────────────────────
+static const char* s_GeoPass_FragSrc =
+    "#version 330 core\n"
+    "in vec3 vWorldPos;\n"
+    "in vec3 vNormal;\n"
+    "in vec2 vTexCoord;\n"
+    "in vec4 vLightSpacePos;\n"
+    "in mat3 vTBN;\n"
+    "\n"
+    "layout(location = 0) out vec4 gPositionMetallic;\n"
+    "layout(location = 1) out vec4 gNormalRoughness;\n"
+    "layout(location = 2) out vec4 gAlbedoAO;\n"
+    "\n"
+    "uniform vec4 u_Color;\n"
+    "uniform float u_Metallic;\n"
+    "uniform float u_Roughness;\n"
+    "uniform float u_AO;\n"
+    "uniform sampler2D u_AlbedoMap;\n"
+    "uniform sampler2D u_NormalMap;\n"
+    "uniform int u_HasAlbedoMap;\n"
+    "uniform int u_HasNormalMap;\n"
+    "\n"
+    "void main() {\n"
+    "    vec3 albedo = u_Color.rgb;\n"
+    "    if (u_HasAlbedoMap != 0) albedo *= texture(u_AlbedoMap, vTexCoord).rgb;\n"
+    "    vec3 N = normalize(vNormal);\n"
+    "    if (u_HasNormalMap != 0) {\n"
+    "        vec3 tn = texture(u_NormalMap, vTexCoord).xyz * 2.0 - 1.0;\n"
+    "        N = normalize(vTBN * tn);\n"
+    "    }\n"
+    "    gPositionMetallic = vec4(vWorldPos, u_Metallic);\n"
+    "    gNormalRoughness  = vec4(N, u_Roughness);\n"
+    "    gAlbedoAO         = vec4(albedo, u_AO);\n"
+    "}\n";
+
+// ── Deferred lighting pass — reads G-buffer, computes full PBR ─────────────
+static const char* s_DeferredLight_FragSrc =
+    "#version 330 core\n"
+    "in vec2 vTexCoord;\n"
+    "out vec4 FragColor;\n"
+    "\n"
+    "uniform sampler2D gPosition;\n"
+    "uniform sampler2D gNormal;\n"
+    "uniform sampler2D gAlbedoAO;\n"
+    "uniform sampler2D u_SSAOTex;\n"
+    "uniform int u_SSAOEnabled;\n"
+    "\n"
+    "uniform vec3 u_LightDir;\n"
+    "uniform vec3 u_LightColor;\n"
+    "uniform vec3 u_AmbientColor;\n"
+    "uniform vec3 u_CamPos;\n"
+    "\n"
+    "struct PointLight { vec3 position; vec3 color;\n"
+    "    float intensity, constant, linear, quadratic, range; };\n"
+    "#define MAX_POINT_LIGHTS 8\n"
+    "uniform PointLight u_PointLights[MAX_POINT_LIGHTS];\n"
+    "uniform int u_NumPointLights;\n"
+    "\n"
+    "struct SpotLight { vec3 position; vec3 direction; vec3 color;\n"
+    "    float intensity, innerCos, outerCos; };\n"
+    "#define MAX_SPOT_LIGHTS 4\n"
+    "uniform SpotLight u_SpotLights[MAX_SPOT_LIGHTS];\n"
+    "uniform int u_NumSpotLights;\n"
+    "\n"
+    "uniform sampler2D u_ShadowMap;\n"
+    "uniform mat4 u_LightSpaceMatrix;\n"
+    "uniform int u_ShadowsEnabled;\n"
+    "\n"
+    "const float PI = 3.14159265359;\n"
+    "\n"
+    "float DistributionGGX(vec3 N, vec3 H, float r) {\n"
+    "    float a=r*r; float a2=a*a;\n"
+    "    float d=max(dot(N,H),0.0); d=d*d*(a2-1.0)+1.0;\n"
+    "    return a2/(PI*d*d+0.0001);\n"
+    "}\n"
+    "float GeomSchlick(float NdV, float r) {\n"
+    "    float k=((r+1.0)*(r+1.0))/8.0;\n"
+    "    return NdV/(NdV*(1.0-k)+k);\n"
+    "}\n"
+    "float GeomSmith(vec3 N, vec3 V, vec3 L, float r) {\n"
+    "    return GeomSchlick(max(dot(N,V),0.0),r)*GeomSchlick(max(dot(N,L),0.0),r);\n"
+    "}\n"
+    "vec3 FresnelSchlick(float c, vec3 F0) {\n"
+    "    return F0+(1.0-F0)*pow(clamp(1.0-c,0.0,1.0),5.0);\n"
+    "}\n"
+    "float ShadowCalc(vec4 ls, vec3 N, vec3 L) {\n"
+    "    vec3 p=ls.xyz/ls.w; p=p*0.5+0.5;\n"
+    "    if(p.z>1.0) return 0.0;\n"
+    "    float bias=max(0.005*(1.0-dot(N,L)),0.001);\n"
+    "    float s=0.0; vec2 ts=1.0/textureSize(u_ShadowMap,0);\n"
+    "    for(int x=-1;x<=1;++x) for(int y=-1;y<=1;++y)\n"
+    "        s+=p.z-bias>texture(u_ShadowMap,p.xy+vec2(x,y)*ts).r?1.0:0.0;\n"
+    "    return s/9.0;\n"
+    "}\n"
+    "vec3 CookTorrance(vec3 N,vec3 V,vec3 L,vec3 lc,vec3 a,float m,float r){\n"
+    "    vec3 H=normalize(V+L); vec3 F0=mix(vec3(0.04),a,m);\n"
+    "    float NDF=DistributionGGX(N,H,r); float G=GeomSmith(N,V,L,r);\n"
+    "    vec3 F=FresnelSchlick(max(dot(H,V),0.0),F0);\n"
+    "    vec3 spec=NDF*G*F/(4.0*max(dot(N,V),0.0)*max(dot(N,L),0.0)+0.0001);\n"
+    "    vec3 kD=(1.0-F)*(1.0-m);\n"
+    "    return (kD*a/PI+spec)*lc*max(dot(N,L),0.0);\n"
+    "}\n"
+    "\n"
+    "void main() {\n"
+    "    vec4 posM  = texture(gPosition, vTexCoord);\n"
+    "    vec4 norR  = texture(gNormal,   vTexCoord);\n"
+    "    vec4 albAO = texture(gAlbedoAO, vTexCoord);\n"
+    "    if (length(norR.xyz) < 0.01) discard;\n"
+    "    vec3 wp = posM.xyz; float met = posM.w;\n"
+    "    vec3 N  = normalize(norR.xyz); float rough = max(norR.w, 0.04);\n"
+    "    vec3 alb = albAO.rgb; float ao = albAO.a;\n"
+    "    if (u_SSAOEnabled != 0) ao *= texture(u_SSAOTex, vTexCoord).r;\n"
+    "    vec3 V = normalize(u_CamPos - wp);\n"
+    "    vec3 L = normalize(u_LightDir);\n"
+    "    vec3 Lo = CookTorrance(N,V,L,u_LightColor,alb,met,rough);\n"
+    "    if (u_ShadowsEnabled!=0) {\n"
+    "        vec4 ls = u_LightSpaceMatrix * vec4(wp,1.0);\n"
+    "        Lo *= (1.0 - ShadowCalc(ls,N,L));\n"
+    "    }\n"
+    "    for(int i=0;i<u_NumPointLights;++i){\n"
+    "        vec3 pL=u_PointLights[i].position-wp; float d=length(pL);\n"
+    "        if(d>u_PointLights[i].range) continue; pL=normalize(pL);\n"
+    "        float at=u_PointLights[i].intensity/(u_PointLights[i].constant+\n"
+    "            u_PointLights[i].linear*d+u_PointLights[i].quadratic*d*d);\n"
+    "        Lo+=CookTorrance(N,V,pL,u_PointLights[i].color*at,alb,met,rough);\n"
+    "    }\n"
+    "    for(int i=0;i<u_NumSpotLights;++i){\n"
+    "        vec3 sL=normalize(u_SpotLights[i].position-wp);\n"
+    "        float th=dot(sL,normalize(-u_SpotLights[i].direction));\n"
+    "        float ep=u_SpotLights[i].innerCos-u_SpotLights[i].outerCos;\n"
+    "        float si=clamp((th-u_SpotLights[i].outerCos)/ep,0.0,1.0);\n"
+    "        if(si>0.0){\n"
+    "            float d=length(u_SpotLights[i].position-wp);\n"
+    "            float at=u_SpotLights[i].intensity/(1.0+0.09*d+0.032*d*d);\n"
+    "            Lo+=CookTorrance(N,V,sL,u_SpotLights[i].color*at*si,alb,met,rough);\n"
+    "        }\n"
+    "    }\n"
+    "    vec3 F0=mix(vec3(0.04),alb,met);\n"
+    "    vec3 kS=FresnelSchlick(max(dot(N,V),0.0),F0);\n"
+    "    vec3 kD=(1.0-kS)*(1.0-met);\n"
+    "    vec3 amb=kD*alb*u_AmbientColor*ao;\n"
+    "    FragColor=vec4(amb+Lo,1.0);\n"
+    "}\n";
+
+// ── SSAO fragment shader ───────────────────────────────────────────────────
+static const char* s_SSAO_FragSrc =
+    "#version 330 core\n"
+    "in vec2 vTexCoord;\n"
+    "out float FragColor;\n"
+    "\n"
+    "uniform sampler2D gPosition;\n"
+    "uniform sampler2D gNormal;\n"
+    "uniform sampler2D u_NoiseTex;\n"
+    "uniform vec3 u_Samples[64];\n"
+    "uniform mat4 u_View;\n"
+    "uniform mat4 u_Projection;\n"
+    "uniform vec2 u_NoiseScale;\n"
+    "\n"
+    "void main() {\n"
+    "    vec3 wn = texture(gNormal, vTexCoord).xyz;\n"
+    "    if (length(wn) < 0.01) { FragColor = 1.0; return; }\n"
+    "    vec3 fragPos = (u_View * vec4(texture(gPosition, vTexCoord).xyz, 1.0)).xyz;\n"
+    "    vec3 normal  = normalize(mat3(u_View) * wn);\n"
+    "    vec3 rndVec  = texture(u_NoiseTex, vTexCoord * u_NoiseScale).xyz;\n"
+    "    vec3 T = normalize(rndVec - normal * dot(rndVec, normal));\n"
+    "    vec3 B = cross(normal, T);\n"
+    "    mat3 TBN = mat3(T, B, normal);\n"
+    "    float occ = 0.0;\n"
+    "    float radius = 0.5;\n"
+    "    float bias = 0.025;\n"
+    "    for (int i = 0; i < 64; ++i) {\n"
+    "        vec3 sp = fragPos + TBN * u_Samples[i] * radius;\n"
+    "        vec4 off = u_Projection * vec4(sp, 1.0);\n"
+    "        off.xy /= off.w;\n"
+    "        off.xy = off.xy * 0.5 + 0.5;\n"
+    "        float sd = (u_View * vec4(texture(gPosition, clamp(off.xy,0.0,1.0)).xyz, 1.0)).z;\n"
+    "        float rc = smoothstep(0.0, 1.0, radius / abs(fragPos.z - sd));\n"
+    "        occ += (sd >= sp.z + bias ? 1.0 : 0.0) * rc;\n"
+    "    }\n"
+    "    FragColor = 1.0 - (occ / 64.0);\n"
+    "}\n";
+
+// ── SSAO blur fragment shader ──────────────────────────────────────────────
+static const char* s_SSAOBlur_FragSrc =
+    "#version 330 core\n"
+    "in vec2 vTexCoord;\n"
+    "out float FragColor;\n"
+    "uniform sampler2D u_SSAOInput;\n"
+    "void main() {\n"
+    "    vec2 ts = 1.0 / textureSize(u_SSAOInput, 0);\n"
+    "    float r = 0.0;\n"
+    "    for (int x = -2; x <= 2; ++x)\n"
+    "        for (int y = -2; y <= 2; ++y)\n"
+    "            r += texture(u_SSAOInput, vTexCoord + vec2(x,y)*ts).r;\n"
+    "    FragColor = r / 25.0;\n"
+    "}\n";
+
+// ── InitDeferredPipeline ───────────────────────────────────────────────────
+void OpenGLRenderer::InitDeferredPipeline() {
+    if (!glGenFramebuffers || !glCreateShader || !glDrawBuffers) return;
+
+    GLsizei w = static_cast<GLsizei>(m_Width);
+    GLsizei h = static_cast<GLsizei>(m_Height);
+
+    // ── G-Buffer FBO ───────────────────────────────────────────────────────
+    glGenFramebuffers(1, &m_GBufferFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_GBufferFBO);
+
+    // Position + metallic (RGBA16F)
+    glGenTextures(1, &m_GBufPosTex);
+    glBindTexture(GL_TEXTURE_2D, m_GBufPosTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_GBufPosTex, 0);
+
+    // Normal + roughness (RGBA16F)
+    glGenTextures(1, &m_GBufNormTex);
+    glBindTexture(GL_TEXTURE_2D, m_GBufNormTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, m_GBufNormTex, 0);
+
+    // Albedo + AO (RGBA8)
+    glGenTextures(1, &m_GBufAlbTex);
+    glBindTexture(GL_TEXTURE_2D, m_GBufAlbTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, GL_TEXTURE_2D, m_GBufAlbTex, 0);
+
+    GLenum drawBufs[] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2 };
+    glDrawBuffers(3, drawBufs);
+
+    // Depth renderbuffer
+    glGenRenderbuffers(1, &m_GBufDepthRBO);
+    glBindRenderbuffer(GL_RENDERBUFFER, m_GBufDepthRBO);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, m_GBufDepthRBO);
+
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        GV_LOG_ERROR("G-Buffer FBO incomplete!");
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    // ── SSAO FBOs ──────────────────────────────────────────────────────────
+    glGenFramebuffers(1, &m_SSAO_FBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_SSAO_FBO);
+    glGenTextures(1, &m_SSAO_Tex);
+    glBindTexture(GL_TEXTURE_2D, m_SSAO_Tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, w, h, 0, GL_RED, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_SSAO_Tex, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    glGenFramebuffers(1, &m_SSAO_BlurFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_SSAO_BlurFBO);
+    glGenTextures(1, &m_SSAO_BlurTex);
+    glBindTexture(GL_TEXTURE_2D, m_SSAO_BlurTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, w, h, 0, GL_RED, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_SSAO_BlurTex, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    // ── SSAO noise texture (4x4 random rotations) ──────────────────────────
+    float ssaoNoise[48];
+    for (int i = 0; i < 16; ++i) {
+        ssaoNoise[i*3+0] = static_cast<float>(((i*73+11)%97)) / 97.0f * 2.0f - 1.0f;
+        ssaoNoise[i*3+1] = static_cast<float>(((i*47+23)%89)) / 89.0f * 2.0f - 1.0f;
+        ssaoNoise[i*3+2] = 0.0f;
+    }
+    glGenTextures(1, &m_SSAO_NoiseTex);
+    glBindTexture(GL_TEXTURE_2D, m_SSAO_NoiseTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, 4, 4, 0, GL_RGB, GL_FLOAT, ssaoNoise);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
+    // ── Compile deferred shaders ───────────────────────────────────────────
+    GLuint geoVS = CompileShaderStage(GL_VERTEX_SHADER, s_PBR_VertSrc);
+    GLuint geoFS = CompileShaderStage(GL_FRAGMENT_SHADER, s_GeoPass_FragSrc);
+    m_GeoPassShader = LinkProgram(geoVS, geoFS);
+
+    GLuint dlVS = CompileShaderStage(GL_VERTEX_SHADER, s_ScreenQuadVert);
+    GLuint dlFS = CompileShaderStage(GL_FRAGMENT_SHADER, s_DeferredLight_FragSrc);
+    m_DeferredLightShader = LinkProgram(dlVS, dlFS);
+
+    GLuint ssaoVS = CompileShaderStage(GL_VERTEX_SHADER, s_ScreenQuadVert);
+    GLuint ssaoFS = CompileShaderStage(GL_FRAGMENT_SHADER, s_SSAO_FragSrc);
+    m_SSAOShader = LinkProgram(ssaoVS, ssaoFS);
+
+    // Upload SSAO hemisphere kernel (64 samples)
+    float ssaoKernel[192];
+    for (int i = 0; i < 64; ++i) {
+        float x = static_cast<float>(((i*17+31)*13)%200) / 100.0f - 1.0f;
+        float y = static_cast<float>(((i*37+ 7)*29)%200) / 100.0f - 1.0f;
+        float z = static_cast<float>(((i*53+43)%100))     / 100.0f;
+        float len = std::sqrt(x*x + y*y + z*z);
+        if (len > 0.001f) { x /= len; y /= len; z /= len; }
+        float scale = static_cast<float>(i) / 64.0f;
+        scale = 0.1f + scale * scale * 0.9f;
+        ssaoKernel[i*3+0] = x * scale;
+        ssaoKernel[i*3+1] = y * scale;
+        ssaoKernel[i*3+2] = z * scale;
+    }
+    glUseProgram(m_SSAOShader);
+    for (int i = 0; i < 64; ++i) {
+        std::string uname = "u_Samples[" + std::to_string(i) + "]";
+        glUniform3f(glGetUniformLocation(m_SSAOShader, uname.c_str()),
+                    ssaoKernel[i*3], ssaoKernel[i*3+1], ssaoKernel[i*3+2]);
+    }
+    glUseProgram(0);
+
+    GLuint blurVS = CompileShaderStage(GL_VERTEX_SHADER, s_ScreenQuadVert);
+    GLuint blurFS = CompileShaderStage(GL_FRAGMENT_SHADER, s_SSAOBlur_FragSrc);
+    m_SSAOBlurShader = LinkProgram(blurVS, blurFS);
+
+    GV_LOG_INFO("Deferred rendering pipeline initialised (G-Buffer + SSAO, 64 samples).");
+}
+
+void OpenGLRenderer::CleanupDeferred() {
+    if (m_GBufferFBO)          { glDeleteFramebuffers(1, &m_GBufferFBO);        m_GBufferFBO = 0; }
+    if (m_GBufPosTex)          { glDeleteTextures(1, &m_GBufPosTex);            m_GBufPosTex = 0; }
+    if (m_GBufNormTex)         { glDeleteTextures(1, &m_GBufNormTex);           m_GBufNormTex = 0; }
+    if (m_GBufAlbTex)          { glDeleteTextures(1, &m_GBufAlbTex);            m_GBufAlbTex = 0; }
+    if (m_GBufDepthRBO)        { glDeleteRenderbuffers(1, &m_GBufDepthRBO);     m_GBufDepthRBO = 0; }
+    if (m_GeoPassShader)       { glDeleteProgram(m_GeoPassShader);              m_GeoPassShader = 0; }
+    if (m_DeferredLightShader) { glDeleteProgram(m_DeferredLightShader);         m_DeferredLightShader = 0; }
+    if (m_SSAO_FBO)            { glDeleteFramebuffers(1, &m_SSAO_FBO);          m_SSAO_FBO = 0; }
+    if (m_SSAO_Tex)            { glDeleteTextures(1, &m_SSAO_Tex);              m_SSAO_Tex = 0; }
+    if (m_SSAO_BlurFBO)        { glDeleteFramebuffers(1, &m_SSAO_BlurFBO);      m_SSAO_BlurFBO = 0; }
+    if (m_SSAO_BlurTex)        { glDeleteTextures(1, &m_SSAO_BlurTex);          m_SSAO_BlurTex = 0; }
+    if (m_SSAO_NoiseTex)       { glDeleteTextures(1, &m_SSAO_NoiseTex);         m_SSAO_NoiseTex = 0; }
+    if (m_SSAOShader)          { glDeleteProgram(m_SSAOShader);                  m_SSAOShader = 0; }
+    if (m_SSAOBlurShader)      { glDeleteProgram(m_SSAOBlurShader);              m_SSAOBlurShader = 0; }
+}
+
+// ============================================================================
 // Sprite / 2D Rendering
 // ============================================================================
 static const char* s_SpriteVertSrc =
@@ -1564,6 +2078,9 @@ void OpenGLRenderer::CleanupScene() {
     if (m_PlaneVBO)    { glDeleteBuffers(1, &m_PlaneVBO);       m_PlaneVBO = 0; }
     if (m_PlaneEBO)    { glDeleteBuffers(1, &m_PlaneEBO);       m_PlaneEBO = 0; }
     if (m_SceneShader) { glDeleteProgram(m_SceneShader);        m_SceneShader = 0; }
+    if (m_SkinnedShader && m_SkinnedShader != m_SceneShader) {
+        glDeleteProgram(m_SkinnedShader); m_SkinnedShader = 0;
+    }
     if (m_SkyShader)   { glDeleteProgram(m_SkyShader);          m_SkyShader = 0; }
     if (m_SkyVAO)      { glDeleteVertexArrays(1, &m_SkyVAO);   m_SkyVAO = 0; }
     if (m_SkyVBO)      { glDeleteBuffers(1, &m_SkyVBO);         m_SkyVBO = 0; }

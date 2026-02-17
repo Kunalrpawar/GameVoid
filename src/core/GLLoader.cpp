@@ -83,6 +83,12 @@ PFN_glDrawElementsInstanced    glDrawElementsInstanced    = nullptr;
 // Texture parameter float
 PFN_glTexParameterfv           glTexParameterfv           = nullptr;
 
+// Integer vertex attributes (for bone IDs)
+PFN_glVertexAttribIPointer     glVertexAttribIPointer     = nullptr;
+
+// MRT draw buffers
+PFN_glDrawBuffers              glDrawBuffers              = nullptr;
+
 // ── Loader implementation ──────────────────────────────────────────────────
 
 #define GV_LOAD(name) \
@@ -163,6 +169,12 @@ bool gvLoadGL() {
     // Texture parameter float
     glTexParameterfv = (PFN_glTexParameterfv)glfwGetProcAddress("glTexParameterfv");
     // glTexParameterfv may not load on some drivers — not critical
+
+    // Integer vertex attributes (bone IDs for skinning)
+    glVertexAttribIPointer = (PFN_glVertexAttribIPointer)glfwGetProcAddress("glVertexAttribIPointer");
+
+    // MRT draw buffers (deferred rendering)
+    GV_LOAD(glDrawBuffers);
 
     return ok;
 }

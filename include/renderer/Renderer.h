@@ -167,6 +167,7 @@ private:
 
     // ── Scene-rendering resources (PBR) ────────────────────────────────────
     u32 m_SceneShader = 0;   // PBR shader program
+    u32 m_SkinnedShader = 0; // PBR shader with GPU bone skinning
 
     // Built-in primitives (triangle + cube + plane):
     u32 m_TriVAO = 0, m_TriVBO = 0;
@@ -236,11 +237,14 @@ private:
     i32 m_GridVertCount = 0;
 
     void InitSceneShader();
+    void InitSkinnedShader();
     void InitPrimitives();
     void InitSkybox();
     void InitLineShader();
     void InitGrid();
+    void InitDeferredPipeline();
     void CleanupScene();
+    void CleanupDeferred();
 
 public:
     // ── Additional rendering methods ───────────────────────────────────────
@@ -249,8 +253,36 @@ public:
     void RenderGizmo(Camera& camera, const Vec3& position, GizmoMode mode, i32 activeAxis = -1);
     void RenderHighlight(Camera& camera, const Mat4& model, PrimitiveType type);
 
+    // ── Deferred Rendering + SSAO ──────────────────────────────────────────
+    void SetDeferredEnabled(bool e) { m_DeferredEnabled = e; }
+    bool IsDeferredEnabled() const  { return m_DeferredEnabled; }
+    void SetSSAOEnabled(bool e)     { m_SSAOEnabled = e; }
+    bool IsSSAOEnabled() const      { return m_SSAOEnabled; }
+
     /// Get scene shader for external uniform uploads.
     u32 GetSceneShader() const { return m_SceneShader; }
+    u32 GetSkinnedShader() const { return m_SkinnedShader; }
+
+private:
+    // ── Deferred Rendering ─────────────────────────────────────────────────
+    bool m_DeferredEnabled = false;
+    bool m_SSAOEnabled     = false;
+    u32 m_GBufferFBO = 0;
+    u32 m_GBufPosTex  = 0;    // RGBA16F — world position + metallic
+    u32 m_GBufNormTex = 0;    // RGBA16F — world normal + roughness
+    u32 m_GBufAlbTex  = 0;    // RGBA8   — albedo.rgb + AO
+    u32 m_GBufDepthRBO = 0;
+    u32 m_GeoPassShader = 0;  // writes to G-buffer
+    u32 m_DeferredLightShader = 0; // reads G-buffer, computes PBR
+
+    // SSAO
+    u32 m_SSAO_FBO      = 0;
+    u32 m_SSAO_Tex      = 0;
+    u32 m_SSAO_BlurFBO  = 0;
+    u32 m_SSAO_BlurTex  = 0;
+    u32 m_SSAO_NoiseTex = 0;
+    u32 m_SSAOShader    = 0;
+    u32 m_SSAOBlurShader = 0;
 #endif
 };
 
