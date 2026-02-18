@@ -83,6 +83,20 @@ public:
     u32 GetIndexCount()  const { return static_cast<u32>(m_Indices.size()); }
     const std::string& GetName() const { return m_Name; }
 
+    /// Compute axis-aligned bounding box. Returns min and max corners.
+    void GetBounds(Vec3& outMin, Vec3& outMax) const {
+        if (m_Vertices.empty()) { outMin = outMax = Vec3(0,0,0); return; }
+        outMin = outMax = m_Vertices[0].position;
+        for (auto& v : m_Vertices) {
+            if (v.position.x < outMin.x) outMin.x = v.position.x;
+            if (v.position.y < outMin.y) outMin.y = v.position.y;
+            if (v.position.z < outMin.z) outMin.z = v.position.z;
+            if (v.position.x > outMax.x) outMax.x = v.position.x;
+            if (v.position.y > outMax.y) outMax.y = v.position.y;
+            if (v.position.z > outMax.z) outMax.z = v.position.z;
+        }
+    }
+
     // ── Built-in primitives (placeholder factories) ────────────────────────
     static Shared<Mesh> CreateCube();
     static Shared<Mesh> CreateSphere(u32 segments = 32, u32 rings = 16);

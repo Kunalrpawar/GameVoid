@@ -114,8 +114,36 @@ bool Mesh::LoadFromFile(const std::string& path) {
     if (ext == ".obj") {
         return LoadOBJ(path);
     }
-    // For .fbx, .gltf, .glb — would need Assimp or dedicated parsers
-    GV_LOG_WARN("Mesh::LoadFromFile — unsupported format: " + ext + " (only .obj supported)");
+    if (ext == ".gltf" || ext == ".glb") {
+        GLTFLoadResult gltfResult;
+        if (!LoadGLTF(path, gltfResult)) {
+            GV_LOG_WARN("Mesh::LoadFromFile — glTF/GLB load failed: " + path);
+            return false;
+        }
+        // Convert SkinnedVertex → Vertex
+        std::vector<Vertex> verts;
+        verts.reserve(gltfResult.vertices.size());
+        for (auto& sv : gltfResult.vertices) {
+            Vertex v;
+            v.position  = sv.position;
+            v.normal    = sv.normal;
+            v.texCoord  = sv.texCoord;
+            v.tangent   = sv.tangent;
+            v.bitangent = sv.bitangent;
+            verts.push_back(v);
+        }
+        // Compute tangents if not provided
+        for (size_t i = 0; i + 2 < verts.size(); i += 3) {
+            ComputeTangents(verts[i], verts[i + 1], verts[i + 2]);
+        }
+        m_Name = path;
+        Build(verts, gltfResult.indices);
+        GV_LOG_INFO("Mesh loaded from glTF: " + path + " (" +
+                    std::to_string(verts.size()) + " verts, " +
+                    std::to_string(gltfResult.indices.size() / 3) + " tris)");
+        return true;
+    }
+    GV_LOG_WARN("Mesh::LoadFromFile — unsupported format: " + ext + " (supported: .obj, .gltf, .glb)");
     return false;
 }
 
@@ -692,125 +720,432 @@ void SkinnedMesh::Unbind() const {
 }
 
 // ============================================================================
-// Minimal glTF 2.0 Loader
+// glTF 2.0 / GLB Loader
 // ============================================================================
-// Parses .gltf (JSON + separate .bin) files.
-// Extracts the first mesh primitive's position, normal, texcoord, and indices.
-// This is a minimal loader — full glTF features (scenes, materials,
-// animations, skins) can be added incrementally.
+// Supports both .gltf (JSON + .bin) and .glb (binary container) formats.
+// Parses accessors, buffer views, and mesh primitives to extract geometry.
+// ============================================================================
 
-#include <fstream>
-#include <sstream>
+// ── Tiny JSON helpers (no external dependency) ─────────────────────────────
 
-// Simple helper: find a JSON key and return its value as string
-static std::string JsonGetString(const std::string& json, const std::string& key) {
-    std::string search = "\"" + key + "\"";
-    size_t pos = json.find(search);
-    if (pos == std::string::npos) return "";
-    pos = json.find(':', pos);
-    if (pos == std::string::npos) return "";
-    pos = json.find('"', pos + 1);
-    if (pos == std::string::npos) return "";
-    size_t end = json.find('"', pos + 1);
-    return json.substr(pos + 1, end - pos - 1);
+// Skip whitespace
+static size_t JsonSkipWS(const std::string& s, size_t p) {
+    while (p < s.size() && (s[p]==' '||s[p]=='\t'||s[p]=='\n'||s[p]=='\r')) ++p;
+    return p;
 }
 
-static int JsonGetInt(const std::string& json, const std::string& key, int defaultVal = -1) {
-    std::string search = "\"" + key + "\"";
-    size_t pos = json.find(search);
-    if (pos == std::string::npos) return defaultVal;
-    pos = json.find(':', pos);
-    if (pos == std::string::npos) return defaultVal;
-    ++pos;
-    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t')) ++pos;
-    return std::atoi(json.c_str() + pos);
+// Parse a JSON number at position p, return value and advance p
+static double JsonParseNumber(const std::string& s, size_t& p) {
+    p = JsonSkipWS(s, p);
+    size_t start = p;
+    if (p < s.size() && (s[p]=='-'||s[p]=='+')) ++p;
+    while (p < s.size() && (std::isdigit((unsigned char)s[p])||s[p]=='.'||s[p]=='e'||s[p]=='E'||s[p]=='+'||s[p]=='-')) ++p;
+    return std::atof(s.substr(start, p - start).c_str());
 }
+
+// Parse a JSON string at position p (p should point to opening "), advance p past closing quote
+static std::string JsonParseString(const std::string& s, size_t& p) {
+    p = JsonSkipWS(s, p);
+    if (p >= s.size() || s[p] != '"') return "";
+    ++p;
+    std::string result;
+    while (p < s.size() && s[p] != '"') {
+        if (s[p] == '\\' && p + 1 < s.size()) { result += s[p+1]; p += 2; }
+        else { result += s[p]; ++p; }
+    }
+    if (p < s.size()) ++p;  // skip closing quote
+    return result;
+}
+
+// Find the value of a key in the current JSON object scope starting at `start`
+static size_t JsonFindKey(const std::string& s, size_t start, const std::string& key) {
+    std::string needle = "\"" + key + "\"";
+    size_t p = s.find(needle, start);
+    if (p == std::string::npos) return std::string::npos;
+    p += needle.size();
+    p = JsonSkipWS(s, p);
+    if (p < s.size() && s[p] == ':') ++p;
+    return JsonSkipWS(s, p);
+}
+
+// Find matching bracket/brace end starting at p (p points to '[' or '{')
+static size_t JsonFindMatchingEnd(const std::string& s, size_t p) {
+    if (p >= s.size()) return std::string::npos;
+    char open = s[p], close = (open == '[') ? ']' : '}';
+    int depth = 1;
+    ++p;
+    bool inStr = false;
+    while (p < s.size() && depth > 0) {
+        if (s[p] == '"' && (p == 0 || s[p-1] != '\\')) inStr = !inStr;
+        if (!inStr) {
+            if (s[p] == open) ++depth;
+            if (s[p] == close) --depth;
+        }
+        ++p;
+    }
+    return p;
+}
+
+// Extract the i-th element from a JSON array (0-indexed). Returns start..end range in the string.
+static bool JsonArrayElement(const std::string& s, size_t arrayStart, int index, size_t& elemStart, size_t& elemEnd) {
+    size_t p = JsonSkipWS(s, arrayStart);
+    if (p >= s.size() || s[p] != '[') return false;
+    ++p;
+    int cur = 0;
+    while (p < s.size() && s[p] != ']') {
+        p = JsonSkipWS(s, p);
+        size_t start = p;
+        // Find end of this element
+        if (s[p] == '{' || s[p] == '[') {
+            size_t end = JsonFindMatchingEnd(s, p);
+            if (cur == index) { elemStart = start; elemEnd = end; return true; }
+            p = end;
+        } else if (s[p] == '"') {
+            ++p;
+            while (p < s.size() && s[p] != '"') { if (s[p]=='\\') ++p; ++p; }
+            if (p < s.size()) ++p;
+            if (cur == index) { elemStart = start; elemEnd = p; return true; }
+        } else {
+            while (p < s.size() && s[p] != ',' && s[p] != ']' && s[p] != '}') ++p;
+            if (cur == index) { elemStart = start; elemEnd = p; return true; }
+        }
+        p = JsonSkipWS(s, p);
+        if (p < s.size() && s[p] == ',') ++p;
+        ++cur;
+    }
+    return false;
+}
+
+// Count elements in a JSON array
+static int JsonArrayCount(const std::string& s, size_t arrayStart) {
+    int count = 0;
+    size_t es, ee;
+    while (JsonArrayElement(s, arrayStart, count, es, ee)) ++count;
+    return count;
+}
+
+// Get an integer value from key in an object substring
+static int JsonObjGetInt(const std::string& s, size_t objStart, size_t objEnd, const std::string& key, int def = -1) {
+    std::string sub = s.substr(objStart, objEnd - objStart);
+    size_t p = JsonFindKey(sub, 0, key);
+    if (p == std::string::npos) return def;
+    return static_cast<int>(JsonParseNumber(sub, p));
+}
+
+static std::string JsonObjGetString(const std::string& s, size_t objStart, size_t objEnd, const std::string& key) {
+    std::string sub = s.substr(objStart, objEnd - objStart);
+    size_t p = JsonFindKey(sub, 0, key);
+    if (p == std::string::npos) return "";
+    return JsonParseString(sub, p);
+}
+
+// ── Accessor info struct ───────────────────────────────────────────────────
+struct GltfAccessor {
+    int bufferView   = -1;
+    int byteOffset   = 0;
+    int componentType = 0;   // 5120=byte, 5121=ubyte, 5122=short, 5123=ushort, 5125=uint, 5126=float
+    int count        = 0;
+    std::string type;        // "SCALAR", "VEC2", "VEC3", "VEC4", "MAT4"
+};
+
+struct GltfBufferView {
+    int buffer     = 0;
+    int byteOffset = 0;
+    int byteLength = 0;
+    int byteStride = 0;
+};
 
 bool LoadGLTF(const std::string& path, GLTFLoadResult& result) {
-    // This minimal loader handles basic triangle meshes from .gltf files.
-    // It reads the JSON and extracts vertex positions, normals, texcoords, and indices
-    // from the first mesh primitive. Full skin/joint loading is deferred to
-    // SkeletalAnimation integration.
+    std::string json;
+    std::vector<u8> binData;
 
-    std::ifstream file(path);
-    if (!file.is_open()) {
-        GV_LOG_ERROR("glTF loader — cannot open: " + path);
-        return false;
-    }
+    // ── Detect .glb vs .gltf ───────────────────────────────────────────────
+    std::string ext = path.substr(path.rfind('.'));
+    for (auto& c : ext) c = static_cast<char>(std::tolower((unsigned char)c));
 
-    std::stringstream ss;
-    ss << file.rdbuf();
-    std::string json = ss.str();
-    file.close();
+    if (ext == ".glb") {
+        // ── GLB binary container ────────────────────────────────────────────
+        // Format: 12-byte header + chunk0 (JSON) + chunk1 (BIN)
+        std::ifstream file(path, std::ios::binary);
+        if (!file.is_open()) {
+            GV_LOG_ERROR("GLB loader — cannot open: " + path);
+            return false;
+        }
+        std::vector<u8> fileData((std::istreambuf_iterator<char>(file)),
+                                 std::istreambuf_iterator<char>());
+        file.close();
 
-    // Find the .bin buffer URI
-    std::string bufferUri = JsonGetString(json, "uri");
-    if (bufferUri.empty()) {
-        GV_LOG_WARN("glTF loader — no buffer URI found (embedded .glb not yet supported): " + path);
-        // Still return true with empty mesh data so the engine doesn't crash
-        return false;
-    }
+        if (fileData.size() < 12) {
+            GV_LOG_ERROR("GLB loader — file too small: " + path);
+            return false;
+        }
 
-    // Resolve buffer path relative to .gltf file
-    std::string dir = path;
-    size_t lastSlash = dir.find_last_of("/\\");
-    if (lastSlash != std::string::npos) dir = dir.substr(0, lastSlash + 1);
-    else dir = "";
-    std::string binPath = dir + bufferUri;
+        // Header: magic(4) + version(4) + length(4)
+        u32 magic   = *reinterpret_cast<u32*>(&fileData[0]);
+        u32 version = *reinterpret_cast<u32*>(&fileData[4]);
+        // u32 totalLen = *reinterpret_cast<u32*>(&fileData[8]);
+        (void)version;
 
-    // Load binary buffer
-    std::ifstream binFile(binPath, std::ios::binary);
-    if (!binFile.is_open()) {
-        GV_LOG_ERROR("glTF loader — cannot open binary buffer: " + binPath);
-        return false;
-    }
-    std::vector<u8> binData((std::istreambuf_iterator<char>(binFile)),
-                             std::istreambuf_iterator<char>());
-    binFile.close();
+        if (magic != 0x46546C67) {  // "glTF" in little-endian
+            GV_LOG_ERROR("GLB loader — invalid magic number: " + path);
+            return false;
+        }
 
-    GV_LOG_INFO("glTF loader — loaded buffer '" + bufferUri + "' (" +
-                std::to_string(binData.size()) + " bytes).");
+        // Parse chunks
+        size_t offset = 12;
+        while (offset + 8 <= fileData.size()) {
+            u32 chunkLen  = *reinterpret_cast<u32*>(&fileData[offset]);
+            u32 chunkType = *reinterpret_cast<u32*>(&fileData[offset + 4]);
+            offset += 8;
 
-    // For a minimal implementation, we parse the accessor/bufferView data manually.
-    // This gives us basic mesh loading capability. The mesh is returned as SkinnedVertex
-    // (with zero bone weights) so it can be used with either the standard or skinned shader.
+            if (offset + chunkLen > fileData.size()) break;
 
-    // Parse accessors to find POSITION, NORMAL, TEXCOORD_0, and indices
-    // (Full JSON parsing is complex — we use a pattern-matching approach for the first primitive)
+            if (chunkType == 0x4E4F534A) {  // "JSON"
+                json.assign(reinterpret_cast<char*>(&fileData[offset]), chunkLen);
+            } else if (chunkType == 0x004E4942) {  // "BIN\0"
+                binData.assign(fileData.begin() + offset, fileData.begin() + offset + chunkLen);
+            }
+            offset += chunkLen;
+        }
 
-    // Extract count from first accessor (positions typically)
-    int vertexCount = JsonGetInt(json, "count", 0);
+        if (json.empty()) {
+            GV_LOG_ERROR("GLB loader — no JSON chunk found: " + path);
+            return false;
+        }
+        GV_LOG_INFO("GLB loader — parsed " + std::to_string(json.size()) + " bytes JSON, " +
+                    std::to_string(binData.size()) + " bytes BIN from: " + path);
+    } else {
+        // ── .gltf (JSON + external .bin) ────────────────────────────────────
+        std::ifstream file(path);
+        if (!file.is_open()) {
+            GV_LOG_ERROR("glTF loader — cannot open: " + path);
+            return false;
+        }
+        std::stringstream ss;
+        ss << file.rdbuf();
+        json = ss.str();
+        file.close();
 
-    if (vertexCount <= 0) {
-        GV_LOG_WARN("glTF loader — no vertices found in: " + path);
-        return false;
-    }
+        // Find buffer URI
+        size_t buffersPos = JsonFindKey(json, 0, "buffers");
+        if (buffersPos != std::string::npos) {
+            size_t es, ee;
+            if (JsonArrayElement(json, buffersPos, 0, es, ee)) {
+                std::string uri = JsonObjGetString(json, es, ee, "uri");
+                if (!uri.empty()) {
+                    std::string dir = path;
+                    size_t sl = dir.find_last_of("/\\");
+                    dir = (sl != std::string::npos) ? dir.substr(0, sl + 1) : "";
+                    std::string binPath = dir + uri;
 
-    // For basic support, create a simple mesh from the binary data
-    // Assume standard glTF layout: positions at bufferView 0, normals at 1, texcoords at 2, indices at 3
-    // This is a simplified approach — a full implementation would parse all accessors properly
-
-    result.vertices.resize(vertexCount);
-    result.hasBones = false;
-
-    // Read positions (typically 3 floats per vertex)
-    if (binData.size() >= static_cast<size_t>(vertexCount) * 3 * sizeof(float)) {
-        const float* posData = reinterpret_cast<const float*>(binData.data());
-        for (int i = 0; i < vertexCount; ++i) {
-            result.vertices[i].position = Vec3(posData[i*3], posData[i*3+1], posData[i*3+2]);
-            result.vertices[i].normal = Vec3(0, 1, 0);   // default normal
-            result.vertices[i].texCoord = Vec2(0, 0);
+                    std::ifstream binFile(binPath, std::ios::binary);
+                    if (binFile.is_open()) {
+                        binData.assign((std::istreambuf_iterator<char>(binFile)),
+                                        std::istreambuf_iterator<char>());
+                        binFile.close();
+                        GV_LOG_INFO("glTF loader — loaded buffer: " + binPath +
+                                    " (" + std::to_string(binData.size()) + " bytes)");
+                    } else {
+                        GV_LOG_ERROR("glTF loader — cannot open buffer: " + binPath);
+                        return false;
+                    }
+                }
+            }
         }
     }
 
-    // Generate simple triangle indices if none are specified
-    if (result.indices.empty()) {
+    if (binData.empty()) {
+        GV_LOG_ERROR("glTF loader — no binary data found: " + path);
+        return false;
+    }
+
+    // ── Parse buffer views ──────────────────────────────────────────────────
+    std::vector<GltfBufferView> bufferViews;
+    {
+        size_t bvPos = JsonFindKey(json, 0, "bufferViews");
+        if (bvPos != std::string::npos) {
+            int count = JsonArrayCount(json, bvPos);
+            for (int i = 0; i < count; ++i) {
+                size_t es, ee;
+                if (!JsonArrayElement(json, bvPos, i, es, ee)) break;
+                GltfBufferView bv;
+                bv.buffer     = JsonObjGetInt(json, es, ee, "buffer", 0);
+                bv.byteOffset = JsonObjGetInt(json, es, ee, "byteOffset", 0);
+                bv.byteLength = JsonObjGetInt(json, es, ee, "byteLength", 0);
+                bv.byteStride = JsonObjGetInt(json, es, ee, "byteStride", 0);
+                bufferViews.push_back(bv);
+            }
+        }
+    }
+
+    // ── Parse accessors ─────────────────────────────────────────────────────
+    std::vector<GltfAccessor> accessors;
+    {
+        size_t accPos = JsonFindKey(json, 0, "accessors");
+        if (accPos != std::string::npos) {
+            int count = JsonArrayCount(json, accPos);
+            for (int i = 0; i < count; ++i) {
+                size_t es, ee;
+                if (!JsonArrayElement(json, accPos, i, es, ee)) break;
+                GltfAccessor acc;
+                acc.bufferView    = JsonObjGetInt(json, es, ee, "bufferView", -1);
+                acc.byteOffset    = JsonObjGetInt(json, es, ee, "byteOffset", 0);
+                acc.componentType = JsonObjGetInt(json, es, ee, "componentType", 5126);
+                acc.count         = JsonObjGetInt(json, es, ee, "count", 0);
+                acc.type          = JsonObjGetString(json, es, ee, "type");
+                accessors.push_back(acc);
+            }
+        }
+    }
+
+    // ── Helper: read accessor data from buffer ──────────────────────────────
+    auto getAccessorData = [&](int accIdx) -> const u8* {
+        if (accIdx < 0 || accIdx >= static_cast<int>(accessors.size())) return nullptr;
+        auto& acc = accessors[accIdx];
+        if (acc.bufferView < 0 || acc.bufferView >= static_cast<int>(bufferViews.size())) return nullptr;
+        auto& bv = bufferViews[acc.bufferView];
+        size_t offset = static_cast<size_t>(bv.byteOffset) + static_cast<size_t>(acc.byteOffset);
+        if (offset >= binData.size()) return nullptr;
+        return &binData[offset];
+    };
+
+    // ── Parse meshes — extract first primitive ──────────────────────────────
+    size_t meshesPos = JsonFindKey(json, 0, "meshes");
+    if (meshesPos == std::string::npos) {
+        GV_LOG_WARN("glTF loader — no meshes found: " + path);
+        return false;
+    }
+
+    size_t meshEs, meshEe;
+    if (!JsonArrayElement(json, meshesPos, 0, meshEs, meshEe)) {
+        GV_LOG_WARN("glTF loader — empty meshes array: " + path);
+        return false;
+    }
+
+    // Find "primitives" array in the first mesh
+    size_t primPos = JsonFindKey(json, meshEs, "primitives");
+    if (primPos == std::string::npos || primPos >= meshEe) {
+        GV_LOG_WARN("glTF loader — no primitives in mesh: " + path);
+        return false;
+    }
+
+    size_t primEs, primEe;
+    if (!JsonArrayElement(json, primPos, 0, primEs, primEe)) {
+        GV_LOG_WARN("glTF loader — empty primitives: " + path);
+        return false;
+    }
+
+    // Find attribute accessors
+    size_t attrPos = JsonFindKey(json, primEs, "attributes");
+    int posAccIdx   = -1;
+    int normAccIdx  = -1;
+    int uvAccIdx    = -1;
+    int idxAccIdx   = -1;
+
+    if (attrPos != std::string::npos && attrPos < primEe) {
+        size_t attrEnd = JsonFindMatchingEnd(json, attrPos);
+        posAccIdx  = JsonObjGetInt(json, attrPos, attrEnd, "POSITION", -1);
+        normAccIdx = JsonObjGetInt(json, attrPos, attrEnd, "NORMAL", -1);
+        uvAccIdx   = JsonObjGetInt(json, attrPos, attrEnd, "TEXCOORD_0", -1);
+    }
+    idxAccIdx = JsonObjGetInt(json, primEs, primEe, "indices", -1);
+
+    // ── Read position data ──────────────────────────────────────────────────
+    if (posAccIdx < 0 || posAccIdx >= static_cast<int>(accessors.size())) {
+        GV_LOG_WARN("glTF loader — no POSITION accessor: " + path);
+        return false;
+    }
+
+    int vertexCount = accessors[posAccIdx].count;
+    result.vertices.resize(vertexCount);
+    result.hasBones = false;
+
+    const u8* posPtr = getAccessorData(posAccIdx);
+    if (posPtr) {
+        auto& bv = bufferViews[accessors[posAccIdx].bufferView];
+        int stride = (bv.byteStride > 0) ? bv.byteStride : static_cast<int>(3 * sizeof(float));
+        for (int i = 0; i < vertexCount; ++i) {
+            const float* fp = reinterpret_cast<const float*>(posPtr + i * stride);
+            result.vertices[i].position = Vec3(fp[0], fp[1], fp[2]);
+        }
+    }
+
+    // ── Read normals ────────────────────────────────────────────────────────
+    if (normAccIdx >= 0 && normAccIdx < static_cast<int>(accessors.size())) {
+        const u8* normPtr = getAccessorData(normAccIdx);
+        if (normPtr) {
+            auto& bv = bufferViews[accessors[normAccIdx].bufferView];
+            int stride = (bv.byteStride > 0) ? bv.byteStride : static_cast<int>(3 * sizeof(float));
+            for (int i = 0; i < vertexCount; ++i) {
+                const float* fp = reinterpret_cast<const float*>(normPtr + i * stride);
+                result.vertices[i].normal = Vec3(fp[0], fp[1], fp[2]);
+            }
+        }
+    } else {
+        for (int i = 0; i < vertexCount; ++i)
+            result.vertices[i].normal = Vec3(0, 1, 0);
+    }
+
+    // ── Read texcoords ──────────────────────────────────────────────────────
+    if (uvAccIdx >= 0 && uvAccIdx < static_cast<int>(accessors.size())) {
+        const u8* uvPtr = getAccessorData(uvAccIdx);
+        if (uvPtr) {
+            auto& bv = bufferViews[accessors[uvAccIdx].bufferView];
+            int stride = (bv.byteStride > 0) ? bv.byteStride : static_cast<int>(2 * sizeof(float));
+            for (int i = 0; i < vertexCount; ++i) {
+                const float* fp = reinterpret_cast<const float*>(uvPtr + i * stride);
+                result.vertices[i].texCoord = Vec2(fp[0], fp[1]);
+            }
+        }
+    }
+
+    // ── Read indices ────────────────────────────────────────────────────────
+    if (idxAccIdx >= 0 && idxAccIdx < static_cast<int>(accessors.size())) {
+        auto& idxAcc = accessors[idxAccIdx];
+        const u8* idxPtr = getAccessorData(idxAccIdx);
+        if (idxPtr) {
+            result.indices.reserve(idxAcc.count);
+            for (int i = 0; i < idxAcc.count; ++i) {
+                u32 idx = 0;
+                switch (idxAcc.componentType) {
+                    case 5121: // UNSIGNED_BYTE
+                        idx = static_cast<u32>(idxPtr[i]);
+                        break;
+                    case 5123: // UNSIGNED_SHORT
+                        idx = static_cast<u32>(reinterpret_cast<const u16*>(idxPtr)[i]);
+                        break;
+                    case 5125: // UNSIGNED_INT
+                        idx = reinterpret_cast<const u32*>(idxPtr)[i];
+                        break;
+                    default:
+                        idx = static_cast<u32>(i);
+                        break;
+                }
+                result.indices.push_back(idx);
+            }
+        }
+    } else {
+        // No indices — generate sequential
         for (int i = 0; i < vertexCount; ++i)
             result.indices.push_back(static_cast<u32>(i));
     }
 
+    // Compute normals if not provided
+    if (normAccIdx < 0) {
+        for (size_t i = 0; i + 2 < result.indices.size(); i += 3) {
+            u32 i0 = result.indices[i], i1 = result.indices[i+1], i2 = result.indices[i+2];
+            if (i0 < result.vertices.size() && i1 < result.vertices.size() && i2 < result.vertices.size()) {
+                Vec3 e1 = result.vertices[i1].position - result.vertices[i0].position;
+                Vec3 e2 = result.vertices[i2].position - result.vertices[i0].position;
+                Vec3 n = e1.Cross(e2).Normalized();
+                result.vertices[i0].normal = result.vertices[i1].normal = result.vertices[i2].normal = n;
+            }
+        }
+    }
+
     GV_LOG_INFO("glTF loader — loaded " + std::to_string(vertexCount) +
-                " vertices from: " + path);
+                " vertices, " + std::to_string(result.indices.size() / 3) +
+                " triangles from: " + path);
     return true;
 }
 

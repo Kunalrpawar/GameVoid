@@ -3684,9 +3684,20 @@ void EditorUI::ImportModelIntoScene(const std::string& path) {
     auto dotPos = name.rfind('.');
     if (dotPos != std::string::npos) name = name.substr(0, dotPos);
 
+    // Auto-scale: compute bounding box and normalize to ~2 units tall
+    Vec3 bMin, bMax;
+    mesh->GetBounds(bMin, bMax);
+    Vec3 size = bMax - bMin;  // extent in each axis
+    float maxExtent = size.x;
+    if (size.y > maxExtent) maxExtent = size.y;
+    if (size.z > maxExtent) maxExtent = size.z;
+    float desiredSize = 2.0f;  // fit within 2 world units
+    float scaleFactor = (maxExtent > 0.0001f) ? (desiredSize / maxExtent) : 1.0f;
+
     // Create a new GameObject with the loaded mesh
     auto* obj = m_Scene->CreateGameObject(name);
-    obj->GetTransform().SetPosition(0.0f, 0.0f, 0.0f);
+    obj->GetTransform().SetPosition(0.0f, 1.0f, 0.0f);
+    obj->GetTransform().SetScale(scaleFactor);
 
     auto* mr = obj->AddComponent<MeshRenderer>();
     mr->primitiveType = PrimitiveType::None;  // use custom mesh
