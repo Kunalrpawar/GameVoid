@@ -31,6 +31,7 @@
 #include "core/SceneSerializer.h"
 #include "scripting/ScriptEngine.h"
 #include "editor/UndoRedo.h"
+#include "assets/Assets.h"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -45,6 +46,8 @@
 #include <set>
 #ifdef _WIN32
 #include <windows.h>
+#include <commdlg.h>    // GetOpenFileName / GetSaveFileName
+#include <shlobj.h>     // SHBrowseForFolder
 #endif
 
 namespace gv {
@@ -169,6 +172,14 @@ void EditorUI::Render(f32 dt) {
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D)) { DuplicateSelected(); }
         // Select All
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A)) { SelectAll(); }
+        // Import shortcut (Ctrl+I)
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_I)) {
+            std::string file = OpenFileDialog(
+                "All Supported\\0*.obj;*.fbx;*.gltf;*.glb;*.png;*.jpg;*.bmp;*.tga;*.wav;*.mp3;*.ogg\\0"
+                "All Files\\0*.*\\0",
+                "Import Asset");
+            if (!file.empty()) ImportAssetFile(file);
+        }
         // Delete selected
         if (ImGui::IsKeyPressed(ImGuiKey_Delete)) { DeleteSelected(); }
         // Gizmo mode shortcuts: W/E/R
@@ -259,6 +270,32 @@ void EditorUI::DrawMenuBar() {
             if (ImGui::MenuItem("New Scene"))       { /* TODO */ PushLog("[File] New Scene"); }
             if (ImGui::MenuItem("Save Scene"))      { SaveScene("scene.gvs"); }
             if (ImGui::MenuItem("Load Scene"))      { LoadScene("scene.gvs"); }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Import Asset...", "Ctrl+I")) {
+                std::string file = OpenFileDialog(
+                    "3D Models (*.obj;*.fbx;*.gltf;*.glb)\0*.obj;*.fbx;*.gltf;*.glb\0"
+                    "Textures (*.png;*.jpg;*.bmp;*.tga)\0*.png;*.jpg;*.bmp;*.tga\0"
+                    "Audio (*.wav;*.mp3;*.ogg)\0*.wav;*.mp3;*.ogg\0"
+                    "All Files (*.*)\0*.*\0",
+                    "Import Asset");
+                if (!file.empty()) ImportAssetFile(file);
+            }
+            if (ImGui::MenuItem("Import 3D Model...")) {
+                std::string file = OpenFileDialog(
+                    "3D Models (*.obj;*.fbx;*.gltf;*.glb)\0*.obj;*.fbx;*.gltf;*.glb\0"
+                    "All Files (*.*)\0*.*\0",
+                    "Import 3D Model");
+                if (!file.empty()) ImportModelIntoScene(file);
+            }
+            if (ImGui::MenuItem("Import Texture...")) {
+                std::string file = OpenFileDialog(
+                    "Textures (*.png;*.jpg;*.bmp;*.tga)\0*.png;*.jpg;*.bmp;*.tga\0"
+                    "All Files (*.*)\0*.*\0",
+                    "Import Texture");
+                if (!file.empty() && m_Selected) ImportTextureToSelected(file);
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Export Scene..."))  { ExportScene(); }
             ImGui::Separator();
             if (ImGui::MenuItem("Exit"))            { m_Window->SetShouldClose(true); }
             ImGui::EndMenu();
@@ -361,7 +398,12 @@ void EditorUI::DrawMenuBar() {
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Build")) {
-            if (ImGui::MenuItem("Build & Run"))     { PushLog("[Build] Build & Run (placeholder)."); }
+            if (ImGui::MenuItem("Build Game"))          { BuildGame(); }
+            if (ImGui::MenuItem("Build & Run"))         { BuildAndRun(); }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Build Settings..."))   { m_ShowBuildPanel = true; }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Export Scene (.gvs)")) { ExportScene(); }
             ImGui::EndMenu();
         }
 
@@ -642,6 +684,96 @@ void EditorUI::DrawInspector() {
                     float col[4] = { mr->color.x, mr->color.y, mr->color.z, mr->color.w };
                     if (ImGui::ColorEdit4("MR Color", col)) {
                         mr->color = Vec4(col[0], col[1], col[2], col[3]);
+                    }
+
+                    // ── External mesh loading ───────────────────────────────
+                    ImGui::Separator();
+                    ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1), "External Mesh:");
+
+                    auto mesh = mr->GetMesh();
+                    if (mesh) {
+                        ImGui::Text("Loaded: %s", mesh->GetName().c_str());
+                        ImGui::Text("Verts: %u  Tris: %u", mesh->GetVertexCount(), mesh->GetIndexCount() / 3);
+                    } else {
+                        ImGui::TextDisabled("No external mesh loaded.");
+                    }
+
+                    if (ImGui::Button("Load 3D Model...")) {
+                        std::string file = OpenFileDialog(
+                            "3D Models (*.obj;*.fbx;*.gltf;*.glb)\0*.obj;*.fbx;*.gltf;*.glb\0"
+                            "All Files (*.*)\0*.*\0",
+                            "Load 3D Model");
+                        if (!file.empty() && m_Assets) {
+                            auto loadedMesh = m_Assets->LoadMesh(file);
+                            if (loadedMesh && loadedMesh->GetIndexCount() > 0) {
+                                mr->SetMesh(loadedMesh);
+                                mr->primitiveType = PrimitiveType::None;
+                                PushLog("[Inspector] Loaded mesh: " + file);
+                            } else {
+                                PushLog("[Inspector] Failed to load mesh: " + file);
+                            }
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (mesh && ImGui::Button("Clear Mesh")) {
+                        mr->SetMesh(nullptr);
+                        mr->primitiveType = PrimitiveType::Cube;
+                        PushLog("[Inspector] Cleared external mesh.");
+                    }
+
+                    // Texture assignment
+                    auto mat = mr->GetMaterial();
+                    ImGui::Separator();
+                    ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1), "Texture:");
+                    if (mat && mat->diffuseMap) {
+                        ImGui::Text("Diffuse: %s", mat->diffuseMap->GetPath().c_str());
+                        ImGui::Text("Size: %ux%u", mat->diffuseMap->GetWidth(), mat->diffuseMap->GetHeight());
+                    } else {
+                        ImGui::TextDisabled("No texture assigned.");
+                    }
+                    if (ImGui::Button("Load Texture...")) {
+                        std::string file = OpenFileDialog(
+                            "Textures (*.png;*.jpg;*.bmp;*.tga)\0*.png;*.jpg;*.bmp;*.tga\0"
+                            "All Files (*.*)\0*.*\0",
+                            "Load Texture");
+                        if (!file.empty() && m_Assets) {
+                            auto tex = m_Assets->LoadTexture(file);
+                            if (tex) {
+                                if (!mat) {
+                                    mat = m_Assets->CreateMaterial(m_Selected->GetName() + "_mat");
+                                    mr->SetMaterial(mat);
+                                }
+                                mat->diffuseMap = tex;
+                                PushLog("[Inspector] Loaded texture: " + file);
+                            }
+                        }
+                    }
+
+                    // Drag-drop target for meshes/textures from asset browser
+                    if (ImGui::BeginDragDropTarget()) {
+                        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GV_ASSET_PATH")) {
+                            std::string droppedPath(static_cast<const char*>(payload->Data));
+                            auto ft = AssetLoader::DetectFileType(droppedPath);
+                            if (ft == AssetLoader::FileType::Model && m_Assets) {
+                                auto loadedMesh = m_Assets->LoadMesh(droppedPath);
+                                if (loadedMesh && loadedMesh->GetIndexCount() > 0) {
+                                    mr->SetMesh(loadedMesh);
+                                    mr->primitiveType = PrimitiveType::None;
+                                    PushLog("[DragDrop] Loaded mesh: " + droppedPath);
+                                }
+                            } else if (ft == AssetLoader::FileType::Texture && m_Assets) {
+                                auto tex = m_Assets->LoadTexture(droppedPath);
+                                if (tex) {
+                                    if (!mat) {
+                                        mat = m_Assets->CreateMaterial(m_Selected->GetName() + "_mat");
+                                        mr->SetMaterial(mat);
+                                    }
+                                    mat->diffuseMap = tex;
+                                    PushLog("[DragDrop] Loaded texture: " + droppedPath);
+                                }
+                            }
+                        }
+                        ImGui::EndDragDropTarget();
                     }
                 }
             }
@@ -1428,6 +1560,22 @@ void EditorUI::DrawViewport(f32 dt) {
         m_DragAxis = -1;
     }
 
+    // ── Drag-drop: dropping assets from browser into viewport ──────────────
+    if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GV_ASSET_PATH")) {
+            std::string droppedPath(static_cast<const char*>(payload->Data));
+            auto ft = AssetLoader::DetectFileType(droppedPath);
+            if (ft == AssetLoader::FileType::Model) {
+                ImportModelIntoScene(droppedPath);
+            } else if (ft == AssetLoader::FileType::Texture && m_Selected) {
+                ImportTextureToSelected(droppedPath);
+            } else if (ft == AssetLoader::FileType::Audio) {
+                PushLog("[Viewport] Audio file dropped: " + droppedPath + " (attach via Inspector)");
+            }
+        }
+        ImGui::EndDragDropTarget();
+    }
+
     ImGui::End();
 }
 // ── AI Generator Panel ───────────────────────────────────────────────────────
@@ -1810,6 +1958,66 @@ void EditorUI::DrawAssetBrowser() {
     if (m_AssetBrowserRoot.empty()) {
         m_AssetBrowserRoot = ".";
         m_AssetBrowserCurrentDir = m_AssetBrowserRoot;
+    }
+
+    // ── Import button row at top ───────────────────────────────────────────
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.55f, 0.22f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.7f, 0.35f, 1.0f));
+    if (ImGui::Button("Import Asset...")) {
+        std::string file = OpenFileDialog(
+            "All Supported\\0*.obj;*.fbx;*.gltf;*.glb;*.png;*.jpg;*.bmp;*.tga;*.wav;*.mp3;*.ogg\\0"
+            "3D Models\\0*.obj;*.fbx;*.gltf;*.glb\\0"
+            "Textures\\0*.png;*.jpg;*.bmp;*.tga\\0"
+            "Audio\\0*.wav;*.mp3;*.ogg\\0"
+            "All Files\\0*.*\\0",
+            "Import Asset");
+        if (!file.empty()) ImportAssetFile(file);
+    }
+    ImGui::PopStyleColor(2);
+    ImGui::SameLine();
+    if (ImGui::Button("Import Model to Scene")) {
+        std::string file = OpenFileDialog(
+            "3D Models (*.obj;*.fbx;*.gltf;*.glb)\\0*.obj;*.fbx;*.gltf;*.glb\\0"
+            "All Files\\0*.*\\0",
+            "Import 3D Model into Scene");
+        if (!file.empty()) ImportModelIntoScene(file);
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(Drag files into Viewport to add)");
+
+    // ── Imported assets list ───────────────────────────────────────────────
+    if (!m_ImportedAssets.empty()) {
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.5f, 1), "Imported Assets (%d):", static_cast<int>(m_ImportedAssets.size()));
+        for (size_t i = 0; i < m_ImportedAssets.size(); ++i) {
+            auto& ia = m_ImportedAssets[i];
+            const char* typeIcon = "[?] ";
+            if (ia.type == "Model")   typeIcon = "[M] ";
+            if (ia.type == "Texture") typeIcon = "[T] ";
+            if (ia.type == "Audio")   typeIcon = "[A] ";
+
+            std::string label = std::string(typeIcon) + ia.name + (ia.loaded ? " (loaded)" : "");
+            ImGui::PushID(static_cast<int>(i));
+            if (ImGui::Selectable(label.c_str())) {
+                if (ia.type == "Model") {
+                    ImportModelIntoScene(ia.fullPath);
+                }
+            }
+            // Drag-drop source for imported assets
+            if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+                ImGui::SetDragDropPayload("GV_ASSET_PATH", ia.fullPath.c_str(), ia.fullPath.size() + 1);
+                ImGui::Text("%s", ia.name.c_str());
+                ImGui::EndDragDropSource();
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                ImGui::Text("Type: %s", ia.type.c_str());
+                ImGui::Text("Path: %s", ia.fullPath.c_str());
+                ImGui::EndTooltip();
+            }
+            ImGui::PopID();
+        }
+        ImGui::Separator();
     }
 
     // --- Helpers using Windows API ---
@@ -2304,6 +2512,11 @@ void EditorUI::DrawBottomTabs() {
     // ── Grid & Snap Settings popup ─────────────────────────────────────────
     if (m_ShowGridSnapSettings) {
         DrawGridSnapSettings();
+    }
+
+    // ── Build Settings panel ───────────────────────────────────────────────
+    if (m_ShowBuildPanel) {
+        DrawBuildPanel();
     }
 
     // ── Editor Settings Popup (API key, model selection) ───────────────────
@@ -3341,6 +3554,492 @@ void EditorUI::LoadScene(const std::string& path) {
     } else {
         PushLog("[Editor] Failed to load scene from '" + path + "'.");
     }
+}
+
+// ============================================================================
+// Asset Import System — Native File Dialogs & Import Logic
+// ============================================================================
+
+std::string EditorUI::OpenFileDialog(const char* filter, const char* title) {
+#ifdef _WIN32
+    char filename[MAX_PATH] = {};
+    OPENFILENAMEA ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner   = nullptr;
+    ofn.lpstrFilter = filter;
+    ofn.lpstrFile   = filename;
+    ofn.nMaxFile    = MAX_PATH;
+    ofn.lpstrTitle  = title;
+    ofn.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+
+    if (GetOpenFileNameA(&ofn)) {
+        return std::string(filename);
+    }
+#else
+    (void)filter; (void)title;
+    PushLog("[Import] File dialog not available on this platform.");
+#endif
+    return "";
+}
+
+std::string EditorUI::OpenFolderDialog(const char* title) {
+#ifdef _WIN32
+    BROWSEINFOA bi = {};
+    bi.lpszTitle = title;
+    bi.ulFlags   = BIF_RETURNONLYFSDIRS | BIF_USENEWUI;
+
+    LPITEMIDLIST pidl = SHBrowseForFolderA(&bi);
+    if (pidl) {
+        char path[MAX_PATH] = {};
+        if (SHGetPathFromIDListA(pidl, path)) {
+            CoTaskMemFree(pidl);
+            return std::string(path);
+        }
+        CoTaskMemFree(pidl);
+    }
+#else
+    (void)title;
+#endif
+    return "";
+}
+
+void EditorUI::ImportAssetFile(const std::string& path) {
+    if (path.empty()) return;
+
+    auto ft = AssetLoader::DetectFileType(path);
+
+    // Extract filename for display
+    std::string name = path;
+    auto lastSlash = path.find_last_of("/\\");
+    if (lastSlash != std::string::npos) name = path.substr(lastSlash + 1);
+
+    ImportedAsset ia;
+    ia.name = name;
+    ia.fullPath = path;
+    ia.loaded = false;
+
+    switch (ft) {
+    case AssetLoader::FileType::Model:
+        ia.type = "Model";
+        if (m_Assets) {
+            auto mesh = m_Assets->LoadMesh(path);
+            ia.loaded = (mesh && mesh->GetIndexCount() > 0);
+        }
+        break;
+    case AssetLoader::FileType::Texture:
+        ia.type = "Texture";
+        if (m_Assets) {
+            auto tex = m_Assets->LoadTexture(path);
+            ia.loaded = (tex != nullptr);
+        }
+        break;
+    case AssetLoader::FileType::Audio:
+        ia.type = "Audio";
+        ia.loaded = true;  // audio is loaded on-demand
+        break;
+    case AssetLoader::FileType::Script:
+        ia.type = "Script";
+        ia.loaded = true;
+        break;
+    default:
+        ia.type = "Unknown";
+        break;
+    }
+
+    // Check for duplicates
+    for (auto& existing : m_ImportedAssets) {
+        if (existing.fullPath == path) {
+            existing.loaded = ia.loaded;
+            PushLog("[Import] Asset already imported: " + name);
+            return;
+        }
+    }
+
+    m_ImportedAssets.push_back(ia);
+
+    if (ia.loaded) {
+        PushLog("[Import] Imported " + ia.type + ": " + name);
+    } else {
+        PushLog("[Import] Failed to load " + ia.type + ": " + name);
+    }
+}
+
+void EditorUI::ImportModelIntoScene(const std::string& path) {
+    if (!m_Scene || !m_Assets) {
+        PushLog("[Import] Cannot import — no scene or asset manager.");
+        return;
+    }
+
+    // Load the mesh through the asset manager
+    auto mesh = m_Assets->LoadMesh(path);
+    if (!mesh || mesh->GetIndexCount() == 0) {
+        PushLog("[Import] Failed to load model: " + path);
+        return;
+    }
+
+    // Extract name for the object
+    std::string name = path;
+    auto lastSlash = path.find_last_of("/\\");
+    if (lastSlash != std::string::npos) name = path.substr(lastSlash + 1);
+    auto dotPos = name.rfind('.');
+    if (dotPos != std::string::npos) name = name.substr(0, dotPos);
+
+    // Create a new GameObject with the loaded mesh
+    auto* obj = m_Scene->CreateGameObject(name);
+    obj->GetTransform().SetPosition(0.0f, 0.0f, 0.0f);
+
+    auto* mr = obj->AddComponent<MeshRenderer>();
+    mr->primitiveType = PrimitiveType::None;  // use custom mesh
+    mr->SetMesh(mesh);
+    mr->color = Vec4(0.8f, 0.8f, 0.8f, 1.0f);
+
+    // Add a material component for PBR
+    auto* matComp = obj->AddComponent<MaterialComponent>();
+    matComp->albedo = Vec4(0.8f, 0.8f, 0.8f, 1.0f);
+    matComp->roughness = 0.5f;
+    matComp->metallic = 0.0f;
+
+    // Select the new object
+    m_Selected = obj;
+    ClearSelection();
+    SelectObject(obj, false);
+
+    // Also track in imported assets
+    ImportAssetFile(path);
+
+    PushLog("[Import] Added '" + name + "' to scene (" +
+            std::to_string(mesh->GetVertexCount()) + " verts, " +
+            std::to_string(mesh->GetIndexCount() / 3) + " tris).");
+}
+
+void EditorUI::ImportTextureToSelected(const std::string& path) {
+    if (!m_Selected || !m_Assets) {
+        PushLog("[Import] No object selected for texture assignment.");
+        return;
+    }
+
+    auto tex = m_Assets->LoadTexture(path);
+    if (!tex) {
+        PushLog("[Import] Failed to load texture: " + path);
+        return;
+    }
+
+    // Try to assign to MeshRenderer's material
+    auto* mr = m_Selected->GetComponent<MeshRenderer>();
+    if (mr) {
+        auto mat = mr->GetMaterial();
+        if (!mat) {
+            mat = m_Assets->CreateMaterial(m_Selected->GetName() + "_mat");
+            mr->SetMaterial(mat);
+        }
+        mat->diffuseMap = tex;
+    }
+
+    // Also update MaterialComponent if present
+    auto* matComp = m_Selected->GetComponent<MaterialComponent>();
+    if (!matComp) {
+        matComp = m_Selected->AddComponent<MaterialComponent>();
+        if (mr) matComp->albedo = mr->color;
+    }
+
+    // Track it as imported
+    ImportAssetFile(path);
+
+    std::string name = path;
+    auto lastSlash = path.find_last_of("/\\");
+    if (lastSlash != std::string::npos) name = path.substr(lastSlash + 1);
+    PushLog("[Import] Applied texture '" + name + "' to " + m_Selected->GetName());
+}
+
+// ============================================================================
+// Game Build / Export System
+// ============================================================================
+
+void EditorUI::DrawBuildPanel() {
+    ImGui::SetNextWindowSize(ImVec2(500, 480), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Build Settings", &m_ShowBuildPanel)) {
+        ImGui::End();
+        return;
+    }
+
+    ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1), "Game Build Configuration");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Game name
+    ImGui::InputText("Game Name", m_BuildGameName, sizeof(m_BuildGameName));
+
+    // Output directory
+    ImGui::InputText("Output Dir", m_BuildOutputDir, sizeof(m_BuildOutputDir));
+    ImGui::SameLine();
+    if (ImGui::Button("Browse...##BuildDir")) {
+        std::string folder = OpenFolderDialog("Select Build Output Directory");
+        if (!folder.empty()) {
+            std::snprintf(m_BuildOutputDir, sizeof(m_BuildOutputDir), "%s", folder.c_str());
+        }
+    }
+
+    // Build config
+    const char* configs[] = { "Debug", "Release" };
+    ImGui::Combo("Configuration", &m_BuildConfig, configs, 2);
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.4f, 1), "Include in Build:");
+    ImGui::Checkbox("Scene File (.gvs)", &m_BuildIncludeAssets);
+    ImGui::Checkbox("Scripts (.gvs)", &m_BuildIncludeScripts);
+    ImGui::Checkbox("Run after build", &m_BuildRunAfter);
+
+    ImGui::Spacing();
+    ImGui::Separator();
+
+    // Imported assets summary
+    ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1), "Assets to Bundle:");
+    int modelCount = 0, texCount = 0, audioCount = 0;
+    for (auto& ia : m_ImportedAssets) {
+        if (ia.type == "Model") modelCount++;
+        else if (ia.type == "Texture") texCount++;
+        else if (ia.type == "Audio") audioCount++;
+    }
+    ImGui::Text("  Models: %d  |  Textures: %d  |  Audio: %d", modelCount, texCount, audioCount);
+
+    // Scene info
+    if (m_Scene) {
+        ImGui::Text("  Scene Objects: %d", static_cast<int>(m_Scene->GetAllObjects().size()));
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Build buttons
+    float avail = ImGui::GetContentRegionAvail().x;
+    float btnW = avail * 0.45f;
+
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.5f, 0.2f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.7f, 0.3f, 1.0f));
+    if (ImGui::Button("Build Game", ImVec2(btnW, 36))) {
+        BuildGame();
+    }
+    ImGui::PopStyleColor(2);
+
+    ImGui::SameLine();
+
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.35f, 0.6f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.45f, 0.75f, 1.0f));
+    if (ImGui::Button("Build & Run", ImVec2(btnW, 36))) {
+        BuildAndRun();
+    }
+    ImGui::PopStyleColor(2);
+
+    // Build progress
+    if (m_BuildInProgress) {
+        ImGui::Spacing();
+        ImGui::ProgressBar(m_BuildProgress, ImVec2(-1, 0), "Building...");
+    }
+
+    // Build log
+    if (!m_BuildLog.empty()) {
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1), "Build Log:");
+        ImGui::BeginChild("BuildLogScroll", ImVec2(0, 100), true);
+        ImGui::TextWrapped("%s", m_BuildLog.c_str());
+        ImGui::EndChild();
+    }
+
+    ImGui::End();
+}
+
+void EditorUI::BuildGame() {
+    m_BuildLog.clear();
+    m_BuildInProgress = true;
+    m_BuildProgress = 0.0f;
+
+    std::string outputDir(m_BuildOutputDir);
+    std::string gameName(m_BuildGameName);
+
+    m_BuildLog += "[Build] Starting build: " + gameName + "\n";
+    m_BuildProgress = 0.1f;
+
+    // 1. Create output directory
+#ifdef _WIN32
+    std::string mkdirCmd = "cmd /c \"mkdir \"" + outputDir + "\" 2>nul\"";
+    std::system(mkdirCmd.c_str());
+    // Also create assets subdirectory
+    std::string assetsDir = outputDir + "\\assets";
+    std::string mkAssetsCmd = "cmd /c \"mkdir \"" + assetsDir + "\" 2>nul\"";
+    std::system(mkAssetsCmd.c_str());
+#endif
+    m_BuildLog += "[Build] Created output directory: " + outputDir + "\n";
+    m_BuildProgress = 0.2f;
+
+    // 2. Save current scene
+    if (m_BuildIncludeAssets && m_Scene) {
+        std::string scenePath = outputDir + "/scene.gvs";
+        if (SceneSerializer::SaveScene(*m_Scene, scenePath)) {
+            m_BuildLog += "[Build] Scene saved to: " + scenePath + "\n";
+        } else {
+            m_BuildLog += "[Build] WARNING: Failed to save scene.\n";
+        }
+    }
+    m_BuildProgress = 0.4f;
+
+    // 3. Copy imported assets to build output
+    for (auto& ia : m_ImportedAssets) {
+        if (!ia.loaded) continue;
+#ifdef _WIN32
+        std::string destPath = assetsDir + "\\" + ia.name;
+        std::string copyCmd = "cmd /c \"copy /Y \"" + ia.fullPath + "\" \"" + destPath + "\" >nul 2>&1\"";
+        std::system(copyCmd.c_str());
+        m_BuildLog += "[Build] Copied asset: " + ia.name + "\n";
+#endif
+    }
+    m_BuildProgress = 0.6f;
+
+    // 4. Build the executable with game configuration
+    std::string configFlag = (m_BuildConfig == 0) ? "-O0 -g" : "-O2";
+    std::string exeName = gameName + ".exe";
+    std::string exePath = outputDir + "/" + exeName;
+
+    // Generate a launcher config
+    {
+        std::string configPath = outputDir + "/gamevoid_config.ini";
+        std::ofstream cfg(configPath);
+        if (cfg.is_open()) {
+            cfg << "[Game]\n";
+            cfg << "name=" << gameName << "\n";
+            cfg << "scene=scene.gvs\n";
+            cfg << "width=1280\n";
+            cfg << "height=720\n";
+            cfg << "fullscreen=false\n";
+            cfg << "\n[AI]\n";
+            if (m_AI) {
+                cfg << "apiKey=" << m_AI->GetConfig().apiKey << "\n";
+                cfg << "model=" << m_AI->GetConfig().model << "\n";
+            }
+            cfg.close();
+            m_BuildLog += "[Build] Generated config: " + configPath + "\n";
+        }
+    }
+    m_BuildProgress = 0.7f;
+
+    // 5. Compile the game (invoke g++ build)
+#ifdef _WIN32
+    {
+        // Build command — same as build.ps1 but targeting output dir
+        std::string buildCmd =
+            "g++ -std=c++17 -DGV_HAS_GLFW -DIMGUI_DISABLE_WIN32_FUNCTIONS " + configFlag +
+            " -Iinclude -Ideps -Ideps/glfw/include -Ideps/imgui -Ideps/miniaudio"
+            " -Ldeps/glfw/lib -o \"" + exePath + "\""
+            " src/main.cpp src/core/Engine.cpp src/core/FPSCamera.cpp src/core/SceneSerializer.cpp"
+            " src/renderer/Renderer.cpp src/renderer/Camera.cpp src/renderer/Material.cpp"
+            " src/renderer/MaterialComponent.cpp src/physics/Physics.cpp src/assets/Assets.cpp"
+            " src/ai/AIManager.cpp src/scripting/ScriptEngine.cpp src/scripting/NodeGraph.cpp"
+            " src/scripting/NativeScript.cpp src/editor/CLIEditor.cpp src/editor/OrbitCamera.cpp"
+            " src/terrain/Terrain.cpp src/effects/ParticleSystem.cpp"
+            " src/animation/Animation.cpp src/animation/SkeletalAnimation.cpp"
+            " src/future/Placeholders.cpp src/core/Window.cpp src/core/GLLoader.cpp"
+            " src/editor/EditorUI.cpp"
+            " deps/imgui/imgui.cpp deps/imgui/imgui_draw.cpp deps/imgui/imgui_tables.cpp"
+            " deps/imgui/imgui_widgets.cpp deps/imgui/imgui_demo.cpp"
+            " deps/imgui/imgui_impl_glfw.cpp deps/imgui/imgui_impl_opengl3.cpp"
+            " -lglfw3 -lopengl32 -lgdi32 -lwininet -lws2_32 -lcomdlg32 -lole32 -lshell32"
+            " 2>\"" + outputDir + "/build_errors.txt\"";
+
+        m_BuildLog += "[Build] Compiling...\n";
+        PushLog("[Build] Compiling " + gameName + "...");
+        int result = std::system(buildCmd.c_str());
+
+        m_BuildProgress = 0.9f;
+
+        if (result == 0) {
+            m_BuildLog += "[Build] Compilation SUCCESSFUL: " + exePath + "\n";
+            PushLog("[Build] SUCCESS: " + exePath);
+
+            // Copy GLFW DLL if it exists
+            std::string copyGlfw = "cmd /c \"copy /Y deps\\glfw\\lib\\glfw3.dll \"" + outputDir + "\" >nul 2>&1\"";
+            std::system(copyGlfw.c_str());
+        } else {
+            m_BuildLog += "[Build] Compilation FAILED. Check " + outputDir + "/build_errors.txt\n";
+            PushLog("[Build] FAILED — check build log.");
+
+            // Read and display errors
+            std::ifstream errFile(outputDir + "/build_errors.txt");
+            if (errFile.is_open()) {
+                std::string errLine;
+                int errCount = 0;
+                while (std::getline(errFile, errLine) && errCount < 10) {
+                    m_BuildLog += "  " + errLine + "\n";
+                    errCount++;
+                }
+            }
+        }
+    }
+#else
+    m_BuildLog += "[Build] Build not supported on this platform yet.\n";
+    PushLog("[Build] Build requires Windows + g++ in PATH.");
+#endif
+
+    m_BuildProgress = 1.0f;
+    m_BuildInProgress = false;
+}
+
+void EditorUI::BuildAndRun() {
+    m_BuildRunAfter = true;
+    BuildGame();
+
+    // Launch the built exe
+    if (m_BuildProgress >= 1.0f) {
+        std::string outputDir(m_BuildOutputDir);
+        std::string gameName(m_BuildGameName);
+        std::string exePath = outputDir + "/" + gameName + ".exe";
+
+#ifdef _WIN32
+        // Check if built exe exists
+        std::ifstream check(exePath);
+        if (check.good()) {
+            check.close();
+            std::string runCmd = "start \"\" \"" + exePath + "\" --no-editor";
+            std::system(runCmd.c_str());
+            m_BuildLog += "[Build] Launched: " + exePath + "\n";
+            PushLog("[Build] Launched " + gameName);
+        } else {
+            PushLog("[Build] Cannot run — build failed.");
+        }
+#endif
+    }
+}
+
+void EditorUI::ExportScene() {
+    if (!m_Scene) {
+        PushLog("[Export] No scene to export.");
+        return;
+    }
+
+#ifdef _WIN32
+    char filename[MAX_PATH] = "scene.gvs";
+    OPENFILENAMEA ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner   = nullptr;
+    ofn.lpstrFilter = "GameVoid Scene (*.gvs)\0*.gvs\0All Files (*.*)\0*.*\0";
+    ofn.lpstrFile   = filename;
+    ofn.nMaxFile    = MAX_PATH;
+    ofn.lpstrTitle  = "Export Scene";
+    ofn.Flags       = OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
+    ofn.lpstrDefExt = "gvs";
+
+    if (GetSaveFileNameA(&ofn)) {
+        SaveScene(std::string(filename));
+    }
+#else
+    SaveScene("scene.gvs");
+#endif
+}
+
+void EditorUI::DrawImportAssetDialog() {
+    // Handled inline via OpenFileDialog — this method exists for future
+    // custom import dialog with preview, scale settings, etc.
 }
 
 } // namespace gv

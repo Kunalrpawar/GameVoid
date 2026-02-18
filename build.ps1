@@ -68,7 +68,7 @@ if ($CliOnly) {
         "deps/imgui/imgui_impl_opengl3.cpp"
     )
     $srcList = ($commonSources + $windowSources + $imguiSources) -join " "
-    $cmd = "g++ -std=c++17 -DGV_HAS_GLFW -DIMGUI_DISABLE_WIN32_FUNCTIONS -O2 -Iinclude -Ideps -Ideps/glfw/include -Ideps/imgui -Ideps/miniaudio -Ldeps/glfw/lib -o GameVoid.exe $srcList -lglfw3 -lopengl32 -lgdi32 -lwininet -lws2_32"
+    $cmd = "g++ -std=c++17 -DGV_HAS_GLFW -DIMGUI_DISABLE_WIN32_FUNCTIONS -O2 -Iinclude -Ideps -Ideps/glfw/include -Ideps/imgui -Ideps/miniaudio -Ldeps/glfw/lib -o GameVoid.exe $srcList -lglfw3 -lopengl32 -lgdi32 -lwininet -lws2_32 -lcomdlg32 -lole32 -lshell32"
     Write-Host $cmd
     Invoke-Expression $cmd
 }
