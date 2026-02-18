@@ -42,6 +42,8 @@
 #include <fstream>
 #include <sstream>
 #include <cstring>
+#include <set>
+#include <filesystem>
 
 namespace gv {
 
@@ -151,17 +153,28 @@ bool EditorUI::WantsCaptureMouse() const {
 void EditorUI::Render(f32 dt) {
     // ── Keyboard shortcuts ─────────────────────────────────────────────────
     ImGuiIO& io = ImGui::GetIO();
-    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z) && !io.WantTextInput) {
-        if (m_UndoStack.CanUndo()) {
-            m_UndoStack.Undo();
-            PushLog("[Edit] Undo");
+    if (!io.WantTextInput) {
+        // Undo / Redo
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z)) {
+            if (m_UndoStack.CanUndo()) { m_UndoStack.Undo(); PushLog("[Edit] Undo"); }
         }
-    }
-    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y) && !io.WantTextInput) {
-        if (m_UndoStack.CanRedo()) {
-            m_UndoStack.Redo();
-            PushLog("[Edit] Redo");
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y)) {
+            if (m_UndoStack.CanRedo()) { m_UndoStack.Redo(); PushLog("[Edit] Redo"); }
         }
+        // Copy / Paste / Duplicate
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C)) { CopySelected(); }
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V)) { PasteClipboard(); }
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D)) { DuplicateSelected(); }
+        // Select All
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A)) { SelectAll(); }
+        // Delete selected
+        if (ImGui::IsKeyPressed(ImGuiKey_Delete)) { DeleteSelected(); }
+        // Gizmo mode shortcuts: W/E/R
+        if (ImGui::IsKeyPressed(ImGuiKey_W)) { m_GizmoMode = GizmoMode::Translate; }
+        if (ImGui::IsKeyPressed(ImGuiKey_E)) { m_GizmoMode = GizmoMode::Rotate; }
+        if (ImGui::IsKeyPressed(ImGuiKey_R)) { m_GizmoMode = GizmoMode::Scale; }
+        // Toggle wireframe
+        if (ImGui::IsKeyPressed(ImGuiKey_Z) && !io.KeyCtrl) { m_ShowWireframe = !m_ShowWireframe; }
     }
 
     // FPS counter
@@ -263,16 +276,22 @@ void EditorUI::DrawMenuBar() {
                 PushLog("[Edit] Redo");
             }
             ImGui::Separator();
+            if (ImGui::MenuItem("Copy", "Ctrl+C"))       { CopySelected(); }
+            if (ImGui::MenuItem("Paste", "Ctrl+V"))      { PasteClipboard(); }
+            if (ImGui::MenuItem("Duplicate", "Ctrl+D"))  { DuplicateSelected(); }
+            if (ImGui::MenuItem("Select All", "Ctrl+A")) { SelectAll(); }
+            ImGui::Separator();
             if (ImGui::MenuItem("Add Cube"))        { AddCube(); }
             if (ImGui::MenuItem("Add Light"))       { AddLight(); }
             if (ImGui::MenuItem("Add Terrain"))     { AddTerrain(); }
             if (ImGui::MenuItem("Add Particles"))   { AddParticleEmitter(); }
             ImGui::Separator();
-            if (ImGui::MenuItem("Delete Selected")) { DeleteSelected(); }
+            if (ImGui::MenuItem("Delete Selected", "Del")) { DeleteSelected(); }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("View")) {
             ImGui::MenuItem("AI Generator", nullptr, &m_ShowAIPanel);
+            ImGui::MenuItem("Asset Browser", nullptr, &m_ShowAssetBrowser);
             ImGui::MenuItem("ImGui Demo", nullptr, &m_ShowDemo);
             ImGui::Separator();
             if (ImGui::MenuItem("Console"))     { m_BottomTab = 0; }
@@ -284,6 +303,30 @@ void EditorUI::DrawMenuBar() {
             if (ImGui::MenuItem("Behaviors"))   { m_BottomTab = 6; }
             if (ImGui::MenuItem("Code Script")) { m_BottomTab = 7; }
             ImGui::Separator();
+
+            // Viewport overlay toggles
+            if (ImGui::BeginMenu("Viewport Overlays")) {
+                ImGui::MenuItem("Wireframe (Z)", nullptr, &m_ShowWireframe);
+                ImGui::MenuItem("Bounding Boxes", nullptr, &m_ShowBoundingBoxes);
+                ImGui::MenuItem("Collision Shapes", nullptr, &m_ShowCollisionShapes);
+                ImGui::MenuItem("Normals", nullptr, &m_ShowNormals);
+                ImGui::MenuItem("Grid", nullptr, &m_ShowGrid);
+                ImGui::MenuItem("Gizmos", nullptr, &m_ShowGizmos);
+                ImGui::MenuItem("Camera Preview (PiP)", nullptr, &m_ShowCameraPiP);
+                ImGui::EndMenu();
+            }
+
+            // Viewport layout
+            if (ImGui::BeginMenu("Viewport Layout")) {
+                if (ImGui::MenuItem("Single", nullptr, m_ViewportLayout == ViewportLayout::Single))
+                    m_ViewportLayout = ViewportLayout::Single;
+                if (ImGui::MenuItem("Side by Side", nullptr, m_ViewportLayout == ViewportLayout::SideBySide))
+                    m_ViewportLayout = ViewportLayout::SideBySide;
+                if (ImGui::MenuItem("Quad View", nullptr, m_ViewportLayout == ViewportLayout::Quad))
+                    m_ViewportLayout = ViewportLayout::Quad;
+                ImGui::EndMenu();
+            }
+
             if (ImGui::BeginMenu("Post-Processing")) {
                 if (m_Renderer) {
                     bool bloom = m_Renderer->IsBloomEnabled();
@@ -304,7 +347,9 @@ void EditorUI::DrawMenuBar() {
                 ImGui::EndMenu();
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("Editor Settings")) { m_ShowEditorSettings = true; }
+            if (ImGui::MenuItem("Grid & Snap Settings")) { m_ShowGridSnapSettings = true; }
+            if (ImGui::MenuItem("Keyboard Shortcuts"))   { m_ShowKeyboardShortcuts = true; }
+            if (ImGui::MenuItem("Editor Settings"))      { m_ShowEditorSettings = true; }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("AI")) {
@@ -403,13 +448,81 @@ void EditorUI::DrawHierarchy() {
 
     if (!m_Scene) { ImGui::Text("No scene."); ImGui::End(); return; }
 
+    // ── Search / Filter bar ────────────────────────────────────────────────
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##HierSearch", "Search...", m_HierarchySearchBuf, sizeof(m_HierarchySearchBuf));
+    ImGui::Separator();
+
+    std::string filterStr(m_HierarchySearchBuf);
+    // Convert to lowercase for case-insensitive matching
+    std::string filterLower = filterStr;
+    for (auto& c : filterLower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
     for (auto& obj : m_Scene->GetAllObjects()) {
         if (!obj) continue;
-        bool selected = (m_Selected == obj.get());
-        std::string label = obj->GetName() + "##" + std::to_string(obj->GetID());
-        if (ImGui::Selectable(label.c_str(), selected)) {
-            m_Selected = obj.get();
+
+        // Apply filter
+        if (!filterLower.empty()) {
+            std::string nameLower = obj->GetName();
+            for (auto& c : nameLower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (nameLower.find(filterLower) == std::string::npos) continue;
         }
+
+        bool selected = (m_Selected == obj.get()) || (m_MultiSelected.count(obj.get()) > 0);
+        std::string label = obj->GetName() + "##" + std::to_string(obj->GetID());
+
+        // Highlight multi-selected objects
+        if (m_MultiSelected.count(obj.get()) > 0 && m_Selected != obj.get())
+            ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.2f, 0.4f, 0.6f, 0.6f));
+
+        if (ImGui::Selectable(label.c_str(), selected)) {
+            bool ctrl  = ImGui::GetIO().KeyCtrl;
+            bool shift = ImGui::GetIO().KeyShift;
+            SelectObject(obj.get(), ctrl || shift);
+        }
+
+        if (m_MultiSelected.count(obj.get()) > 0 && m_Selected != obj.get())
+            ImGui::PopStyleColor();
+
+        // ── Drag-and-drop reparenting ──────────────────────────────────────
+        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+            m_DragDropSource = obj.get();
+            ImGui::SetDragDropPayload("GV_GAMEOBJECT", &m_DragDropSource, sizeof(GameObject*));
+            ImGui::Text("Move '%s'", obj->GetName().c_str());
+            ImGui::EndDragDropSource();
+        }
+
+        if (ImGui::BeginDragDropTarget()) {
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GV_GAMEOBJECT")) {
+                GameObject* dropped = *static_cast<GameObject**>(payload->Data);
+                if (dropped && dropped != obj.get()) {
+                    // Reparent: remove from old parent, add as child of target
+                    if (dropped->GetParent()) {
+                        dropped->GetParent()->RemoveChild(dropped);
+                    }
+                    // Note: simple reparenting at the scene level
+                    dropped->SetParent(obj.get());
+                    PushLog("[Hierarchy] Reparented '" + dropped->GetName() + "' under '" + obj->GetName() + "'");
+                }
+            }
+            ImGui::EndDragDropTarget();
+        }
+
+        // Show children indented
+        for (auto& child : obj->GetChildren()) {
+            if (!child) continue;
+            std::string childLabel = "  > " + child->GetName() + "##" + std::to_string(child->GetID());
+            bool childSel = (m_Selected == child.get()) || (m_MultiSelected.count(child.get()) > 0);
+            if (ImGui::Selectable(childLabel.c_str(), childSel)) {
+                SelectObject(child.get(), ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeyShift);
+            }
+        }
+    }
+
+    // Selection count indicator
+    if (m_MultiSelected.size() > 1) {
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1), "%d objects selected", static_cast<int>(m_MultiSelected.size()));
     }
 
     ImGui::End();
@@ -927,24 +1040,79 @@ void EditorUI::DrawViewport(f32 dt) {
             static_cast<f32>(m_ViewportW) / static_cast<f32>(m_ViewportH),
             0.1f, 1000.0f);
 
+        // Wireframe mode toggle
+        if (m_ShowWireframe) glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+
         // 1. Skybox (drawn first, behind everything)
         m_Renderer->RenderSkybox(*cam, dt);
 
-        // 2. Grid
-        m_Renderer->RenderGrid(*cam);
+        // 2. Grid (toggleable)
+        if (m_ShowGrid) m_Renderer->RenderGrid(*cam);
 
         // 3. Scene objects
         m_Renderer->RenderScene(*m_Scene, *cam);
 
-        // 4. Selection highlight
-        if (m_Selected && m_Selected->GetComponent<MeshRenderer>()) {
-            auto* mr = m_Selected->GetComponent<MeshRenderer>();
-            Mat4 model = m_Selected->GetTransform().GetModelMatrix();
-            m_Renderer->RenderHighlight(*cam, model, mr->primitiveType);
+        // Revert wireframe
+        if (m_ShowWireframe) glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+
+        // 4. Selection highlight (supports multi-select)
+        auto drawHighlight = [&](GameObject* obj) {
+            if (obj && obj->GetComponent<MeshRenderer>()) {
+                auto* mr = obj->GetComponent<MeshRenderer>();
+                Mat4 model = obj->GetTransform().GetModelMatrix();
+                m_Renderer->RenderHighlight(*cam, model, mr->primitiveType);
+            }
+        };
+        drawHighlight(m_Selected);
+        for (auto* obj : m_MultiSelected) {
+            if (obj != m_Selected) drawHighlight(obj);
         }
 
-        // 5. Gizmo
-        if (m_Selected) {
+        // 5. Bounding boxes overlay
+        if (m_ShowBoundingBoxes && m_Scene) {
+            for (auto& obj : m_Scene->GetAllObjects()) {
+                if (!obj || !obj->IsActive()) continue;
+                auto* mr = obj->GetComponent<MeshRenderer>();
+                if (!mr || mr->primitiveType == PrimitiveType::None) continue;
+                Transform& t = obj->GetTransform();
+                Vec3 half(0.5f * t.scale.x, 0.5f * t.scale.y, 0.5f * t.scale.z);
+                m_Renderer->DrawDebugBox(t.position, half, Vec4(0.0f, 1.0f, 0.0f, 0.5f));
+            }
+        }
+
+        // 6. Collision shapes overlay
+        if (m_ShowCollisionShapes && m_Scene) {
+            for (auto& obj : m_Scene->GetAllObjects()) {
+                if (!obj || !obj->IsActive()) continue;
+                auto* col = obj->GetComponent<Collider>();
+                if (!col) continue;
+                Transform& t = obj->GetTransform();
+                if (col->type == ColliderType::Box) {
+                    Vec3 half = col->boxHalfExtents * 1.01f; // slightly larger to show outside
+                    if (half.x < 0.01f) half = Vec3(0.5f * t.scale.x, 0.5f * t.scale.y, 0.5f * t.scale.z);
+                    m_Renderer->DrawDebugBox(t.position, half, Vec4(0.0f, 0.8f, 1.0f, 0.4f));
+                } else if (col->type == ColliderType::Sphere) {
+                    f32 r = col->sphereRadius > 0.01f ? col->sphereRadius : t.scale.x * 0.5f;
+                    m_Renderer->DrawDebugSphere(t.position, r, Vec4(0.0f, 0.8f, 1.0f, 0.4f));
+                }
+            }
+        }
+
+        // 7. Normals visualization
+        if (m_ShowNormals && m_Scene) {
+            for (auto& obj : m_Scene->GetAllObjects()) {
+                if (!obj || !obj->IsActive()) continue;
+                auto* mr = obj->GetComponent<MeshRenderer>();
+                if (!mr) continue;
+                Transform& t = obj->GetTransform();
+                Vec3 p = t.position;
+                f32 len = 0.3f;
+                m_Renderer->DrawDebugLine(p, p + Vec3(0, len, 0), Vec4(0, 0, 1, 1));
+            }
+        }
+
+        // 8. Gizmo (toggleable)
+        if (m_ShowGizmos && m_Selected) {
             Vec3 gizPos = m_Selected->GetTransform().position;
             m_Renderer->RenderGizmo(*cam, gizPos, m_GizmoMode, m_DragAxis);
         }
@@ -954,6 +1122,16 @@ void EditorUI::DrawViewport(f32 dt) {
     // Display the FBO colour attachment as an ImGui Image
     ImTextureID texID = static_cast<ImTextureID>(m_ViewportColor);
     ImGui::Image(texID, size, ImVec2(0, 1), ImVec2(1, 0));   // flip Y
+
+    // ── Viewport overlay controls (top-left icons) ─────────────────────────
+    DrawViewportOverlayControls(m_VpScreenX, m_VpScreenY);
+
+    // ── Gizmo orientation cube (top-right corner) ──────────────────────────
+    DrawGizmoCube(m_VpScreenX, m_VpScreenY, m_VpScreenW, m_VpScreenH, cam);
+
+    // ── Camera preview PiP (bottom-right corner) ───────────────────────────
+    if (m_ShowCameraPiP)
+        DrawCameraPreviewPiP(m_VpScreenX, m_VpScreenY, m_VpScreenW, m_VpScreenH);
 
     // ── Orbit / Pan / Zoom camera controls ─────────────────────────────────
     bool vpHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
@@ -1158,6 +1336,12 @@ void EditorUI::DrawViewport(f32 dt) {
                     m_DragAxis = a;
                     m_DragStart = Vec3(mousePos.x, mousePos.y, 0);
                     m_DragObjStart = m_Selected->GetTransform().position;
+                    // Property undo: capture old values at drag start
+                    m_PropertyUndoPending = true;
+                    m_PropertyOldPos   = m_Selected->GetTransform().position;
+                    m_PropertyOldScale = m_Selected->GetTransform().scale;
+                    m_PropertyOldRot   = m_Selected->GetTransform().rotation;
+                    m_PropertyObjID    = m_Selected->GetID();
                     // For Euler rotation extract
                     const Quaternion& q = m_Selected->GetTransform().rotation;
                     f32 sinp = 2.0f * (q.w * q.x + q.y * q.z);

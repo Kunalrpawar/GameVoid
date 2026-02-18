@@ -149,8 +149,8 @@ bool Engine::Init(const EngineConfig& config) {
     RegisterBuiltinBehaviors();
     GV_LOG_INFO("Registered " + std::to_string(BehaviorRegistry::Instance().GetNames().size()) + " built-in behaviors.");
 
-    // ── Input / Audio (placeholders) ───────────────────────────────────────
-    m_Input.Init();
+    // ── Input / Audio ────────────────────────────────────────────────────
+    m_Input.Init(&m_Window);
     m_Audio.Init();
 
     // ── Editor ─────────────────────────────────────────────────────────────

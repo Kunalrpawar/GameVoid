@@ -184,7 +184,7 @@ void OpenGLRenderer::RenderScene(Scene& scene, Camera& camera) {
         RenderShadowPass(scene, lightDir);
     }
 
-    // ── 3. Main PBR pass ───────────────────────────────────────────────────
+    // ── 3. Rendering ─────────────────────────────────────────────────────────
     Mat4 view = camera.GetViewMatrix();
     Mat4 proj = camera.GetProjectionMatrix();
     Mat4 viewProj = proj * view;
@@ -192,6 +192,208 @@ void OpenGLRenderer::RenderScene(Scene& scene, Camera& camera) {
     // Extract frustum planes for culling
     Frustum frustum;
     frustum.ExtractFromVP(viewProj);
+
+    i32 drawCount = 0;
+    i32 culledCount = 0;
+    i32 numPL = static_cast<i32>(pointLights.size());
+    i32 numSL = static_cast<i32>(spotLights.size());
+
+    // ── 3a. Deferred rendering path ────────────────────────────────────────
+    if (m_DeferredEnabled && m_GeoPassShader && m_GBufferFBO && m_DeferredLightShader) {
+        GLint prevFBO = 0;
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
+
+        // ── Geometry pass (write to G-buffer MRT) ──────────────────────────
+        glBindFramebuffer(GL_FRAMEBUFFER, m_GBufferFBO);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glUseProgram(m_GeoPassShader);
+        glUniformMatrix4fv(glGetUniformLocation(m_GeoPassShader, "u_View"), 1, GL_FALSE, view.m);
+        glUniformMatrix4fv(glGetUniformLocation(m_GeoPassShader, "u_Proj"), 1, GL_FALSE, proj.m);
+        GLint gLocModel   = glGetUniformLocation(m_GeoPassShader, "u_Model");
+        GLint gLocColor   = glGetUniformLocation(m_GeoPassShader, "u_Color");
+        GLint gLocMetal   = glGetUniformLocation(m_GeoPassShader, "u_Metallic");
+        GLint gLocRough   = glGetUniformLocation(m_GeoPassShader, "u_Roughness");
+        GLint gLocAO      = glGetUniformLocation(m_GeoPassShader, "u_AO");
+        GLint gLocHasAlb  = glGetUniformLocation(m_GeoPassShader, "u_HasAlbedoMap");
+        GLint gLocHasNorm = glGetUniformLocation(m_GeoPassShader, "u_HasNormalMap");
+
+        for (auto& obj : scene.GetAllObjects()) {
+            if (!obj->IsActive()) continue;
+            MeshRenderer* mr = obj->GetComponent<MeshRenderer>();
+            if (!mr) continue;
+            if (mr->primitiveType == PrimitiveType::None && !mr->GetMesh()) continue;
+            Vec3 objPos = obj->GetTransform().GetWorldPosition();
+            f32 objScale = obj->GetTransform().scale.x;
+            if (!frustum.TestObject(objPos, objScale)) { culledCount++; continue; }
+
+            Mat4 model = obj->GetTransform().GetModelMatrix();
+            glUniformMatrix4fv(gLocModel, 1, GL_FALSE, model.m);
+
+            auto* mc = obj->GetComponent<MaterialComponent>();
+            if (mc) {
+                glUniform4f(gLocColor, mc->albedo.x, mc->albedo.y, mc->albedo.z, mc->albedo.w);
+                glUniform1f(gLocMetal, mc->metallic);
+                glUniform1f(gLocRough, mc->roughness);
+                glUniform1f(gLocAO, mc->ao);
+                if (mc->albedoMap) {
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, mc->albedoMap);
+                    glUniform1i(glGetUniformLocation(m_GeoPassShader, "u_AlbedoMap"), 0);
+                    glUniform1i(gLocHasAlb, 1);
+                } else { glUniform1i(gLocHasAlb, 0); }
+                if (mc->normalMap) {
+                    glActiveTexture(GL_TEXTURE0+1);
+                    glBindTexture(GL_TEXTURE_2D, mc->normalMap);
+                    glUniform1i(glGetUniformLocation(m_GeoPassShader, "u_NormalMap"), 1);
+                    glUniform1i(gLocHasNorm, 1);
+                } else { glUniform1i(gLocHasNorm, 0); }
+            } else {
+                glUniform4f(gLocColor, mr->color.x, mr->color.y, mr->color.z, mr->color.w);
+                glUniform1f(gLocMetal, 0.0f);
+                glUniform1f(gLocRough, 0.5f);
+                glUniform1f(gLocAO, 1.0f);
+                glUniform1i(gLocHasAlb, 0);
+                glUniform1i(gLocHasNorm, 0);
+            }
+            // Draw primitive
+            if (mr->GetMesh() && mr->GetMesh()->GetIndexCount() > 0) {
+                mr->GetMesh()->Bind();
+                glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(mr->GetMesh()->GetIndexCount()),
+                               GL_UNSIGNED_INT, nullptr);
+                mr->GetMesh()->Unbind();
+            } else if (mr->primitiveType == PrimitiveType::Triangle) {
+                glBindVertexArray(m_TriVAO); glDrawArrays(GL_TRIANGLES, 0, 3); glBindVertexArray(0);
+            } else if (mr->primitiveType == PrimitiveType::Cube) {
+                glBindVertexArray(m_CubeVAO);
+                glDrawElements(GL_TRIANGLES, m_CubeIndexCount, GL_UNSIGNED_INT, nullptr);
+                glBindVertexArray(0);
+            } else if (mr->primitiveType == PrimitiveType::Plane) {
+                glBindVertexArray(m_PlaneVAO);
+                glDrawElements(GL_TRIANGLES, m_PlaneIndexCount, GL_UNSIGNED_INT, nullptr);
+                glBindVertexArray(0);
+            }
+            drawCount++;
+        }
+        glUseProgram(0);
+
+        // ── SSAO pass ──────────────────────────────────────────────────────
+        if (m_SSAOEnabled && m_SSAOShader && m_SSAO_FBO && m_ScreenQuadVAO) {
+            glBindFramebuffer(GL_FRAMEBUFFER, m_SSAO_FBO);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glUseProgram(m_SSAOShader);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, m_GBufPosTex);
+            glUniform1i(glGetUniformLocation(m_SSAOShader, "gPosition"), 0);
+            glActiveTexture(GL_TEXTURE0+1);
+            glBindTexture(GL_TEXTURE_2D, m_GBufNormTex);
+            glUniform1i(glGetUniformLocation(m_SSAOShader, "gNormal"), 1);
+            glActiveTexture(GL_TEXTURE0+2);
+            glBindTexture(GL_TEXTURE_2D, m_SSAO_NoiseTex);
+            glUniform1i(glGetUniformLocation(m_SSAOShader, "u_NoiseTex"), 2);
+            glUniformMatrix4fv(glGetUniformLocation(m_SSAOShader, "u_View"), 1, GL_FALSE, view.m);
+            glUniformMatrix4fv(glGetUniformLocation(m_SSAOShader, "u_Projection"), 1, GL_FALSE, proj.m);
+            glUniform2f(glGetUniformLocation(m_SSAOShader, "u_NoiseScale"),
+                        static_cast<f32>(m_Width) / 4.0f, static_cast<f32>(m_Height) / 4.0f);
+            glBindVertexArray(m_ScreenQuadVAO);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+            glBindVertexArray(0);
+            glUseProgram(0);
+
+            // SSAO blur
+            if (m_SSAOBlurShader && m_SSAO_BlurFBO) {
+                glBindFramebuffer(GL_FRAMEBUFFER, m_SSAO_BlurFBO);
+                glClear(GL_COLOR_BUFFER_BIT);
+                glUseProgram(m_SSAOBlurShader);
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, m_SSAO_Tex);
+                glUniform1i(glGetUniformLocation(m_SSAOBlurShader, "u_SSAOInput"), 0);
+                glBindVertexArray(m_ScreenQuadVAO);
+                glDrawArrays(GL_TRIANGLES, 0, 6);
+                glBindVertexArray(0);
+                glUseProgram(0);
+            }
+        }
+
+        // ── Deferred lighting pass (full-screen quad) ──────────────────────
+        glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFBO));
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glDisable(GL_DEPTH_TEST);
+        glUseProgram(m_DeferredLightShader);
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, m_GBufPosTex);
+        glUniform1i(glGetUniformLocation(m_DeferredLightShader, "gPosition"), 0);
+        glActiveTexture(GL_TEXTURE0+1);
+        glBindTexture(GL_TEXTURE_2D, m_GBufNormTex);
+        glUniform1i(glGetUniformLocation(m_DeferredLightShader, "gNormal"), 1);
+        glActiveTexture(GL_TEXTURE0+2);
+        glBindTexture(GL_TEXTURE_2D, m_GBufAlbTex);
+        glUniform1i(glGetUniformLocation(m_DeferredLightShader, "gAlbedoAO"), 2);
+
+        if (m_SSAOEnabled && m_SSAO_BlurTex) {
+            glActiveTexture(GL_TEXTURE0+3);
+            glBindTexture(GL_TEXTURE_2D, m_SSAO_BlurTex);
+            glUniform1i(glGetUniformLocation(m_DeferredLightShader, "u_SSAOTex"), 3);
+            glUniform1i(glGetUniformLocation(m_DeferredLightShader, "u_SSAOEnabled"), 1);
+        } else {
+            glUniform1i(glGetUniformLocation(m_DeferredLightShader, "u_SSAOEnabled"), 0);
+        }
+
+        if (m_ShadowsEnabled && m_ShadowMap) {
+            glActiveTexture(GL_TEXTURE0+5);
+            glBindTexture(GL_TEXTURE_2D, m_ShadowMap);
+            glUniform1i(glGetUniformLocation(m_DeferredLightShader, "u_ShadowMap"), 5);
+            glUniformMatrix4fv(glGetUniformLocation(m_DeferredLightShader, "u_LightSpaceMatrix"),
+                               1, GL_FALSE, m_LightSpaceMatrix.m);
+            glUniform1i(glGetUniformLocation(m_DeferredLightShader, "u_ShadowsEnabled"), 1);
+        } else {
+            glUniform1i(glGetUniformLocation(m_DeferredLightShader, "u_ShadowsEnabled"), 0);
+        }
+
+        glUniform3f(glGetUniformLocation(m_DeferredLightShader, "u_CamPos"), camPos.x, camPos.y, camPos.z);
+        glUniform3f(glGetUniformLocation(m_DeferredLightShader, "u_LightDir"), lightDir.x, lightDir.y, lightDir.z);
+        glUniform3f(glGetUniformLocation(m_DeferredLightShader, "u_LightColor"), lightColor.x, lightColor.y, lightColor.z);
+        glUniform3f(glGetUniformLocation(m_DeferredLightShader, "u_AmbientColor"), ambientColor.x, ambientColor.y, ambientColor.z);
+
+        glUniform1i(glGetUniformLocation(m_DeferredLightShader, "u_NumPointLights"), numPL);
+        for (i32 i = 0; i < numPL; ++i) {
+            std::string p = "u_PointLights[" + std::to_string(i) + "]";
+            glUniform3f(glGetUniformLocation(m_DeferredLightShader, (p+".position").c_str()), pointLights[i].position.x, pointLights[i].position.y, pointLights[i].position.z);
+            glUniform3f(glGetUniformLocation(m_DeferredLightShader, (p+".color").c_str()), pointLights[i].colour.x, pointLights[i].colour.y, pointLights[i].colour.z);
+            glUniform1f(glGetUniformLocation(m_DeferredLightShader, (p+".intensity").c_str()), pointLights[i].intensity);
+            glUniform1f(glGetUniformLocation(m_DeferredLightShader, (p+".constant").c_str()), pointLights[i].constant);
+            glUniform1f(glGetUniformLocation(m_DeferredLightShader, (p+".linear").c_str()), pointLights[i].linear);
+            glUniform1f(glGetUniformLocation(m_DeferredLightShader, (p+".quadratic").c_str()), pointLights[i].quadratic);
+            glUniform1f(glGetUniformLocation(m_DeferredLightShader, (p+".range").c_str()), pointLights[i].range);
+        }
+
+        glUniform1i(glGetUniformLocation(m_DeferredLightShader, "u_NumSpotLights"), numSL);
+        for (i32 i = 0; i < numSL; ++i) {
+            std::string p = "u_SpotLights[" + std::to_string(i) + "]";
+            glUniform3f(glGetUniformLocation(m_DeferredLightShader, (p+".position").c_str()), spotLights[i].position.x, spotLights[i].position.y, spotLights[i].position.z);
+            glUniform3f(glGetUniformLocation(m_DeferredLightShader, (p+".direction").c_str()), spotLights[i].direction.x, spotLights[i].direction.y, spotLights[i].direction.z);
+            glUniform3f(glGetUniformLocation(m_DeferredLightShader, (p+".color").c_str()), spotLights[i].colour.x, spotLights[i].colour.y, spotLights[i].colour.z);
+            glUniform1f(glGetUniformLocation(m_DeferredLightShader, (p+".intensity").c_str()), spotLights[i].intensity);
+            glUniform1f(glGetUniformLocation(m_DeferredLightShader, (p+".innerCos").c_str()), spotLights[i].innerCos);
+            glUniform1f(glGetUniformLocation(m_DeferredLightShader, (p+".outerCos").c_str()), spotLights[i].outerCos);
+        }
+
+        glBindVertexArray(m_ScreenQuadVAO);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        glBindVertexArray(0);
+        glEnable(GL_DEPTH_TEST);
+        glUseProgram(0);
+
+        // Copy G-buffer depth to current FBO for subsequent draws (skybox, debug)
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, m_GBufferFBO);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(prevFBO));
+        glBlitFramebuffer(0, 0, static_cast<GLint>(m_Width), static_cast<GLint>(m_Height),
+                          0, 0, static_cast<GLint>(m_Width), static_cast<GLint>(m_Height),
+                          GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+        glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFBO));
+    }
+    // ── 3b. Forward PBR pass ───────────────────────────────────────────────
+    else {
 
     glUseProgram(m_SceneShader);
 
@@ -216,7 +418,6 @@ void OpenGLRenderer::RenderScene(Scene& scene, Camera& camera) {
                 ambientColor.x, ambientColor.y, ambientColor.z);
 
     // Point lights
-    i32 numPL = static_cast<i32>(pointLights.size());
     glUniform1i(glGetUniformLocation(m_SceneShader, "u_NumPointLights"), numPL);
     for (i32 i = 0; i < numPL; ++i) {
         std::string p = "u_PointLights[" + std::to_string(i) + "]";
@@ -237,7 +438,6 @@ void OpenGLRenderer::RenderScene(Scene& scene, Camera& camera) {
     }
 
     // Spot lights
-    i32 numSL = static_cast<i32>(spotLights.size());
     glUniform1i(glGetUniformLocation(m_SceneShader, "u_NumSpotLights"), numSL);
     for (i32 i = 0; i < numSL; ++i) {
         std::string p = "u_SpotLights[" + std::to_string(i) + "]";
@@ -277,9 +477,6 @@ void OpenGLRenderer::RenderScene(Scene& scene, Camera& camera) {
     GLint locAO        = glGetUniformLocation(m_SceneShader, "u_AO");
     GLint locHasAlbedo = glGetUniformLocation(m_SceneShader, "u_HasAlbedoMap");
     GLint locHasNormal = glGetUniformLocation(m_SceneShader, "u_HasNormalMap");
-
-    i32 drawCount = 0;
-    i32 culledCount = 0;
 
     for (auto& obj : scene.GetAllObjects()) {
         if (!obj->IsActive()) continue;
@@ -365,6 +562,8 @@ void OpenGLRenderer::RenderScene(Scene& scene, Camera& camera) {
     }
 
     glUseProgram(0);
+
+    } // end forward PBR else block
 
     // ── 4b. Draw skinned mesh objects (GPU bone animation) ─────────────────
     if (m_SkinnedShader) {

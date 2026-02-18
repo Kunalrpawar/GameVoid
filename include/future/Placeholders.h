@@ -18,6 +18,7 @@
 #include "core/Component.h"
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 namespace gv {
 
@@ -182,29 +183,104 @@ private:
 };
 
 // ============================================================================
-// Input Manager (placeholder)
+// Input Manager — keyboard, mouse, gamepad abstraction with action mapping
 // ============================================================================
+
+// Forward declaration
+class Window;
+
+/// Gamepad axis constants (match GLFW gamepad axis indices)
+namespace GVGamepad {
+    const i32 LeftStickX  = 0;
+    const i32 LeftStickY  = 1;
+    const i32 RightStickX = 2;
+    const i32 RightStickY = 3;
+    const i32 LeftTrigger = 4;
+    const i32 RightTrigger= 5;
+
+    const i32 ButtonA     = 0;
+    const i32 ButtonB     = 1;
+    const i32 ButtonX     = 2;
+    const i32 ButtonY     = 3;
+    const i32 BumperLeft  = 4;
+    const i32 BumperRight = 5;
+    const i32 Back        = 6;
+    const i32 Start       = 7;
+    const i32 Guide       = 8;
+    const i32 StickLeft   = 9;
+    const i32 StickRight  = 10;
+    const i32 DPadUp      = 11;
+    const i32 DPadRight   = 12;
+    const i32 DPadDown    = 13;
+    const i32 DPadLeft    = 14;
+}
+
 class InputManager {
 public:
-    void Init();
+    void Init(Window* window = nullptr);
     void Update();   // poll events each frame
 
+    /// Set the window to delegate input queries to. 
+    void SetWindow(Window* window) { m_Window = window; }
+
+    // ── Keyboard ───────────────────────────────────────────────────────────
     bool IsKeyDown(i32 keyCode) const;
     bool IsKeyPressed(i32 keyCode) const;   // single-frame press
     bool IsKeyReleased(i32 keyCode) const;
 
+    // ── Mouse ──────────────────────────────────────────────────────────────
     bool IsMouseButtonDown(i32 button) const;
     Vec2 GetMousePosition() const;
     Vec2 GetMouseDelta() const;
     f32  GetMouseScrollDelta() const;
 
-    // Gamepad
-    bool IsGamepadConnected(i32 index) const;
+    // ── Gamepad ────────────────────────────────────────────────────────────
+    bool IsGamepadConnected(i32 index = 0) const;
     f32  GetGamepadAxis(i32 index, i32 axis) const;
     bool IsGamepadButtonDown(i32 index, i32 button) const;
+    bool IsGamepadButtonPressed(i32 index, i32 button) const;
+    void SetDeadzone(f32 deadzone) { m_Deadzone = deadzone; }
+    f32  GetDeadzone() const       { return m_Deadzone; }
+
+    // ── Action Mapping ─────────────────────────────────────────────────────
+    /// Bind a key to a named action ("jump", "fire", "move_forward", etc.)
+    void BindAction(const std::string& action, i32 keyCode);
+    /// Bind a gamepad button to a named action.
+    void BindGamepadAction(const std::string& action, i32 button);
+    /// Query an action by name (checks all bound keys and gamepad buttons).
+    bool IsActionDown(const std::string& action) const;
+    bool IsActionPressed(const std::string& action) const;
+
+    /// Bind a key or axis to a named axis mapping ("move_x", "move_y", etc.)
+    /// For keys: negative key adds -1, positive key adds +1.
+    void BindAxis(const std::string& axisName, i32 negativeKey, i32 positiveKey);
+    /// Bind a gamepad axis to a named axis mapping.
+    void BindGamepadAxis(const std::string& axisName, i32 gpIndex, i32 gpAxis);
+    /// Query the current value of a named axis (returns -1..+1).
+    f32  GetAxis(const std::string& axisName) const;
 
 private:
-    // key state arrays, mouse state, etc.
+    Window* m_Window = nullptr;
+    f32 m_Deadzone = 0.15f;
+
+    // Gamepad previous-frame state for press detection
+    static const int MAX_GP_BUTTONS = 16;
+    bool m_GPButtons[MAX_GP_BUTTONS] = {};
+    bool m_GPButtonsPrev[MAX_GP_BUTTONS] = {};
+
+    // Action bindings
+    struct ActionBinding {
+        std::vector<i32> keys;        // keyboard keys
+        std::vector<i32> gpButtons;   // gamepad buttons
+    };
+    std::unordered_map<std::string, ActionBinding> m_Actions;
+
+    // Axis bindings
+    struct AxisBinding {
+        i32 negKey = -1, posKey = -1;     // keyboard axis (neg/pos pair)
+        i32 gpIndex = -1, gpAxis = -1;    // gamepad axis
+    };
+    std::unordered_map<std::string, AxisBinding> m_Axes;
 };
 
 // ============================================================================

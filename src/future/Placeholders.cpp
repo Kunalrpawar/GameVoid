@@ -3,6 +3,7 @@
 // ============================================================================
 #include "future/Placeholders.h"
 #include "core/GameObject.h"
+#include "core/Window.h"
 #include "miniaudio/miniaudio.h"
 #include <algorithm>
 #include <cmath>
@@ -498,21 +499,55 @@ void NetworkManager::Shutdown() {}
 #endif
 
 // ── Input Manager ──────────────────────────────────────────────────────────
-void InputManager::Init()   {
-    GV_LOG_INFO("InputManager initialised.");
+void InputManager::Init(Window* window)   {
+    m_Window = window;
+    // Zero out gamepad state
+    for (int i = 0; i < MAX_GP_BUTTONS; ++i) {
+        m_GPButtons[i] = false;
+        m_GPButtonsPrev[i] = false;
+    }
+    GV_LOG_INFO("InputManager initialised" + std::string(window ? " (with Window)." : " (no Window)."));
 }
 
 void InputManager::Update() {
-    // Gamepad state is polled via GLFW in the IsGamepadConnected / GetGamepadAxis etc.
+    // Snapshot previous gamepad frame state
+    for (int i = 0; i < MAX_GP_BUTTONS; ++i)
+        m_GPButtonsPrev[i] = m_GPButtons[i];
+
+#ifdef GV_HAS_GLFW
+    // Poll gamepad button state for press detection
+    GLFWgamepadstate state;
+    if (glfwGetGamepadState(0, &state)) {
+        for (int i = 0; i < MAX_GP_BUTTONS && i <= GLFW_GAMEPAD_BUTTON_LAST; ++i)
+            m_GPButtons[i] = (state.buttons[i] == GLFW_PRESS);
+    } else {
+        for (int i = 0; i < MAX_GP_BUTTONS; ++i)
+            m_GPButtons[i] = false;
+    }
+#endif
 }
 
-bool InputManager::IsKeyDown(i32 keyCode) const     { (void)keyCode; return false; }
-bool InputManager::IsKeyPressed(i32 keyCode) const   { (void)keyCode; return false; }
-bool InputManager::IsKeyReleased(i32 keyCode) const  { (void)keyCode; return false; }
-bool InputManager::IsMouseButtonDown(i32 btn) const   { (void)btn; return false; }
-Vec2 InputManager::GetMousePosition() const  { return {}; }
-Vec2 InputManager::GetMouseDelta() const     { return {}; }
-f32  InputManager::GetMouseScrollDelta() const { return 0; }
+bool InputManager::IsKeyDown(i32 keyCode) const {
+    return m_Window ? m_Window->IsKeyDown(keyCode) : false;
+}
+bool InputManager::IsKeyPressed(i32 keyCode) const {
+    return m_Window ? m_Window->IsKeyPressed(keyCode) : false;
+}
+bool InputManager::IsKeyReleased(i32 keyCode) const {
+    return m_Window ? m_Window->IsKeyReleased(keyCode) : false;
+}
+bool InputManager::IsMouseButtonDown(i32 btn) const {
+    return m_Window ? m_Window->IsMouseButtonDown(btn) : false;
+}
+Vec2 InputManager::GetMousePosition() const {
+    return m_Window ? m_Window->GetMousePosition() : Vec2{0,0};
+}
+Vec2 InputManager::GetMouseDelta() const {
+    return m_Window ? m_Window->GetMouseDelta() : Vec2{0,0};
+}
+f32  InputManager::GetMouseScrollDelta() const {
+    return m_Window ? m_Window->GetScrollDelta() : 0.0f;
+}
 
 bool InputManager::IsGamepadConnected(i32 idx) const {
 #ifdef GV_HAS_GLFW
@@ -528,8 +563,7 @@ f32 InputManager::GetGamepadAxis(i32 idx, i32 axis) const {
     if (glfwGetGamepadState(idx, &state)) {
         if (axis >= 0 && axis <= GLFW_GAMEPAD_AXIS_LAST) {
             f32 val = state.axes[axis];
-            // Apply deadzone
-            if (std::fabs(val) < 0.15f) val = 0.0f;
+            if (std::fabs(val) < m_Deadzone) val = 0.0f;
             return val;
         }
     }
@@ -543,14 +577,77 @@ bool InputManager::IsGamepadButtonDown(i32 idx, i32 btn) const {
 #ifdef GV_HAS_GLFW
     GLFWgamepadstate state;
     if (glfwGetGamepadState(idx, &state)) {
-        if (btn >= 0 && btn <= GLFW_GAMEPAD_BUTTON_LAST) {
+        if (btn >= 0 && btn <= GLFW_GAMEPAD_BUTTON_LAST)
             return state.buttons[btn] == GLFW_PRESS;
-        }
     }
 #else
     (void)idx; (void)btn;
 #endif
     return false;
+}
+
+bool InputManager::IsGamepadButtonPressed(i32 idx, i32 btn) const {
+    (void)idx; // only tracks gamepad 0 for press detection
+    if (btn < 0 || btn >= MAX_GP_BUTTONS) return false;
+    return m_GPButtons[btn] && !m_GPButtonsPrev[btn];
+}
+
+// ── Action mapping ─────────────────────────────────────────────────────────
+
+void InputManager::BindAction(const std::string& action, i32 keyCode) {
+    m_Actions[action].keys.push_back(keyCode);
+}
+
+void InputManager::BindGamepadAction(const std::string& action, i32 button) {
+    m_Actions[action].gpButtons.push_back(button);
+}
+
+bool InputManager::IsActionDown(const std::string& action) const {
+    auto it = m_Actions.find(action);
+    if (it == m_Actions.end()) return false;
+    for (i32 k : it->second.keys)
+        if (IsKeyDown(k)) return true;
+    for (i32 b : it->second.gpButtons)
+        if (IsGamepadButtonDown(0, b)) return true;
+    return false;
+}
+
+bool InputManager::IsActionPressed(const std::string& action) const {
+    auto it = m_Actions.find(action);
+    if (it == m_Actions.end()) return false;
+    for (i32 k : it->second.keys)
+        if (IsKeyPressed(k)) return true;
+    for (i32 b : it->second.gpButtons)
+        if (IsGamepadButtonPressed(0, b)) return true;
+    return false;
+}
+
+void InputManager::BindAxis(const std::string& axisName, i32 negativeKey, i32 positiveKey) {
+    m_Axes[axisName].negKey = negativeKey;
+    m_Axes[axisName].posKey = positiveKey;
+}
+
+void InputManager::BindGamepadAxis(const std::string& axisName, i32 gpIndex, i32 gpAxis) {
+    m_Axes[axisName].gpIndex = gpIndex;
+    m_Axes[axisName].gpAxis  = gpAxis;
+}
+
+f32 InputManager::GetAxis(const std::string& axisName) const {
+    auto it = m_Axes.find(axisName);
+    if (it == m_Axes.end()) return 0.0f;
+
+    f32 val = 0.0f;
+    // Keyboard contribution
+    if (it->second.negKey >= 0 && IsKeyDown(it->second.negKey)) val -= 1.0f;
+    if (it->second.posKey >= 0 && IsKeyDown(it->second.posKey)) val += 1.0f;
+
+    // Gamepad contribution (takes priority if non-zero)
+    if (it->second.gpAxis >= 0) {
+        f32 gpVal = GetGamepadAxis(it->second.gpIndex >= 0 ? it->second.gpIndex : 0,
+                                    it->second.gpAxis);
+        if (std::fabs(gpVal) > std::fabs(val)) val = gpVal;
+    }
+    return val;
 }
 
 // ── UI System ──────────────────────────────────────────────────────────────

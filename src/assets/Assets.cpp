@@ -726,7 +726,7 @@ static int JsonGetInt(const std::string& json, const std::string& key, int defau
     return std::atoi(json.c_str() + pos);
 }
 
-bool gv::LoadGLTF(const std::string& path, GLTFLoadResult& result) {
+bool LoadGLTF(const std::string& path, GLTFLoadResult& result) {
     // This minimal loader handles basic triangle meshes from .gltf files.
     // It reads the JSON and extracts vertex positions, normals, texcoords, and indices
     // from the first mesh primitive. Full skin/joint loading is deferred to

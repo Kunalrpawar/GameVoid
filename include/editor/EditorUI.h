@@ -30,6 +30,8 @@
 #include <string>
 #include <vector>
 #include <deque>
+#include <set>
+#include <filesystem>
 
 namespace gv {
 
@@ -99,6 +101,9 @@ public:
 
     bool IsPlaying() const { return m_Playing; }
 
+    /// Get all currently selected objects (multi-select).
+    const std::set<GameObject*>& GetSelectedObjects() const { return m_MultiSelected; }
+
 private:
     // ── Panel draw methods ─────────────────────────────────────────────────
     void DrawMenuBar();
@@ -118,6 +123,14 @@ private:
     void DrawNodeScriptPanel();
     void DrawCodeScriptPanel();        // inline script code editor
     void DrawBehaviorPanel();          // new: behavior editor panel
+
+    // ── High-priority feature panels ───────────────────────────────────────
+    void DrawAssetBrowser();           // file-tree asset browser
+    void DrawKeyboardShortcuts();      // configurable hotkey panel
+    void DrawViewportOverlayControls(f32 vpX, f32 vpY); // in-viewport overlay toggles
+    void DrawGizmoCube(f32 vpX, f32 vpY, f32 vpW, f32 vpH, Camera* cam); // orientation cube
+    void DrawCameraPreviewPiP(f32 vpX, f32 vpY, f32 vpW, f32 vpH); // PiP preview
+    void DrawGridSnapSettings();       // grid & snap settings popup
 
     // ── Inspector sub-sections ─────────────────────────────────────────────
     void DrawInspectorMaterial();       // Material component editor in inspector
@@ -143,6 +156,14 @@ private:
     void SaveScene(const std::string& path);
     void LoadScene(const std::string& path);
 
+    // ── Multi-select & clipboard helpers ───────────────────────────────────
+    void SelectObject(GameObject* obj, bool additive);
+    void SelectAll();
+    void ClearSelection();
+    void DuplicateSelected();
+    void CopySelected();
+    void PasteClipboard();
+
     // ── State ──────────────────────────────────────────────────────────────
     Window*         m_Window   = nullptr;
     OpenGLRenderer* m_Renderer = nullptr;
@@ -156,8 +177,32 @@ private:
     GizmoMode       m_GizmoMode = GizmoMode::Translate;
     bool            m_Playing  = false;
 
+    // ── Multi-select ───────────────────────────────────────────────────────
+    std::set<GameObject*> m_MultiSelected;
+
+    // ── Clipboard for copy/paste ───────────────────────────────────────────
+    struct ClipboardEntry {
+        std::string name;
+        Vec3 position, scale;
+        Quaternion rotation;
+        // Simplified: stores component type names + mesh/color data
+        int primitiveType = 0;
+        Vec4 color{0.7f, 0.7f, 0.7f, 1.0f};
+        bool hasRigidBody  = false;
+        bool hasCollider   = false;
+    };
+    std::vector<ClipboardEntry> m_Clipboard;
+
     // ── Undo/Redo ──────────────────────────────────────────────────────────
     UndoStack       m_UndoStack;
+
+    // ── Property undo tracking ─────────────────────────────────────────────
+    // Stores the old transform when a drag starts, pushed to undo stack on release
+    bool  m_PropertyUndoPending = false;
+    Vec3  m_PropertyOldPos   {};
+    Vec3  m_PropertyOldScale {};
+    Quaternion m_PropertyOldRot {};
+    u32   m_PropertyObjID = 0;
 
     // ── Placement mode (drag-to-place objects) ─────────────────────────────
     enum class PlacementType { None, Cube, Light, Terrain, Particles, Floor };
@@ -179,6 +224,8 @@ private:
     Vec3 m_DragScaleStart{};
     bool m_SnapToGrid    = false;
     f32  m_GridSize       = 1.0f;
+    f32  m_RotationSnap   = 15.0f;   // rotation snap angle in degrees
+    f32  m_ScaleSnap      = 0.1f;    // scale snap increment
 
     // Viewport screen-space info for picking
     f32  m_VpScreenX = 0, m_VpScreenY = 0; // top-left of viewport in screen coords
@@ -190,6 +237,18 @@ private:
     u32 m_ViewportDepth  = 0;   // depth renderbuffer
     u32 m_ViewportW      = 1;
     u32 m_ViewportH      = 1;
+
+    // ── Secondary viewport for split view ──────────────────────────────────
+    u32 m_ViewportFBO2   = 0;
+    u32 m_ViewportColor2 = 0;
+    u32 m_ViewportDepth2 = 0;
+    u32 m_ViewportW2     = 1;
+    u32 m_ViewportH2     = 1;
+    enum class ViewportLayout { Single, SideBySide, Quad };
+    ViewportLayout m_ViewportLayout = ViewportLayout::Single;
+    // Camera angles for secondary viewports
+    enum class ViewAngle { Perspective, Top, Front, Right };
+    ViewAngle m_SecondaryViewAngle = ViewAngle::Top;
 
     // Console log ring-buffer
     static std::deque<std::string> s_Logs;
@@ -204,6 +263,29 @@ private:
     bool m_ShowDemo    = false;
     bool m_ShowAIPanel = true;
     bool m_ShowEditorSettings = false;   // Editor Settings popup (API key input)
+    bool m_ShowKeyboardShortcuts = false; // Keyboard shortcuts window
+    bool m_ShowGridSnapSettings  = false; // Grid/snap config popup
+    bool m_ShowAssetBrowser      = false; // Asset browser panel
+
+    // ── Viewport overlay toggles ───────────────────────────────────────────
+    bool m_ShowWireframe      = false;
+    bool m_ShowBoundingBoxes  = false;
+    bool m_ShowCollisionShapes = false;
+    bool m_ShowNormals        = false;
+    bool m_ShowGrid           = true;
+    bool m_ShowGizmos         = true;
+    bool m_ShowCameraPiP      = false;
+
+    // ── Hierarchy search / filter ──────────────────────────────────────────
+    char m_HierarchySearchBuf[128] = {};
+
+    // ── Drag-and-drop reparenting ──────────────────────────────────────────
+    GameObject* m_DragDropSource = nullptr;
+
+    // ── Asset browser state ────────────────────────────────────────────────
+    std::string m_AssetBrowserRoot;           // project root
+    std::string m_AssetBrowserCurrentDir;     // currently browsed folder
+    char m_AssetSearchBuf[128] = {};
 
     // ── AI Generator state ─────────────────────────────────────────────────
     char   m_AIPromptBuf[1024] = {};
@@ -216,7 +298,7 @@ private:
     char   m_AIKeyBuf[256] = {};        // API key input buffer
 
     // ── Bottom tab state ───────────────────────────────────────────────────
-    i32 m_BottomTab = 0;   // 0=Console, 1=Terrain, 2=Material, 3=Particle, 4=Animation, 5=NodeScript, 6=Behavior, 7=CodeScript
+    i32 m_BottomTab = 0;   // 0=Console, 1=Terrain, 2=Material, 3=Particle, 4=Animation, 5=NodeScript, 6=Behavior, 7=CodeScript, 8=AssetBrowser
 
     // ── Terrain editor state ───────────────────────────────────────────────
     i32  m_TerrainRes       = 64;
