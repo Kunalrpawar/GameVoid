@@ -130,6 +130,8 @@ private:
     void DrawGizmoCube(f32 vpX, f32 vpY, f32 vpW, f32 vpH, Camera* cam); // orientation cube
     void DrawCameraPreviewPiP(f32 vpX, f32 vpY, f32 vpW, f32 vpH); // PiP preview
     void DrawGridSnapSettings();       // grid & snap settings popup
+    void DrawImportAssetDialog();      // native file dialog to import models/textures/audio
+    void DrawBuildPanel();             // game build/export configuration panel
 
     // ── Inspector sub-sections ─────────────────────────────────────────────
     void DrawInspectorMaterial();       // Material component editor in inspector
@@ -154,6 +156,18 @@ private:
     void DeleteSelected();
     void SaveScene(const std::string& path);
     void LoadScene(const std::string& path);
+
+    // ── Asset import helpers ───────────────────────────────────────────────
+    std::string OpenFileDialog(const char* filter, const char* title);
+    std::string OpenFolderDialog(const char* title);
+    void ImportAssetFile(const std::string& path);
+    void ImportModelIntoScene(const std::string& path);
+    void ImportTextureToSelected(const std::string& path);
+
+    // ── Build system helpers ───────────────────────────────────────────────
+    void BuildGame();
+    void BuildAndRun();
+    void ExportScene();
 
     // ── Multi-select & clipboard helpers ───────────────────────────────────
     void SelectObject(GameObject* obj, bool additive);
@@ -265,6 +279,8 @@ private:
     bool m_ShowKeyboardShortcuts = false; // Keyboard shortcuts window
     bool m_ShowGridSnapSettings  = false; // Grid/snap config popup
     bool m_ShowAssetBrowser      = false; // Asset browser panel
+    bool m_ShowImportDialog     = false; // Import asset dialog
+    bool m_ShowBuildPanel       = false; // Build/export panel
 
     // ── Viewport overlay toggles ───────────────────────────────────────────
     bool m_ShowWireframe      = false;
@@ -285,6 +301,26 @@ private:
     std::string m_AssetBrowserRoot;           // project root
     std::string m_AssetBrowserCurrentDir;     // currently browsed folder
     char m_AssetSearchBuf[128] = {};
+
+    // ── Imported assets tracking ────────────────────────────────────────────
+    struct ImportedAsset {
+        std::string name;
+        std::string fullPath;
+        std::string type;     // "Model", "Texture", "Audio", "Script"
+        bool loaded = false;
+    };
+    std::vector<ImportedAsset> m_ImportedAssets;
+
+    // ── Build system state ──────────────────────────────────────────────────
+    char m_BuildOutputDir[256]  = "build/game";
+    char m_BuildGameName[128]   = "MyGame";
+    i32  m_BuildConfig          = 0;    // 0=Debug, 1=Release
+    bool m_BuildIncludeAssets   = true;
+    bool m_BuildIncludeScripts  = true;
+    bool m_BuildRunAfter        = false;
+    bool m_BuildInProgress      = false;
+    f32  m_BuildProgress        = 0.0f;
+    std::string m_BuildLog;
 
     // ── AI Generator state ─────────────────────────────────────────────────
     char   m_AIPromptBuf[1024] = {};
