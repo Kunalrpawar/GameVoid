@@ -1402,6 +1402,19 @@ void EditorUI::DrawViewport(f32 dt) {
 
         // End drag
         if (m_Dragging && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+            // Push property undo command
+            if (m_PropertyUndoPending && m_Selected && m_Selected->GetID() == m_PropertyObjID) {
+                Vec3 newPos   = m_Selected->GetTransform().position;
+                Vec3 newScale = m_Selected->GetTransform().scale;
+                Vec3 oldPos   = m_PropertyOldPos;
+                Vec3 oldScale = m_PropertyOldScale;
+                std::string objName = m_Selected->GetName();
+                Vec3* posPtr   = &m_Selected->GetTransform().position;
+                Vec3* scalePtr = &m_Selected->GetTransform().scale;
+                m_UndoStack.Execute(std::make_unique<TransformCommand>(
+                    posPtr, oldPos, newPos, scalePtr, oldScale, newScale, objName));
+                m_PropertyUndoPending = false;
+            }
             m_Dragging = false;
             m_DragAxis = -1;
         }
@@ -1679,6 +1692,487 @@ void EditorUI::AIUndoLastGeneration() {
         if (!found) m_Selected = nullptr;
     }
 }
+
+// ============================================================================
+// Multi-Select & Clipboard Helpers
+// ============================================================================
+
+void EditorUI::SelectObject(GameObject* obj, bool additive) {
+    if (!obj) return;
+    if (additive) {
+        // Toggle in/out of multi-selection
+        if (m_MultiSelected.count(obj)) {
+            m_MultiSelected.erase(obj);
+            if (m_Selected == obj) {
+                m_Selected = m_MultiSelected.empty() ? nullptr : *m_MultiSelected.begin();
+            }
+        } else {
+            m_MultiSelected.insert(obj);
+            m_Selected = obj;
+        }
+    } else {
+        // Single-select (clear multi)
+        m_MultiSelected.clear();
+        m_MultiSelected.insert(obj);
+        m_Selected = obj;
+    }
+}
+
+void EditorUI::SelectAll() {
+    if (!m_Scene) return;
+    m_MultiSelected.clear();
+    for (auto& obj : m_Scene->GetAllObjects()) {
+        if (obj) m_MultiSelected.insert(obj.get());
+    }
+    if (!m_MultiSelected.empty())
+        m_Selected = *m_MultiSelected.begin();
+    PushLog("[Edit] Selected all (" + std::to_string(m_MultiSelected.size()) + " objects).");
+}
+
+void EditorUI::ClearSelection() {
+    m_MultiSelected.clear();
+    m_Selected = nullptr;
+}
+
+void EditorUI::CopySelected() {
+    m_Clipboard.clear();
+    auto copyObj = [&](GameObject* obj) {
+        if (!obj) return;
+        ClipboardEntry entry;
+        entry.name     = obj->GetName();
+        entry.position = obj->GetTransform().position;
+        entry.scale    = obj->GetTransform().scale;
+        entry.rotation = obj->GetTransform().rotation;
+        auto* mr = obj->GetComponent<MeshRenderer>();
+        if (mr) {
+            entry.primitiveType = static_cast<int>(mr->primitiveType);
+            entry.color = mr->color;
+        }
+        entry.hasRigidBody = (obj->GetComponent<RigidBody>() != nullptr);
+        entry.hasCollider  = (obj->GetComponent<Collider>() != nullptr);
+        m_Clipboard.push_back(entry);
+    };
+
+    if (m_MultiSelected.size() > 1) {
+        for (auto* obj : m_MultiSelected) copyObj(obj);
+    } else if (m_Selected) {
+        copyObj(m_Selected);
+    }
+    if (!m_Clipboard.empty())
+        PushLog("[Edit] Copied " + std::to_string(m_Clipboard.size()) + " object(s).");
+}
+
+void EditorUI::PasteClipboard() {
+    if (m_Clipboard.empty() || !m_Scene) {
+        PushLog("[Edit] Nothing to paste.");
+        return;
+    }
+    m_MultiSelected.clear();
+    for (auto& entry : m_Clipboard) {
+        auto* obj = m_Scene->CreateGameObject(entry.name + "_copy");
+        obj->GetTransform().position = entry.position + Vec3(1, 0, 1); // offset
+        obj->GetTransform().scale    = entry.scale;
+        obj->GetTransform().rotation = entry.rotation;
+        if (entry.primitiveType > 0) {
+            auto* mr = obj->AddComponent<MeshRenderer>();
+            mr->primitiveType = static_cast<PrimitiveType>(entry.primitiveType);
+            mr->color = entry.color;
+        }
+        if (entry.hasRigidBody) {
+            auto* rb = obj->AddComponent<RigidBody>();
+            rb->useGravity = true;
+            if (entry.hasCollider)
+                obj->AddComponent<Collider>()->type = ColliderType::Box;
+            if (m_Physics) m_Physics->RegisterBody(rb);
+        }
+        m_MultiSelected.insert(obj);
+        m_Selected = obj;
+    }
+    PushLog("[Edit] Pasted " + std::to_string(m_Clipboard.size()) + " object(s).");
+}
+
+void EditorUI::DuplicateSelected() {
+    if (!m_Scene) return;
+    // Build temporary clipboard and paste
+    std::vector<ClipboardEntry> savedClip = m_Clipboard;
+    CopySelected();
+    PasteClipboard();
+    m_Clipboard = savedClip; // restore original clipboard
+}
+
+// ============================================================================
+// Asset Browser Panel
+// ============================================================================
+
+void EditorUI::DrawAssetBrowser() {
+    if (m_AssetBrowserRoot.empty()) {
+        // Default to project root (crude detection)
+        m_AssetBrowserRoot = ".";
+        m_AssetBrowserCurrentDir = m_AssetBrowserRoot;
+    }
+
+    ImGui::Columns(2, "AssetBrowserCols", true);
+    ImGui::SetColumnWidth(0, 200);
+
+    // Column 1: Directory tree
+    ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1), "Folders");
+    ImGui::Separator();
+
+    auto drawDirTree = [&](auto& self, const std::string& path, int depth) -> void {
+        if (depth > 5) return;
+        try {
+            for (auto& entry : std::filesystem::directory_iterator(path)) {
+                if (!entry.is_directory()) continue;
+                std::string dirName = entry.path().filename().string();
+                // Skip hidden/build dirs
+                if (dirName[0] == '.' || dirName == "build" || dirName == ".git") continue;
+
+                ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow;
+                if (entry.path().string() == m_AssetBrowserCurrentDir)
+                    flags |= ImGuiTreeNodeFlags_Selected;
+
+                bool open = ImGui::TreeNodeEx(dirName.c_str(), flags);
+                if (ImGui::IsItemClicked()) {
+                    m_AssetBrowserCurrentDir = entry.path().string();
+                }
+                if (open) {
+                    self(self, entry.path().string(), depth + 1);
+                    ImGui::TreePop();
+                }
+            }
+        } catch (...) {}
+    };
+
+    if (ImGui::TreeNodeEx("Project", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::IsItemClicked()) m_AssetBrowserCurrentDir = m_AssetBrowserRoot;
+        drawDirTree(drawDirTree, m_AssetBrowserRoot, 0);
+        ImGui::TreePop();
+    }
+
+    ImGui::NextColumn();
+
+    // Column 2: File list
+    ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.4f, 1), "Files");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(200);
+    ImGui::InputTextWithHint("##AssetSearch", "Filter...", m_AssetSearchBuf, sizeof(m_AssetSearchBuf));
+    ImGui::Separator();
+
+    std::string assetFilter(m_AssetSearchBuf);
+    for (auto& c : assetFilter) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    try {
+        for (auto& entry : std::filesystem::directory_iterator(m_AssetBrowserCurrentDir)) {
+            std::string fname = entry.path().filename().string();
+
+            // Apply filter
+            if (!assetFilter.empty()) {
+                std::string fnameLower = fname;
+                for (auto& c : fnameLower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                if (fnameLower.find(assetFilter) == std::string::npos) continue;
+            }
+
+            // Icon based on extension
+            const char* icon = entry.is_directory() ? "[D] " : "[F] ";
+            std::string ext = entry.path().extension().string();
+            if (ext == ".h" || ext == ".hpp" || ext == ".cpp" || ext == ".c")
+                icon = "[C] ";
+            else if (ext == ".png" || ext == ".jpg" || ext == ".bmp" || ext == ".tga")
+                icon = "[T] "; // texture
+            else if (ext == ".gvs")
+                icon = "[S] "; // script
+            else if (ext == ".obj" || ext == ".fbx" || ext == ".glb")
+                icon = "[M] "; // mesh
+            else if (ext == ".wav" || ext == ".mp3" || ext == ".ogg")
+                icon = "[A] "; // audio
+            else if (ext == ".ini" || ext == ".json" || ext == ".xml")
+                icon = "[*] ";
+
+            std::string label = std::string(icon) + fname;
+            if (ImGui::Selectable(label.c_str())) {
+                PushLog("[Assets] Selected: " + entry.path().string());
+            }
+
+            // Drag-and-drop source for asset files
+            if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+                std::string pathStr = entry.path().string();
+                ImGui::SetDragDropPayload("GV_ASSET_PATH", pathStr.c_str(), pathStr.size() + 1);
+                ImGui::Text("%s", fname.c_str());
+                ImGui::EndDragDropSource();
+            }
+
+            // Tooltip with file info
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                ImGui::Text("%s", entry.path().string().c_str());
+                if (entry.is_regular_file()) {
+                    auto sz = entry.file_size();
+                    if (sz > 1024 * 1024)
+                        ImGui::Text("Size: %.1f MB", static_cast<float>(sz) / (1024.0f * 1024.0f));
+                    else if (sz > 1024)
+                        ImGui::Text("Size: %.1f KB", static_cast<float>(sz) / 1024.0f);
+                    else
+                        ImGui::Text("Size: %llu bytes", static_cast<unsigned long long>(sz));
+                }
+                ImGui::EndTooltip();
+            }
+        }
+    } catch (...) {
+        ImGui::TextDisabled("Cannot read directory.");
+    }
+
+    ImGui::Columns(1);
+}
+
+// ============================================================================
+// Keyboard Shortcuts Panel
+// ============================================================================
+
+void EditorUI::DrawKeyboardShortcuts() {
+    ImGui::SetNextWindowSize(ImVec2(420, 460), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Keyboard Shortcuts", &m_ShowKeyboardShortcuts)) {
+        ImGui::End();
+        return;
+    }
+
+    ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1), "Editor Shortcuts");
+    ImGui::Separator();
+
+    struct ShortcutEntry { const char* keys; const char* action; };
+    static const ShortcutEntry shortcuts[] = {
+        { "Ctrl+Z",         "Undo" },
+        { "Ctrl+Y",         "Redo" },
+        { "Ctrl+C",         "Copy selected object(s)" },
+        { "Ctrl+V",         "Paste" },
+        { "Ctrl+D",         "Duplicate selected" },
+        { "Ctrl+A",         "Select all objects" },
+        { "Delete",         "Delete selected" },
+        { "",               "" },
+        { "W",              "Translate gizmo mode" },
+        { "E",              "Rotate gizmo mode" },
+        { "R",              "Scale gizmo mode" },
+        { "F",              "Focus on selected object" },
+        { "Z",              "Toggle wireframe" },
+        { "Escape",         "Cancel placement" },
+        { "",               "" },
+        { "Middle Mouse",   "Orbit camera" },
+        { "Shift+MMB",      "Pan camera" },
+        { "Scroll Wheel",   "Zoom camera" },
+        { "Right Mouse",    "Orbit camera (alt)" },
+        { "Alt+LMB",        "Orbit camera (Maya-style)" },
+        { "",               "" },
+        { "Ctrl+Click",     "Add/remove from multi-selection" },
+        { "Shift+Click",    "Add to multi-selection" },
+        { "Left Click",     "Select / Pick object in viewport" },
+    };
+
+    if (ImGui::BeginTable("ShortcutsTable", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders)) {
+        ImGui::TableSetupColumn("Shortcut", ImGuiTableColumnFlags_WidthFixed, 150);
+        ImGui::TableSetupColumn("Action");
+        ImGui::TableHeadersRow();
+
+        for (auto& s : shortcuts) {
+            if (s.keys[0] == '\0') {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::Separator();
+                continue;
+            }
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1), "%s", s.keys);
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("%s", s.action);
+        }
+        ImGui::EndTable();
+    }
+
+    ImGui::End();
+}
+
+// ============================================================================
+// Viewport Overlay Controls (top-left of viewport)
+// ============================================================================
+
+void EditorUI::DrawViewportOverlayControls(f32 vpX, f32 vpY) {
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    ImVec2 pos(vpX + 8, vpY + 8);
+    f32 btnW = 22, btnH = 18, gap = 2;
+
+    auto overlayBtn = [&](const char* label, bool& toggle, ImU32 onColor) {
+        ImVec2 tl = pos;
+        ImVec2 br(pos.x + btnW, pos.y + btnH);
+        ImU32 col = toggle ? onColor : IM_COL32(60, 60, 65, 200);
+        dl->AddRectFilled(tl, br, col, 3.0f);
+        ImVec2 textSz = ImGui::CalcTextSize(label);
+        dl->AddText(ImVec2(tl.x + (btnW - textSz.x) * 0.5f, tl.y + (btnH - textSz.y) * 0.5f),
+                    IM_COL32(255, 255, 255, 220), label);
+        // Check click
+        ImVec2 mp = ImGui::GetIO().MousePos;
+        if (mp.x >= tl.x && mp.x <= br.x && mp.y >= tl.y && mp.y <= br.y) {
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+                toggle = !toggle;
+            dl->AddRect(tl, br, IM_COL32(255, 255, 255, 100), 3.0f);
+        }
+        pos.x += btnW + gap;
+    };
+
+    overlayBtn("W", m_ShowWireframe,       IM_COL32(80, 140, 200, 220));
+    overlayBtn("B", m_ShowBoundingBoxes,   IM_COL32(80, 180, 80, 220));
+    overlayBtn("C", m_ShowCollisionShapes, IM_COL32(200, 140, 40, 220));
+    overlayBtn("N", m_ShowNormals,         IM_COL32(100, 100, 200, 220));
+    overlayBtn("G", m_ShowGrid,            IM_COL32(120, 120, 120, 220));
+    overlayBtn("P", m_ShowCameraPiP,       IM_COL32(160, 80, 160, 220));
+}
+
+// ============================================================================
+// Gizmo Orientation Cube (top-right of viewport)
+// ============================================================================
+
+void EditorUI::DrawGizmoCube(f32 vpX, f32 vpY, f32 vpW, f32 vpH, Camera* cam) {
+    if (!cam || !cam->GetOwner()) return;
+
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    f32 cubeSize = 60.0f;
+    ImVec2 center(vpX + vpW - cubeSize - 10, vpY + cubeSize + 10);
+
+    // Get camera rotation to rotate cube faces
+    Transform& ct = cam->GetOwner()->GetTransform();
+    Vec3 camForward = ct.Forward();
+    Vec3 camRight   = ct.Right();
+    Vec3 camUp      = ct.Up();
+
+    // Draw cube faces as projected directions
+    struct FaceInfo { Vec3 dir; const char* label; ImU32 color; ViewAngle angle; };
+    FaceInfo faces[] = {
+        { Vec3( 1, 0, 0), "+X", IM_COL32(220, 60, 60, 200),  ViewAngle::Right },
+        { Vec3(-1, 0, 0), "-X", IM_COL32(120, 30, 30, 200),  ViewAngle::Right },
+        { Vec3(0,  1, 0), "+Y", IM_COL32(60, 200, 60, 200),  ViewAngle::Top },
+        { Vec3(0, -1, 0), "-Y", IM_COL32(30, 100, 30, 200),  ViewAngle::Top },
+        { Vec3(0, 0,  1), "+Z", IM_COL32(60, 60, 220, 200),  ViewAngle::Front },
+        { Vec3(0, 0, -1), "-Z", IM_COL32(30, 30, 120, 200),  ViewAngle::Front },
+    };
+
+    // Background circle
+    dl->AddCircleFilled(center, cubeSize * 0.5f + 4, IM_COL32(30, 30, 35, 180), 24);
+
+    // Sort faces by depth (furthest first)
+    struct ProjectedFace { ImVec2 pos; const char* label; ImU32 color; f32 depth; ViewAngle angle; };
+    ProjectedFace projected[6];
+    for (int i = 0; i < 6; i++) {
+        Vec3 d = faces[i].dir;
+        // Project onto camera plane
+        f32 x = d.x * camRight.x + d.y * camRight.y + d.z * camRight.z;
+        f32 y = -(d.x * camUp.x + d.y * camUp.y + d.z * camUp.z);
+        f32 z = d.x * camForward.x + d.y * camForward.y + d.z * camForward.z;
+        projected[i].pos = ImVec2(center.x + x * cubeSize * 0.3f, center.y + y * cubeSize * 0.3f);
+        projected[i].label = faces[i].label;
+        projected[i].color = faces[i].color;
+        projected[i].depth = z;
+        projected[i].angle = faces[i].angle;
+    }
+
+    // Sort back-to-front
+    for (int i = 0; i < 5; i++)
+        for (int j = i + 1; j < 6; j++)
+            if (projected[i].depth > projected[j].depth)
+                std::swap(projected[i], projected[j]);
+
+    for (int i = 0; i < 6; i++) {
+        f32 radius = 10.0f;
+        if (projected[i].depth > 0) radius = 12.0f; // front faces larger
+
+        dl->AddCircleFilled(projected[i].pos, radius, projected[i].color, 12);
+
+        ImVec2 textSz = ImGui::CalcTextSize(projected[i].label);
+        dl->AddText(ImVec2(projected[i].pos.x - textSz.x * 0.5f,
+                           projected[i].pos.y - textSz.y * 0.5f),
+                    IM_COL32(255, 255, 255, 220), projected[i].label);
+
+        // Click to snap to that view
+        ImVec2 mp = ImGui::GetIO().MousePos;
+        f32 dx = mp.x - projected[i].pos.x;
+        f32 dy = mp.y - projected[i].pos.y;
+        if (dx * dx + dy * dy < radius * radius) {
+            dl->AddCircle(projected[i].pos, radius + 2, IM_COL32(255, 255, 255, 200), 12, 2);
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                // Snap orbit camera to view angle
+                switch (projected[i].angle) {
+                    case ViewAngle::Top:
+                        m_OrbitCam.yaw = 0; m_OrbitCam.pitch = -89.0f;
+                        break;
+                    case ViewAngle::Front:
+                        m_OrbitCam.yaw = 0; m_OrbitCam.pitch = 0;
+                        break;
+                    case ViewAngle::Right:
+                        m_OrbitCam.yaw = 90; m_OrbitCam.pitch = 0;
+                        break;
+                    default: break;
+                }
+                m_OrbitCam.ApplyToTransform(cam->GetOwner()->GetTransform());
+                PushLog("[Viewport] Snapped to " + std::string(projected[i].label) + " view.");
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Camera Preview PiP (bottom-right of viewport)
+// ============================================================================
+
+void EditorUI::DrawCameraPreviewPiP(f32 vpX, f32 vpY, f32 vpW, f32 vpH) {
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    f32 pipW = 160, pipH = 100;
+    ImVec2 pipPos(vpX + vpW - pipW - 10, vpY + vpH - pipH - 10);
+
+    // Border and background
+    dl->AddRectFilled(pipPos, ImVec2(pipPos.x + pipW, pipPos.y + pipH), IM_COL32(20, 20, 25, 220), 4);
+    dl->AddRect(pipPos, ImVec2(pipPos.x + pipW, pipPos.y + pipH), IM_COL32(100, 100, 120, 200), 4, 0, 2);
+
+    // Label
+    dl->AddText(ImVec2(pipPos.x + 4, pipPos.y + 2), IM_COL32(200, 200, 200, 200), "Game Camera");
+
+    // Show the main viewport texture scaled down (a simplified PiP)
+    if (m_ViewportColor) {
+        // Use the same FBO texture, just smaller
+        ImVec2 uv0(0, 1), uv1(1, 0); // flip Y
+        dl->AddImage(static_cast<ImTextureID>(m_ViewportColor),
+                     ImVec2(pipPos.x + 2, pipPos.y + 16),
+                     ImVec2(pipPos.x + pipW - 2, pipPos.y + pipH - 2),
+                     uv0, uv1);
+    }
+}
+
+// ============================================================================
+// Grid & Snap Settings Popup
+// ============================================================================
+
+void EditorUI::DrawGridSnapSettings() {
+    ImGui::SetNextWindowSize(ImVec2(300, 220), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Grid & Snap Settings", &m_ShowGridSnapSettings)) {
+        ImGui::End();
+        return;
+    }
+
+    ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1), "Grid Settings");
+    ImGui::Separator();
+    ImGui::Checkbox("Show Grid", &m_ShowGrid);
+    ImGui::DragFloat("Grid Spacing", &m_GridSize, 0.1f, 0.1f, 20.0f, "%.1f");
+
+    ImGui::Spacing();
+    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.4f, 1), "Snap Settings");
+    ImGui::Separator();
+    ImGui::Checkbox("Snap to Grid", &m_SnapToGrid);
+    ImGui::DragFloat("Position Snap", &m_GridSize, 0.1f, 0.1f, 10.0f, "%.1f");
+    ImGui::DragFloat("Rotation Snap (deg)", &m_RotationSnap, 1.0f, 1.0f, 90.0f, "%.0f");
+    ImGui::DragFloat("Scale Snap", &m_ScaleSnap, 0.05f, 0.01f, 2.0f, "%.2f");
+
+    ImGui::Spacing();
+    ImGui::TextDisabled("Position snap applies when Snap checkbox is on.");
+    ImGui::TextDisabled("Rotation/scale snap apply during gizmo drag.");
+
+    ImGui::End();
+}
 // ── Bottom Tabbed Panel ────────────────────────────────────────────────────
 
 void EditorUI::DrawBottomTabs() {
@@ -1758,10 +2252,26 @@ void EditorUI::DrawBottomTabs() {
             ImGui::EndTabItem();
         }
 
+        if (ImGui::BeginTabItem("Assets")) {
+            m_BottomTab = 8;
+            DrawAssetBrowser();
+            ImGui::EndTabItem();
+        }
+
         ImGui::EndTabBar();
     }
 
     ImGui::End();
+
+    // ── Keyboard Shortcuts window ──────────────────────────────────────────
+    if (m_ShowKeyboardShortcuts) {
+        DrawKeyboardShortcuts();
+    }
+
+    // ── Grid & Snap Settings popup ─────────────────────────────────────────
+    if (m_ShowGridSnapSettings) {
+        DrawGridSnapSettings();
+    }
 
     // ── Editor Settings Popup (API key, model selection) ───────────────────
     if (m_ShowEditorSettings) {
@@ -2753,10 +3263,25 @@ void EditorUI::FinishPlacement() {
 }
 
 void EditorUI::DeleteSelected() {
-    if (!m_Scene || !m_Selected) return;
+    if (!m_Scene) return;
+
+    // Multi-select delete
+    if (m_MultiSelected.size() > 1) {
+        int count = 0;
+        for (auto* obj : m_MultiSelected) {
+            if (obj) { m_Scene->DestroyGameObject(obj); count++; }
+        }
+        PushLog("[Editor] Deleted " + std::to_string(count) + " objects.");
+        m_MultiSelected.clear();
+        m_Selected = nullptr;
+        return;
+    }
+
+    if (!m_Selected) return;
     std::string name = m_Selected->GetName();
     m_Scene->DestroyGameObject(m_Selected);
     m_Selected = nullptr;
+    m_MultiSelected.clear();
     PushLog("[Editor] Deleted '" + name + "'.");
 }
 
