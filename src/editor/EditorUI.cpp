@@ -1094,7 +1094,7 @@ void EditorUI::DrawViewport(f32 dt) {
                     if (half.x < 0.01f) half = Vec3(0.5f * t.scale.x, 0.5f * t.scale.y, 0.5f * t.scale.z);
                     m_Renderer->DrawDebugBox(t.position, half, Vec4(0.0f, 0.8f, 1.0f, 0.4f));
                 } else if (col->type == ColliderType::Sphere) {
-                    f32 r = col->sphereRadius > 0.01f ? col->sphereRadius : t.scale.x * 0.5f;
+                    f32 r = col->radius > 0.01f ? col->radius : t.scale.x * 0.5f;
                     m_Renderer->DrawDebugSphere(t.position, r, Vec4(0.0f, 0.8f, 1.0f, 0.4f));
                 }
             }
@@ -2071,9 +2071,9 @@ void EditorUI::DrawGizmoCube(f32 vpX, f32 vpY, f32 vpW, f32 vpH, Camera* cam) {
 
     // Get camera rotation to rotate cube faces
     Transform& ct = cam->GetOwner()->GetTransform();
-    Vec3 camForward = ct.Forward();
-    Vec3 camRight   = ct.Right();
-    Vec3 camUp      = ct.Up();
+    Vec3 camForward = ct.rotation.RotateVec3(Vec3::Forward());
+    Vec3 camRight   = ct.rotation.RotateVec3(Vec3::Right());
+    Vec3 camUp      = ct.rotation.RotateVec3(Vec3::Up());
 
     // Draw cube faces as projected directions
     struct FaceInfo { Vec3 dir; const char* label; ImU32 color; ViewAngle angle; };
