@@ -43,7 +43,9 @@
 #include <sstream>
 #include <cstring>
 #include <set>
-#include <filesystem>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace gv {
 
@@ -1806,10 +1808,46 @@ void EditorUI::DuplicateSelected() {
 
 void EditorUI::DrawAssetBrowser() {
     if (m_AssetBrowserRoot.empty()) {
-        // Default to project root (crude detection)
         m_AssetBrowserRoot = ".";
         m_AssetBrowserCurrentDir = m_AssetBrowserRoot;
     }
+
+    // --- Helpers using Windows API ---
+    struct DirEntry {
+        std::string name;
+        std::string fullPath;
+        bool isDir;
+        unsigned long long fileSize;
+    };
+
+    auto listDir = [](const std::string& dirPath, std::vector<DirEntry>& out) {
+        out.clear();
+#ifdef _WIN32
+        std::string pattern = dirPath + "\\*";
+        WIN32_FIND_DATAA fd;
+        HANDLE h = FindFirstFileA(pattern.c_str(), &fd);
+        if (h == INVALID_HANDLE_VALUE) return;
+        do {
+            std::string name = fd.cFileName;
+            if (name == "." || name == "..") continue;
+            DirEntry e;
+            e.name = name;
+            e.fullPath = dirPath + "\\" + name;
+            e.isDir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+            e.fileSize = (static_cast<unsigned long long>(fd.nFileSizeHigh) << 32) | fd.nFileSizeLow;
+            out.push_back(e);
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+#endif
+    };
+
+    auto getExt = [](const std::string& name) -> std::string {
+        auto pos = name.rfind('.');
+        if (pos == std::string::npos) return "";
+        std::string ext = name.substr(pos);
+        for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return ext;
+    };
 
     ImGui::Columns(2, "AssetBrowserCols", true);
     ImGui::SetColumnWidth(0, 200);
@@ -1818,29 +1856,28 @@ void EditorUI::DrawAssetBrowser() {
     ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1), "Folders");
     ImGui::Separator();
 
+    std::vector<DirEntry> entries;
+
     auto drawDirTree = [&](auto& self, const std::string& path, int depth) -> void {
         if (depth > 5) return;
-        try {
-            for (auto& entry : std::filesystem::directory_iterator(path)) {
-                if (!entry.is_directory()) continue;
-                std::string dirName = entry.path().filename().string();
-                // Skip hidden/build dirs
-                if (dirName[0] == '.' || dirName == "build" || dirName == ".git") continue;
+        listDir(path, entries);
+        for (auto& e : entries) {
+            if (!e.isDir) continue;
+            if (e.name[0] == '.' || e.name == "build" || e.name == ".git") continue;
 
-                ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow;
-                if (entry.path().string() == m_AssetBrowserCurrentDir)
-                    flags |= ImGuiTreeNodeFlags_Selected;
+            ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow;
+            if (e.fullPath == m_AssetBrowserCurrentDir)
+                flags |= ImGuiTreeNodeFlags_Selected;
 
-                bool open = ImGui::TreeNodeEx(dirName.c_str(), flags);
-                if (ImGui::IsItemClicked()) {
-                    m_AssetBrowserCurrentDir = entry.path().string();
-                }
-                if (open) {
-                    self(self, entry.path().string(), depth + 1);
-                    ImGui::TreePop();
-                }
+            bool open = ImGui::TreeNodeEx(e.name.c_str(), flags);
+            if (ImGui::IsItemClicked()) {
+                m_AssetBrowserCurrentDir = e.fullPath;
             }
-        } catch (...) {}
+            if (open) {
+                self(self, e.fullPath, depth + 1);
+                ImGui::TreePop();
+            }
+        }
     };
 
     if (ImGui::TreeNodeEx("Project", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1861,64 +1898,60 @@ void EditorUI::DrawAssetBrowser() {
     std::string assetFilter(m_AssetSearchBuf);
     for (auto& c : assetFilter) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 
-    try {
-        for (auto& entry : std::filesystem::directory_iterator(m_AssetBrowserCurrentDir)) {
-            std::string fname = entry.path().filename().string();
+    std::vector<DirEntry> fileEntries;
+    listDir(m_AssetBrowserCurrentDir, fileEntries);
 
-            // Apply filter
-            if (!assetFilter.empty()) {
-                std::string fnameLower = fname;
-                for (auto& c : fnameLower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                if (fnameLower.find(assetFilter) == std::string::npos) continue;
-            }
-
-            // Icon based on extension
-            const char* icon = entry.is_directory() ? "[D] " : "[F] ";
-            std::string ext = entry.path().extension().string();
-            if (ext == ".h" || ext == ".hpp" || ext == ".cpp" || ext == ".c")
-                icon = "[C] ";
-            else if (ext == ".png" || ext == ".jpg" || ext == ".bmp" || ext == ".tga")
-                icon = "[T] "; // texture
-            else if (ext == ".gvs")
-                icon = "[S] "; // script
-            else if (ext == ".obj" || ext == ".fbx" || ext == ".glb")
-                icon = "[M] "; // mesh
-            else if (ext == ".wav" || ext == ".mp3" || ext == ".ogg")
-                icon = "[A] "; // audio
-            else if (ext == ".ini" || ext == ".json" || ext == ".xml")
-                icon = "[*] ";
-
-            std::string label = std::string(icon) + fname;
-            if (ImGui::Selectable(label.c_str())) {
-                PushLog("[Assets] Selected: " + entry.path().string());
-            }
-
-            // Drag-and-drop source for asset files
-            if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
-                std::string pathStr = entry.path().string();
-                ImGui::SetDragDropPayload("GV_ASSET_PATH", pathStr.c_str(), pathStr.size() + 1);
-                ImGui::Text("%s", fname.c_str());
-                ImGui::EndDragDropSource();
-            }
-
-            // Tooltip with file info
-            if (ImGui::IsItemHovered()) {
-                ImGui::BeginTooltip();
-                ImGui::Text("%s", entry.path().string().c_str());
-                if (entry.is_regular_file()) {
-                    auto sz = entry.file_size();
-                    if (sz > 1024 * 1024)
-                        ImGui::Text("Size: %.1f MB", static_cast<float>(sz) / (1024.0f * 1024.0f));
-                    else if (sz > 1024)
-                        ImGui::Text("Size: %.1f KB", static_cast<float>(sz) / 1024.0f);
-                    else
-                        ImGui::Text("Size: %llu bytes", static_cast<unsigned long long>(sz));
-                }
-                ImGui::EndTooltip();
-            }
+    for (auto& e : fileEntries) {
+        // Apply filter
+        if (!assetFilter.empty()) {
+            std::string nameLower = e.name;
+            for (auto& c : nameLower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (nameLower.find(assetFilter) == std::string::npos) continue;
         }
-    } catch (...) {
-        ImGui::TextDisabled("Cannot read directory.");
+
+        // Icon based on extension
+        const char* icon = e.isDir ? "[D] " : "[F] ";
+        std::string ext = getExt(e.name);
+        if (ext == ".h" || ext == ".hpp" || ext == ".cpp" || ext == ".c")
+            icon = "[C] ";
+        else if (ext == ".png" || ext == ".jpg" || ext == ".bmp" || ext == ".tga")
+            icon = "[T] "; // texture
+        else if (ext == ".gvs")
+            icon = "[S] "; // script
+        else if (ext == ".obj" || ext == ".fbx" || ext == ".glb")
+            icon = "[M] "; // mesh
+        else if (ext == ".wav" || ext == ".mp3" || ext == ".ogg")
+            icon = "[A] "; // audio
+        else if (ext == ".ini" || ext == ".json" || ext == ".xml")
+            icon = "[*] ";
+
+        std::string label = std::string(icon) + e.name;
+        if (ImGui::Selectable(label.c_str())) {
+            PushLog("[Assets] Selected: " + e.fullPath);
+        }
+
+        // Drag-and-drop source
+        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+            ImGui::SetDragDropPayload("GV_ASSET_PATH", e.fullPath.c_str(), e.fullPath.size() + 1);
+            ImGui::Text("%s", e.name.c_str());
+            ImGui::EndDragDropSource();
+        }
+
+        // Tooltip with file info
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::Text("%s", e.fullPath.c_str());
+            if (!e.isDir) {
+                auto sz = e.fileSize;
+                if (sz > 1024 * 1024)
+                    ImGui::Text("Size: %.1f MB", static_cast<float>(sz) / (1024.0f * 1024.0f));
+                else if (sz > 1024)
+                    ImGui::Text("Size: %.1f KB", static_cast<float>(sz) / 1024.0f);
+                else
+                    ImGui::Text("Size: %llu bytes", static_cast<unsigned long long>(sz));
+            }
+            ImGui::EndTooltip();
+        }
     }
 
     ImGui::Columns(1);
