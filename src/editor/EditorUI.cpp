@@ -1499,7 +1499,10 @@ void EditorUI::DrawViewport(f32 dt) {
             f32 dy = -(mousePos.y - m_DragStart.y); // flip Y
             f32 delta = (m_DragAxis == 1) ? dy : dx; // Y-axis uses vertical mouse movement
 
-            f32 sensitivity = 0.01f;
+            // Scale sensitivity with camera distance so dragging feels consistent
+            f32 camDist = m_OrbitCam.distance;
+            f32 sensitivity = 0.005f * (camDist / 10.0f);
+            if (sensitivity < 0.002f) sensitivity = 0.002f;
             Transform& t = m_Selected->GetTransform();
 
             if (m_GizmoMode == GizmoMode::Translate) {

@@ -2384,16 +2384,21 @@ static const char* s_LineVertSrc =
     "layout(location = 1) in vec3 aColor;\n"
     "uniform mat4 u_VP;\n"
     "out vec3 vColor;\n"
+    "out float vAlpha;\n"
     "void main() {\n"
     "    vColor = aColor;\n"
+    "    // Fade grid lines based on distance from origin\n"
+    "    float dist = length(aPos.xz);\n"
+    "    vAlpha = clamp(1.0 - dist / 60.0, 0.0, 1.0);\n"
     "    gl_Position = u_VP * vec4(aPos, 1.0);\n"
     "}\n";
 
 static const char* s_LineFragSrc =
     "#version 330 core\n"
     "in vec3 vColor;\n"
+    "in float vAlpha;\n"
     "out vec4 FragColor;\n"
-    "void main() { FragColor = vec4(vColor, 1.0); }\n";
+    "void main() { FragColor = vec4(vColor, vAlpha); }\n";
 
 void OpenGLRenderer::InitLineShader() {
     if (!glCreateShader) return;
@@ -2522,18 +2527,32 @@ void OpenGLRenderer::RenderHighlight(Camera& camera, const Mat4& model, Primitiv
 void OpenGLRenderer::InitGrid() {
     if (!glGenVertexArrays) return;
 
-    const int halfSize = 20;
+    // Godot-style ground grid: large, with colored X (red) and Z (blue) axes
+    const int halfSize = 50;      // 100x100 unit grid
     const float step = 1.0f;
     std::vector<float> gridVerts;
 
     for (int i = -halfSize; i <= halfSize; ++i) {
         float fi = static_cast<float>(i) * step;
         float limit = static_cast<float>(halfSize) * step;
-        float alpha = (i == 0) ? 0.5f : 0.22f;
-        gridVerts.insert(gridVerts.end(), { fi, 0, -limit, alpha, alpha, alpha });
-        gridVerts.insert(gridVerts.end(), { fi, 0,  limit, alpha, alpha, alpha });
-        gridVerts.insert(gridVerts.end(), { -limit, 0, fi, alpha, alpha, alpha });
-        gridVerts.insert(gridVerts.end(), {  limit, 0, fi, alpha, alpha, alpha });
+
+        if (i == 0) {
+            // X axis (red) — the line along X at Z=0
+            gridVerts.insert(gridVerts.end(), { -limit, 0, 0,  0.75f, 0.15f, 0.15f });
+            gridVerts.insert(gridVerts.end(), {  limit, 0, 0,  0.75f, 0.15f, 0.15f });
+            // Z axis (blue) — the line along Z at X=0
+            gridVerts.insert(gridVerts.end(), { 0, 0, -limit,  0.15f, 0.15f, 0.75f });
+            gridVerts.insert(gridVerts.end(), { 0, 0,  limit,  0.15f, 0.15f, 0.75f });
+        } else {
+            // Every 5th line is slightly brighter for readability
+            float brightness = (i % 5 == 0) ? 0.28f : 0.18f;
+            // Lines parallel to Z (varying X)
+            gridVerts.insert(gridVerts.end(), { fi, 0, -limit, brightness, brightness, brightness });
+            gridVerts.insert(gridVerts.end(), { fi, 0,  limit, brightness, brightness, brightness });
+            // Lines parallel to X (varying Z)
+            gridVerts.insert(gridVerts.end(), { -limit, 0, fi, brightness, brightness, brightness });
+            gridVerts.insert(gridVerts.end(), {  limit, 0, fi, brightness, brightness, brightness });
+        }
     }
     m_GridVertCount = static_cast<i32>(gridVerts.size() / 6);
 
@@ -2548,18 +2567,22 @@ void OpenGLRenderer::InitGrid() {
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6*sizeof(float), reinterpret_cast<void*>(3*sizeof(float)));
     glEnableVertexAttribArray(1);
     glBindVertexArray(0);
-    GV_LOG_INFO("Editor grid created.");
+    GV_LOG_INFO("Editor grid created (100x100, Godot-style colored axes).");
 }
 
 void OpenGLRenderer::RenderGrid(Camera& camera) {
     if (!m_LineShader || !m_GridVAO) return;
     Mat4 vp = camera.GetProjectionMatrix() * camera.GetViewMatrix();
+    // Enable alpha blending for fading grid lines
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glUseProgram(m_LineShader);
     glUniformMatrix4fv(glGetUniformLocation(m_LineShader, "u_VP"), 1, GL_FALSE, vp.m);
     glBindVertexArray(m_GridVAO);
     glDrawArrays(GL_LINES, 0, m_GridVertCount);
     glBindVertexArray(0);
     glUseProgram(0);
+    glDisable(GL_BLEND);
 }
 
 #endif // GV_HAS_GLFW

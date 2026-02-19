@@ -50,7 +50,10 @@ void OrbitCameraController::Pan(f32 dx, f32 dy) {
 }
 
 void OrbitCameraController::Zoom(f32 delta) {
-    distance -= delta * zoomSpeed;
+    // Scale zoom with distance for smooth feel at any zoom level
+    f32 scaledZoom = zoomSpeed * (distance * 0.15f);
+    if (scaledZoom < 0.2f) scaledZoom = 0.2f;
+    distance -= delta * scaledZoom;
     if (distance < minDistance) distance = minDistance;
     if (distance > maxDistance) distance = maxDistance;
 }
