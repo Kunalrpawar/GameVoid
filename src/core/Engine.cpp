@@ -49,14 +49,14 @@ bool Engine::Init(const EngineConfig& config) {
 
     // Create a default camera
     auto* camObj = defaultScene->CreateGameObject("MainCamera");
-    camObj->GetTransform().SetPosition(0, 1.5f, 5);   // slightly above, 5 units back
+    camObj->GetTransform().SetPosition(0, 5.0f, 15.0f);   // higher up, 15 units back for better framing
     auto* cam = camObj->AddComponent<Camera>();
     cam->SetPerspective(60.0f,
         static_cast<f32>(config.windowWidth) / static_cast<f32>(config.windowHeight),
         0.1f, 1000.0f);
     defaultScene->SetActiveCamera(cam);
     camObj->AddComponent<FPSCameraController>();   // FPS movement + mouse-look
-    GV_LOG_INFO("[StartupScene] Camera at (0, 1.5, 5) with FPSCameraController.");
+    GV_LOG_INFO("[StartupScene] Camera at (0, 5, 15) with FPSCameraController.");
 
     // Create a default directional light
     auto* lightObj = defaultScene->CreateGameObject("DirectionalLight");
