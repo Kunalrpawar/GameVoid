@@ -71,7 +71,8 @@ bool Engine::Init(const EngineConfig& config) {
     // ── Default visible objects (so the user sees something immediately) ────
     // 1. A coloured cube that falls from height
     auto* cubeObj = defaultScene->CreateGameObject("DefaultCube");
-    cubeObj->GetTransform().SetPosition(0.0f, 3.0f, 0.0f);
+    cubeObj->GetTransform().SetPosition(0.0f, 1.5f, 0.0f);
+    cubeObj->GetTransform().SetScale(0.5f);
     auto* cubeMR = cubeObj->AddComponent<MeshRenderer>();
     cubeMR->primitiveType = PrimitiveType::Cube;
     cubeMR->color = Vec4(0.25f, 0.6f, 1.0f, 1.0f);   // sky-blue
@@ -95,8 +96,8 @@ bool Engine::Init(const EngineConfig& config) {
 
     // 3. A second cube that falls from even higher (near the first to collide)
     auto* cube2Obj = defaultScene->CreateGameObject("RotatedCube");
-    cube2Obj->GetTransform().SetPosition(0.3f, 6.0f, 0.0f);
-    cube2Obj->GetTransform().SetScale(0.75f);
+    cube2Obj->GetTransform().SetPosition(0.3f, 3.0f, 0.0f);
+    cube2Obj->GetTransform().SetScale(0.4f);
     auto* cube2MR = cube2Obj->AddComponent<MeshRenderer>();
     cube2MR->primitiveType = PrimitiveType::Cube;
     cube2MR->color = Vec4(0.2f, 0.9f, 0.3f, 1.0f);   // green

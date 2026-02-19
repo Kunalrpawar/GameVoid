@@ -2428,9 +2428,18 @@ void OpenGLRenderer::RenderGizmo(Camera& camera, const Vec3& pos, GizmoMode mode
     glUseProgram(m_LineShader);
     glUniformMatrix4fv(glGetUniformLocation(m_LineShader, "u_VP"), 1, GL_FALSE, vp.m);
 
-    f32 len = 1.5f;
-    f32 hl = 0.15f;
-    float lines[864 + 72];
+    // Scale gizmo with camera distance so it stays a consistent screen size
+    Vec3 camPos(camera.GetViewMatrix().Inverse().m[12],
+                camera.GetViewMatrix().Inverse().m[13],
+                camera.GetViewMatrix().Inverse().m[14]);
+    f32 distToCam = (pos - camPos).Length();
+    f32 gizScale = distToCam * 0.12f;
+    if (gizScale < 0.5f)  gizScale = 0.5f;
+    if (gizScale > 5.0f)  gizScale = 5.0f;
+
+    f32 len = gizScale;
+    f32 hl = gizScale * 0.12f;   // arrowhead size relative to axis length
+    float lines[2048];
     int idx = 0;
 
     auto pushLine = [&](Vec3 a, Vec3 b, Vec3 col) {
@@ -2440,17 +2449,24 @@ void OpenGLRenderer::RenderGizmo(Camera& camera, const Vec3& pos, GizmoMode mode
         lines[idx++] = col.x; lines[idx++] = col.y; lines[idx++] = col.z;
     };
 
-    Vec3 xCol = (activeAxis == 0) ? Vec3(1, 1, 0) : Vec3(1, 0.2f, 0.2f);
-    Vec3 yCol = (activeAxis == 1) ? Vec3(1, 1, 0) : Vec3(0.2f, 1, 0.2f);
-    Vec3 zCol = (activeAxis == 2) ? Vec3(1, 1, 0) : Vec3(0.2f, 0.2f, 1);
+    // Bright saturated colors: Red=X, Green=Y, Blue=Z (yellow when active/dragged)
+    Vec3 xCol = (activeAxis == 0) ? Vec3(1, 1, 0) : Vec3(0.9f, 0.1f, 0.1f);
+    Vec3 yCol = (activeAxis == 1) ? Vec3(1, 1, 0) : Vec3(0.1f, 0.9f, 0.1f);
+    Vec3 zCol = (activeAxis == 2) ? Vec3(1, 1, 0) : Vec3(0.2f, 0.4f, 1.0f);
 
     if (mode == GizmoMode::Translate) {
+        // X axis + arrowhead
         pushLine(pos, pos + Vec3(len, 0, 0), xCol);
         pushLine(pos + Vec3(len, 0, 0), pos + Vec3(len - hl, hl, 0), xCol);
+        pushLine(pos + Vec3(len, 0, 0), pos + Vec3(len - hl, -hl, 0), xCol);
+        // Y axis + arrowhead
         pushLine(pos, pos + Vec3(0, len, 0), yCol);
-        pushLine(pos + Vec3(0, len, 0), pos + Vec3(0, len - hl, hl), yCol);
+        pushLine(pos + Vec3(0, len, 0), pos + Vec3(hl, len - hl, 0), yCol);
+        pushLine(pos + Vec3(0, len, 0), pos + Vec3(-hl, len - hl, 0), yCol);
+        // Z axis + arrowhead
         pushLine(pos, pos + Vec3(0, 0, len), zCol);
         pushLine(pos + Vec3(0, 0, len), pos + Vec3(0, hl, len - hl), zCol);
+        pushLine(pos + Vec3(0, 0, len), pos + Vec3(0, -hl, len - hl), zCol);
     } else if (mode == GizmoMode::Scale) {
         pushLine(pos, pos + Vec3(len, 0, 0), xCol);
         pushLine(pos + Vec3(len-hl, -hl, 0), pos + Vec3(len+hl, hl, 0), xCol);
@@ -2459,11 +2475,11 @@ void OpenGLRenderer::RenderGizmo(Camera& camera, const Vec3& pos, GizmoMode mode
         pushLine(pos, pos + Vec3(0, 0, len), zCol);
         pushLine(pos + Vec3(0, -hl, len-hl), pos + Vec3(0, hl, len+hl), zCol);
     } else {
-        const int N = 24;
+        const int N = 32;
+        f32 r = gizScale * 0.7f;
         for (int i = 0; i < N; ++i) {
             f32 a0 = (float)i / (float)N * 6.2832f;
             f32 a1 = (float)(i+1) / (float)N * 6.2832f;
-            f32 r = 1.0f;
             pushLine(pos + Vec3(0, std::cos(a0)*r, std::sin(a0)*r),
                      pos + Vec3(0, std::cos(a1)*r, std::sin(a1)*r), xCol);
             pushLine(pos + Vec3(std::cos(a0)*r, 0, std::sin(a0)*r),
@@ -2477,7 +2493,7 @@ void OpenGLRenderer::RenderGizmo(Camera& camera, const Vec3& pos, GizmoMode mode
     glBindVertexArray(m_LineVAO);
     glBindBuffer(GL_ARRAY_BUFFER, m_LineVBO);
     glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(idx * sizeof(float)), lines);
-    glLineWidth(2.5f);
+    glLineWidth(3.0f);  // thicker for better visibility
     glDisable(GL_DEPTH_TEST);
     glDrawArrays(GL_LINES, 0, vertCount);
     glEnable(GL_DEPTH_TEST);

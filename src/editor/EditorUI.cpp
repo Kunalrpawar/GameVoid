@@ -1372,64 +1372,13 @@ void EditorUI::DrawViewport(f32 dt) {
         }
     }
 
-    // ── Object Picking via ray-cast ────────────────────────────────────────
-    // Only pick on Left-click when NOT orbiting/panning and NOT placing
-    if (vpHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && cam
-        && !m_Dragging && !m_OrbitActive && !m_PanActive && !ImGui::GetIO().KeyAlt
-        && m_PlacementType == PlacementType::None) {
-        // Convert mouse to viewport-local NDC
-        f32 mx = (mousePos.x - m_VpScreenX) / m_VpScreenW;
-        f32 my = (mousePos.y - m_VpScreenY) / m_VpScreenH;
-        f32 ndcX = mx * 2.0f - 1.0f;
-        f32 ndcY = 1.0f - my * 2.0f;  // flip Y
-
-        // Unproject: screen → world ray
-        Mat4 invVP = (cam->GetProjectionMatrix() * cam->GetViewMatrix()).Inverse();
-        Vec3 nearPt = invVP.TransformPoint(Vec3(ndcX, ndcY, -1.0f));
-        Vec3 farPt  = invVP.TransformPoint(Vec3(ndcX, ndcY,  1.0f));
-        Vec3 rayDir = (farPt - nearPt).Normalized();
-        Vec3 rayOrigin = nearPt;
-
-        // Test all scene objects (not just those with RigidBody)
-        GameObject* bestHit = nullptr;
-        f32 bestT = FLT_MAX;
-
-        if (m_Scene) {
-            for (auto& obj : m_Scene->GetAllObjects()) {
-                if (!obj || !obj->IsActive()) continue;
-                auto* mr = obj->GetComponent<MeshRenderer>();
-                if (!mr || mr->primitiveType == PrimitiveType::None) continue;
-
-                Transform& t = obj->GetTransform();
-                Vec3 half(0.5f * t.scale.x, 0.5f * t.scale.y, 0.5f * t.scale.z);
-                // For planes, half-Y is very thin
-                if (mr->primitiveType == PrimitiveType::Plane)
-                    half = Vec3(0.5f * t.scale.x, 0.05f, 0.5f * t.scale.z);
-                Vec3 bmin = t.position - half;
-                Vec3 bmax = t.position + half;
-
-                f32 tHit = 0;
-                if (RayAABBIntersect(rayOrigin, rayDir, bmin, bmax, tHit)) {
-                    if (tHit < bestT) {
-                        bestT = tHit;
-                        bestHit = obj.get();
-                    }
-                }
-            }
-        }
-
-        if (bestHit) {
-            m_Selected = bestHit;
-            PushLog("[Viewport] Selected '" + bestHit->GetName() + "'");
-        } else {
-            m_Selected = nullptr;
-        }
-    }
-
-    // ── Gizmo Drag Interaction ─────────────────────────────────────────────
-    if (vpHovered && m_Selected && cam) {
+    // ── Gizmo Drag Interaction (checked BEFORE object picking) ─────────────
+    bool gizmoHit = false;
+    if (vpHovered && m_Selected && cam && m_ShowGizmos) {
         // Start drag: check if mouse is near a gizmo axis
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !m_Dragging) {
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !m_Dragging
+            && !m_OrbitActive && !m_PanActive && !ImGui::GetIO().KeyAlt
+            && m_PlacementType == PlacementType::None) {
             f32 mx = (mousePos.x - m_VpScreenX) / m_VpScreenW;
             f32 my = (mousePos.y - m_VpScreenY) / m_VpScreenH;
             f32 ndcX = mx * 2.0f - 1.0f;
@@ -1445,14 +1394,19 @@ void EditorUI::DrawViewport(f32 dt) {
                          (1.0f - (ndc.y * 0.5f + 0.5f)) * m_VpScreenH + m_VpScreenY };
             };
 
+            // Scale gizmo length with camera distance for consistent screen size
+            f32 gizScale = m_OrbitCam.distance * 0.12f;
+            if (gizScale < 1.0f) gizScale = 1.0f;
+            if (gizScale > 5.0f) gizScale = 5.0f;
+
             Vec3 tips[3] = {
-                gizPos + Vec3(1.5f, 0, 0),
-                gizPos + Vec3(0, 1.5f, 0),
-                gizPos + Vec3(0, 0, 1.5f)
+                gizPos + Vec3(gizScale, 0, 0),
+                gizPos + Vec3(0, gizScale, 0),
+                gizPos + Vec3(0, 0, gizScale)
             };
 
             Vec2 center2D = project(gizPos);
-            f32 threshold = 30.0f; // pixels
+            f32 threshold = 40.0f; // pixels — generous for easy clicking
 
             for (int a = 0; a < 3; ++a) {
                 Vec2 tip2D = project(tips[a]);
@@ -1467,6 +1421,7 @@ void EditorUI::DrawViewport(f32 dt) {
                 f32 dist = std::sqrt((mp.x - closest.x)*(mp.x - closest.x) + (mp.y - closest.y)*(mp.y - closest.y));
                 if (dist < threshold) {
                     m_Dragging = true;
+                    gizmoHit = true;
                     m_DragAxis = a;
                     m_DragStart = Vec3(mousePos.x, mousePos.y, 0);
                     m_DragObjStart = m_Selected->GetTransform().position;
@@ -1554,6 +1509,60 @@ void EditorUI::DrawViewport(f32 dt) {
             }
             m_Dragging = false;
             m_DragAxis = -1;
+        }
+    }
+
+    // ── Object Picking via ray-cast ────────────────────────────────────────
+    // Only pick on Left-click when NOT orbiting/panning, NOT placing, and NOT dragging a gizmo
+    if (vpHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && cam
+        && !m_Dragging && !gizmoHit && !m_OrbitActive && !m_PanActive && !ImGui::GetIO().KeyAlt
+        && m_PlacementType == PlacementType::None) {
+        // Convert mouse to viewport-local NDC
+        f32 mx = (mousePos.x - m_VpScreenX) / m_VpScreenW;
+        f32 my = (mousePos.y - m_VpScreenY) / m_VpScreenH;
+        f32 ndcX = mx * 2.0f - 1.0f;
+        f32 ndcY = 1.0f - my * 2.0f;  // flip Y
+
+        // Unproject: screen → world ray
+        Mat4 invVP = (cam->GetProjectionMatrix() * cam->GetViewMatrix()).Inverse();
+        Vec3 nearPt = invVP.TransformPoint(Vec3(ndcX, ndcY, -1.0f));
+        Vec3 farPt  = invVP.TransformPoint(Vec3(ndcX, ndcY,  1.0f));
+        Vec3 rayDir = (farPt - nearPt).Normalized();
+        Vec3 rayOrigin = nearPt;
+
+        // Test all scene objects (not just those with RigidBody)
+        GameObject* bestHit = nullptr;
+        f32 bestT = FLT_MAX;
+
+        if (m_Scene) {
+            for (auto& obj : m_Scene->GetAllObjects()) {
+                if (!obj || !obj->IsActive()) continue;
+                auto* mr = obj->GetComponent<MeshRenderer>();
+                if (!mr || mr->primitiveType == PrimitiveType::None) continue;
+
+                Transform& t = obj->GetTransform();
+                Vec3 half(0.5f * t.scale.x, 0.5f * t.scale.y, 0.5f * t.scale.z);
+                // For planes, half-Y is very thin
+                if (mr->primitiveType == PrimitiveType::Plane)
+                    half = Vec3(0.5f * t.scale.x, 0.05f, 0.5f * t.scale.z);
+                Vec3 bmin = t.position - half;
+                Vec3 bmax = t.position + half;
+
+                f32 tHit = 0;
+                if (RayAABBIntersect(rayOrigin, rayDir, bmin, bmax, tHit)) {
+                    if (tHit < bestT) {
+                        bestT = tHit;
+                        bestHit = obj.get();
+                    }
+                }
+            }
+        }
+
+        if (bestHit) {
+            m_Selected = bestHit;
+            PushLog("[Viewport] Selected '" + bestHit->GetName() + "'");
+        } else {
+            m_Selected = nullptr;
         }
     }
 
@@ -3430,7 +3439,7 @@ void EditorUI::UpdatePlacement(Camera* cam, f32 mousePosX, f32 mousePosY) {
 
     // Objects sit on top of the ground plane
     if (m_PlacementType == PlacementType::Cube)
-        hit.y = 0.5f;  // half-cube height
+        hit.y = 0.25f;  // half of 0.5 scale cube
     else if (m_PlacementType == PlacementType::Light)
         hit.y = 3.0f;  // lights float above
     else if (m_PlacementType == PlacementType::Particles)
@@ -3453,6 +3462,7 @@ void EditorUI::FinishPlacement() {
         std::string name = "Cube_" + std::to_string(cubeN);
         auto* obj = m_Scene->CreateGameObject(name);
         obj->GetTransform().SetPosition(pos.x, pos.y, pos.z);
+        obj->GetTransform().SetScale(0.5f);   // reasonable default size
         auto* mr = obj->AddComponent<MeshRenderer>();
         mr->primitiveType = PrimitiveType::Cube;
         mr->color = Vec4(0.4f + static_cast<f32>(std::rand() % 60) / 100.0f,
@@ -3687,19 +3697,21 @@ void EditorUI::ImportModelIntoScene(const std::string& path) {
     auto dotPos = name.rfind('.');
     if (dotPos != std::string::npos) name = name.substr(0, dotPos);
 
-    // Auto-scale: compute bounding box and normalize to ~2 units tall
+    // Auto-scale: compute bounding box and normalize to ~1 unit tall
     Vec3 bMin, bMax;
     mesh->GetBounds(bMin, bMax);
     Vec3 size = bMax - bMin;  // extent in each axis
     float maxExtent = size.x;
     if (size.y > maxExtent) maxExtent = size.y;
     if (size.z > maxExtent) maxExtent = size.z;
-    float desiredSize = 2.0f;  // fit within 2 world units
+    float desiredSize = 1.0f;  // fit within 1 world unit — reasonable starting size
     float scaleFactor = (maxExtent > 0.0001f) ? (desiredSize / maxExtent) : 1.0f;
 
     // Create a new GameObject with the loaded mesh
     auto* obj = m_Scene->CreateGameObject(name);
-    obj->GetTransform().SetPosition(0.0f, 1.0f, 0.0f);
+    // Place at origin on the ground; offset Y so bottom sits on grid
+    float halfH = (size.y * scaleFactor) * 0.5f;
+    obj->GetTransform().SetPosition(0.0f, halfH, 0.0f);
     obj->GetTransform().SetScale(scaleFactor);
 
     auto* mr = obj->AddComponent<MeshRenderer>();
