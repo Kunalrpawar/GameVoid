@@ -227,6 +227,32 @@ AIResponse AIManager::HttpPost(const std::string& url, const std::string& jsonBo
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
+// Escape a string for safe embedding in a JSON value (between quotes).
+static std::string JsonEscape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 16);
+    for (char c : s) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            case '\b': out += "\\b";  break;
+            case '\f': out += "\\f";  break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned>(c));
+                    out += buf;
+                } else {
+                    out += c;
+                }
+        }
+    }
+    return out;
+}
+
 AIResponse AIManager::SendPrompt(const std::string& prompt) const {
     if (m_Config.apiKey.empty()) {
         AIResponse r;
@@ -236,8 +262,9 @@ AIResponse AIManager::SendPrompt(const std::string& prompt) const {
     }
 
     // Build the JSON payload following the Gemini REST API format.
+    std::string escaped = JsonEscape(prompt);
     std::string json =
-        R"({"contents":[{"parts":[{"text":")" + prompt + R"("}]}],)"
+        R"({"contents":[{"parts":[{"text":")" + escaped + R"("}]}],)"
         R"("generationConfig":{"temperature":)" + std::to_string(m_Config.temperature) +
         R"(,"maxOutputTokens":)" + std::to_string(m_Config.maxTokens) + R"(}})";
 

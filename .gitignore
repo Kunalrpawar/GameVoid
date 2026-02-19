@@ -9,3 +9,13 @@ deps/
 *.dll
 *.pdb
 *.ilk
+
+# Secrets — NEVER commit API keys
+gamevoid_config.ini
+
+# Build outputs
+build/
+build_err*.txt
+
+# Editor state
+imgui.ini

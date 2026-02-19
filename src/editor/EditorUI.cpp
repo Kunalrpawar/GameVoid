@@ -1664,6 +1664,171 @@ void EditorUI::DrawAIGenerator() {
     ImGui::End();
 }
 
+// ── AI Chat Panel ───────────────────────────────────────────────────────────
+
+void EditorUI::DrawChatPanel() {
+    // Header area
+    bool hasKey = (m_AI && m_AI->IsReady());
+    if (hasKey) {
+        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1), "Gemini Chat");
+    } else {
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1), "[No API Key]");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Settings##chat")) { m_ShowEditorSettings = true; }
+        ImGui::TextDisabled("Configure your API key to use chat.");
+    }
+    ImGui::SameLine(ImGui::GetContentRegionAvail().x - 50);
+    if (ImGui::SmallButton("Clear##chat")) {
+        m_ChatHistory.clear();
+    }
+
+    ImGui::Separator();
+
+    // Chat history scrollable area — fill available space minus input row
+    float inputRowH = 32.0f;
+    float footerH = inputRowH + ImGui::GetStyle().ItemSpacing.y * 2.0f;
+    ImGui::BeginChild("ChatHistory", ImVec2(0, -footerH), true,
+                       ImGuiWindowFlags_HorizontalScrollbar);
+
+    if (m_ChatHistory.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
+        ImGui::TextWrapped("Start a conversation with Gemini AI. Ask about game development, "
+                           "get help with your scene, or chat about anything!");
+        ImGui::PopStyleColor();
+    }
+
+    for (size_t i = 0; i < m_ChatHistory.size(); i++) {
+        const auto& msg = m_ChatHistory[i];
+        ImGui::PushID(static_cast<int>(i));
+
+        if (msg.isUser) {
+            // User message — right-aligned, blue tint
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.85f, 1.0f, 1.0f));
+            ImGui::TextWrapped("You: %s", msg.text.c_str());
+            ImGui::PopStyleColor();
+        } else {
+            // AI message — left-aligned, green tint
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 1.0f, 0.7f, 1.0f));
+            ImGui::TextWrapped("Gemini: %s", msg.text.c_str());
+            ImGui::PopStyleColor();
+        }
+
+        ImGui::Spacing();
+        ImGui::PopID();
+    }
+
+    // Show "thinking..." while waiting
+    if (m_ChatWaiting) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.8f, 0.3f, 1.0f));
+        ImGui::TextWrapped("Gemini is thinking...");
+        ImGui::PopStyleColor();
+    }
+
+    // Auto-scroll to bottom when new messages arrive
+    if (m_ChatScrollToBottom) {
+        ImGui::SetScrollHereY(1.0f);
+        m_ChatScrollToBottom = false;
+    }
+
+    ImGui::EndChild();
+
+    // Input row
+    ImGui::Separator();
+    bool sendEnabled = hasKey && !m_ChatWaiting && m_ChatInputBuf[0] != '\0';
+
+    float availW = ImGui::GetContentRegionAvail().x;
+    ImGui::PushItemWidth(availW - 145);
+    bool enterPressed = ImGui::InputText("##ChatInput", m_ChatInputBuf, sizeof(m_ChatInputBuf),
+                                          ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::PopItemWidth();
+    ImGui::SameLine();
+
+    if (!sendEnabled) ImGui::BeginDisabled();
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.5f, 0.8f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.6f, 0.9f, 1.0f));
+    bool sendClicked = ImGui::Button("Send", ImVec2(60, 0));
+    ImGui::PopStyleColor(2);
+    if (!sendEnabled) ImGui::EndDisabled();
+
+    // Generate Scene button — sends the prompt as scene generation instead of chat
+    ImGui::SameLine();
+    bool genEnabled = hasKey && !m_ChatWaiting && !m_AIGenerating && m_ChatInputBuf[0] != '\0';
+    if (!genEnabled) ImGui::BeginDisabled();
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.3f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.8f, 0.4f, 1.0f));
+    bool genClicked = ImGui::Button("Generate", ImVec2(70, 0));
+    ImGui::PopStyleColor(2);
+    if (!genEnabled) ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("Generate 3D scene objects from your prompt");
+    }
+
+    // Send chat message
+    if ((enterPressed || sendClicked) && sendEnabled) {
+        std::string userMsg(m_ChatInputBuf);
+        m_ChatHistory.push_back({ true, userMsg });
+        m_ChatInputBuf[0] = '\0';
+        m_ChatScrollToBottom = true;
+
+        // Call Gemini API for conversation
+        m_ChatWaiting = true;
+
+        // Build a conversational prompt with system instruction + recent context
+        std::string fullPrompt =
+            "You are a helpful AI assistant inside the GameVoid game engine editor. "
+            "The user is chatting with you. Respond in a friendly, conversational way. "
+            "Do NOT output JSON or object lists unless the user explicitly asks you to generate scene objects.\n\n";
+
+        // Include last few messages for context (up to 6 messages)
+        size_t startIdx = 0;
+        if (m_ChatHistory.size() > 7) startIdx = m_ChatHistory.size() - 7;
+        for (size_t i = startIdx; i < m_ChatHistory.size() - 1; i++) {
+            const auto& m = m_ChatHistory[i];
+            fullPrompt += (m.isUser ? "User: " : "Assistant: ") + m.text + "\n";
+        }
+        fullPrompt += "User: " + userMsg + "\nAssistant:";
+
+        AIResponse resp = m_AI->SendPrompt(fullPrompt);
+
+        if (resp.success && !resp.text.empty()) {
+            // Clean up the response text (trim whitespace)
+            std::string reply = resp.text;
+            size_t s = reply.find_first_not_of(" \t\n\r");
+            size_t e = reply.find_last_not_of(" \t\n\r");
+            if (s != std::string::npos && e != std::string::npos)
+                reply = reply.substr(s, e - s + 1);
+            m_ChatHistory.push_back({ false, reply });
+        } else {
+            std::string errMsg = resp.errorMessage.empty() ? "No response from Gemini." : resp.errorMessage;
+            m_ChatHistory.push_back({ false, "[Error] " + errMsg });
+        }
+
+        m_ChatWaiting = false;
+        m_ChatScrollToBottom = true;
+        PushLog("[AI Chat] User: " + userMsg);
+    }
+
+    // Generate scene objects from prompt
+    if (genClicked && genEnabled) {
+        std::string userMsg(m_ChatInputBuf);
+        m_ChatHistory.push_back({ true, "[Generate] " + userMsg });
+        m_ChatInputBuf[0] = '\0';
+        m_ChatScrollToBottom = true;
+
+        // Copy prompt to AI Generator and trigger generation
+        std::snprintf(m_AIPromptBuf, sizeof(m_AIPromptBuf), "%s", userMsg.c_str());
+        AIGenerate();
+
+        if (m_AIStatusMsg.find("Error") == std::string::npos) {
+            m_ChatHistory.push_back({ false, "Scene generated! " + m_AIStatusMsg });
+        } else {
+            m_ChatHistory.push_back({ false, "[Error] " + m_AIStatusMsg });
+        }
+        m_ChatScrollToBottom = true;
+        PushLog("[AI Chat] Generate: " + userMsg);
+    }
+}
+
 // ── AI Generate ─────────────────────────────────────────────────────────────
 
 void EditorUI::AIGenerate() {
@@ -1687,8 +1852,13 @@ void EditorUI::AIGenerate() {
     m_AIProgress = 0.6f;
 
     if (!result.success) {
-        // If the real API isn't connected, generate a fallback procedural scene
+        // API call failed — show the error instead of silently generating fallback
         PushLog("[AI] API call failed: " + result.errorMessage);
+        m_AIStatusMsg = "Error: " + result.errorMessage;
+        m_AIGenerating = false;
+        m_AIProgress = 0.0f;
+        return;
+#if 0  // Disabled fallback — only generate when API succeeds
         PushLog("[AI] Generating procedural fallback scene from keywords...");
         m_AIStatusMsg = "Using procedural fallback (no API key).";
 
@@ -1764,6 +1934,7 @@ void EditorUI::AIGenerate() {
             result.objects.push_back(ob);
         }
         result.success = true;
+#endif  // End disabled fallback
     }
 
     m_AIProgress = 0.8f;
@@ -2508,6 +2679,12 @@ void EditorUI::DrawBottomTabs() {
         if (ImGui::BeginTabItem("Assets")) {
             m_BottomTab = 8;
             DrawAssetBrowser();
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("AI Chat")) {
+            m_BottomTab = 9;
+            DrawChatPanel();
             ImGui::EndTabItem();
         }
 

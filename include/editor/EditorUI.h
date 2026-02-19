@@ -122,6 +122,7 @@ private:
     void DrawNodeScriptPanel();
     void DrawCodeScriptPanel();        // inline script code editor
     void DrawBehaviorPanel();          // new: behavior editor panel
+    void DrawChatPanel();              // AI chat panel
 
     // ── High-priority feature panels ───────────────────────────────────────
     void DrawAssetBrowser();           // file-tree asset browser
@@ -331,6 +332,16 @@ private:
 
     // ── AI Settings state ──────────────────────────────────────────────────
     char   m_AIKeyBuf[256] = {};        // API key input buffer
+
+    // ── AI Chat state ──────────────────────────────────────────────────────
+    struct ChatMessage {
+        bool   isUser;           // true = user, false = AI
+        std::string text;
+    };
+    std::vector<ChatMessage> m_ChatHistory;
+    char   m_ChatInputBuf[1024] = {};
+    bool   m_ChatWaiting = false;        // waiting for AI response
+    bool   m_ChatScrollToBottom = false; // auto-scroll flag
 
     // ── Bottom tab state ───────────────────────────────────────────────────
     i32 m_BottomTab = 0;   // 0=Console, 1=Terrain, 2=Material, 3=Particle, 4=Animation, 5=NodeScript, 6=Behavior, 7=CodeScript, 8=AssetBrowser

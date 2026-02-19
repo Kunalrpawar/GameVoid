@@ -1,0 +1,7 @@
+[AI]
+# Get your API key from https://aistudio.google.com/apikey
+apiKey=YOUR_API_KEY_HERE
+
+model=gemini-2.0-flash
+temperature=0.7
+maxTokens=4096
