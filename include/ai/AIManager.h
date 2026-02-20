@@ -1,7 +1,7 @@
 // ============================================================================
-// GameVoid Engine — AI Integration (Google Gemini)
+// GameVoid Engine — AI Integration (Google Gemini 3.0)
 // ============================================================================
-// Provides a hook to call the Google Gemini API for generating game assets
+// Provides a hook to call the Google Gemini 3.0 API for generating game assets
 // (textures, meshes described as text, scripts) and creating levels or
 // objects from a natural-language text prompt.
 //

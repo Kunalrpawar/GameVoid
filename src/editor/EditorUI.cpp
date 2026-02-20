@@ -1670,7 +1670,7 @@ void EditorUI::DrawChatPanel() {
     // Header area
     bool hasKey = (m_AI && m_AI->IsReady());
     if (hasKey) {
-        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1), "Gemini Chat");
+        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1), "Gemini 3.0 Chat");
     } else {
         ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1), "[No API Key]");
         ImGui::SameLine();
@@ -1692,7 +1692,7 @@ void EditorUI::DrawChatPanel() {
 
     if (m_ChatHistory.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
-        ImGui::TextWrapped("Start a conversation with Gemini AI. Ask about game development, "
+        ImGui::TextWrapped("Start a conversation with Gemini 3.0 AI. Ask about game development, "
                            "get help with your scene, or chat about anything!");
         ImGui::PopStyleColor();
     }
@@ -1709,7 +1709,7 @@ void EditorUI::DrawChatPanel() {
         } else {
             // AI message — left-aligned, green tint
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 1.0f, 0.7f, 1.0f));
-            ImGui::TextWrapped("Gemini: %s", msg.text.c_str());
+            ImGui::TextWrapped("Gemini 3.0: %s", msg.text.c_str());
             ImGui::PopStyleColor();
         }
 
@@ -1720,7 +1720,7 @@ void EditorUI::DrawChatPanel() {
     // Show "thinking..." while waiting
     if (m_ChatWaiting) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.8f, 0.3f, 1.0f));
-        ImGui::TextWrapped("Gemini is thinking...");
+        ImGui::TextWrapped("Gemini 3.0 is thinking...");
         ImGui::PopStyleColor();
     }
 
@@ -1799,7 +1799,7 @@ void EditorUI::DrawChatPanel() {
                 reply = reply.substr(s, e - s + 1);
             m_ChatHistory.push_back({ false, reply });
         } else {
-            std::string errMsg = resp.errorMessage.empty() ? "No response from Gemini." : resp.errorMessage;
+            std::string errMsg = resp.errorMessage.empty() ? "No response from Gemini 3.0." : resp.errorMessage;
             m_ChatHistory.push_back({ false, "[Error] " + errMsg });
         }
 
@@ -1843,7 +1843,7 @@ void EditorUI::AIGenerate() {
 
     m_AIGenerating = true;
     m_AIProgress   = 0.1f;
-    m_AIStatusMsg  = "Sending prompt to Gemini...";
+    m_AIStatusMsg  = "Sending prompt to Gemini 3.0...";
     PushLog("[AI] Prompt: \"" + prompt + "\"");
 
     // Call AIManager (synchronous for now)
@@ -2714,7 +2714,7 @@ void EditorUI::DrawBottomTabs() {
         m_ShowEditorSettings = false;
     }
     if (ImGui::BeginPopupModal("Editor Settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1), "Gemini AI Configuration");
+        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1), "Gemini 3.0 AI Configuration");
         ImGui::Separator();
 
         // Pre-fill from current config
@@ -2726,15 +2726,16 @@ void EditorUI::DrawBottomTabs() {
         ImGui::TextDisabled("Key is stored in gamevoid_config.ini");
 
         if (m_AI) {
-            // Model selector
-            const char* models[] = { "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro" };
+            // Model selector — display names use marketing branding, values are API identifiers
+            const char* modelLabels[] = { "Gemini 3.0 Flash", "Gemini 1.5 Flash", "Gemini 1.5 Pro" };
+            const char* modelValues[] = { "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro" };
             static int modelIdx = 0;
             if (m_AI->GetConfig().model == "gemini-2.0-flash") modelIdx = 0;
             else if (m_AI->GetConfig().model == "gemini-1.5-flash") modelIdx = 1;
             else if (m_AI->GetConfig().model == "gemini-1.5-pro") modelIdx = 2;
 
-            if (ImGui::Combo("Model", &modelIdx, models, 3)) {
-                m_AI->GetConfigMut().model = models[modelIdx];
+            if (ImGui::Combo("Model", &modelIdx, modelLabels, 3)) {
+                m_AI->GetConfigMut().model = modelValues[modelIdx];
             }
 
             ImGui::DragFloat("Temperature", &m_AI->GetConfigMut().temperature, 0.05f, 0.0f, 2.0f);

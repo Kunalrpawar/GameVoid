@@ -1,5 +1,5 @@
 // ============================================================================
-// GameVoid Engine — AI Manager Implementation (Google Gemini)
+// GameVoid Engine — AI Manager Implementation (Google Gemini 3.0)
 // ============================================================================
 // Real HTTP integration via WinInet (Windows) or placeholder on other platforms.
 // ============================================================================
@@ -164,31 +164,63 @@ AIResponse AIManager::HttpPost(const std::string& url, const std::string& jsonBo
 
     // ── Extract text from Gemini JSON response ─────────────────────────────
     // Response format: { "candidates": [{ "content": { "parts": [{ "text": "..." }] } }] }
-    // Simple extraction without a JSON library:
+    // Navigate to candidates→content→parts→text to avoid matching stray "text" fields.
     {
-        std::string marker = "\"text\"";
-        size_t pos = responseBody.find(marker);
-        if (pos != std::string::npos) {
-            pos = responseBody.find(':', pos);
-            if (pos != std::string::npos) {
-                pos = responseBody.find('"', pos + 1);
-                if (pos != std::string::npos) {
-                    pos++; // skip opening "
-                    std::string extracted;
-                    while (pos < responseBody.size()) {
-                        if (responseBody[pos] == '\\' && pos + 1 < responseBody.size()) {
-                            char next = responseBody[pos + 1];
-                            if (next == '"')       { extracted += '"';  pos += 2; continue; }
-                            else if (next == 'n')  { extracted += '\n'; pos += 2; continue; }
-                            else if (next == '\\') { extracted += '\\'; pos += 2; continue; }
-                            else if (next == 't')  { extracted += '\t'; pos += 2; continue; }
-                            else { extracted += next; pos += 2; continue; }
+        // Helper lambda: extract a JSON string value starting at the opening quote
+        auto extractJsonString = [&](size_t startQuote) -> std::string {
+            std::string extracted;
+            size_t p = startQuote + 1; // skip opening "
+            while (p < responseBody.size()) {
+                if (responseBody[p] == '\\' && p + 1 < responseBody.size()) {
+                    char next = responseBody[p + 1];
+                    if (next == '"')       { extracted += '"';  p += 2; continue; }
+                    else if (next == 'n')  { extracted += '\n'; p += 2; continue; }
+                    else if (next == 'r')  { extracted += '\r'; p += 2; continue; }
+                    else if (next == '\\') { extracted += '\\'; p += 2; continue; }
+                    else if (next == 't')  { extracted += '\t'; p += 2; continue; }
+                    else if (next == '/')  { extracted += '/';  p += 2; continue; }
+                    else if (next == 'b')  { extracted += '\b'; p += 2; continue; }
+                    else if (next == 'f')  { extracted += '\f'; p += 2; continue; }
+                    else { extracted += next; p += 2; continue; }
+                }
+                if (responseBody[p] == '"') break;
+                extracted += responseBody[p++];
+            }
+            return extracted;
+        };
+
+        // Step 1: Find "candidates" to scope our search properly
+        size_t candidatesPos = responseBody.find("\"candidates\"");
+        if (candidatesPos != std::string::npos) {
+            // Step 2: Within candidates, find "parts"
+            size_t partsPos = responseBody.find("\"parts\"", candidatesPos);
+            if (partsPos != std::string::npos) {
+                // Step 3: Within parts, find the first "text" key
+                size_t textPos = responseBody.find("\"text\"", partsPos);
+                if (textPos != std::string::npos) {
+                    size_t colonPos = responseBody.find(':', textPos + 6);
+                    if (colonPos != std::string::npos) {
+                        size_t quotePos = responseBody.find('"', colonPos + 1);
+                        if (quotePos != std::string::npos) {
+                            resp.text = extractJsonString(quotePos);
+                            resp.success = !resp.text.empty();
                         }
-                        if (responseBody[pos] == '"') break;
-                        extracted += responseBody[pos++];
                     }
-                    resp.text = extracted;
-                    resp.success = true;
+                }
+            }
+        }
+
+        // Fallback: try the old method if structured navigation failed
+        if (!resp.success) {
+            size_t pos = responseBody.find("\"text\"");
+            if (pos != std::string::npos) {
+                pos = responseBody.find(':', pos);
+                if (pos != std::string::npos) {
+                    pos = responseBody.find('"', pos + 1);
+                    if (pos != std::string::npos) {
+                        resp.text = extractJsonString(pos);
+                        resp.success = !resp.text.empty();
+                    }
                 }
             }
         }
@@ -199,12 +231,8 @@ AIResponse AIManager::HttpPost(const std::string& url, const std::string& jsonBo
             if (errPos != std::string::npos) {
                 errPos = responseBody.find('"', responseBody.find(':', errPos) + 1);
                 if (errPos != std::string::npos) {
-                    errPos++;
-                    std::string errMsg;
-                    while (errPos < responseBody.size() && responseBody[errPos] != '"') {
-                        errMsg += responseBody[errPos++];
-                    }
-                    resp.errorMessage = "Gemini API error: " + errMsg;
+                    resp.text = ""; // ensure empty
+                    resp.errorMessage = "Gemini API error: " + extractJsonString(errPos);
                 }
             }
             if (resp.errorMessage.empty())
@@ -306,9 +334,14 @@ std::vector<AIManager::ObjectBlueprint> AIManager::GenerateLevel(const std::stri
         return blueprints;
     }
 
-    // In production: parse resp.text as JSON array → vector<ObjectBlueprint>.
-    // Placeholder returns empty.
-    GV_LOG_INFO("AI level generation returned " + std::to_string(blueprints.size()) + " objects.");
+    // Parse AI response using the scene-gen parser (same JSON array format)
+    SceneGenResult parsed = ParseSceneGenResponse(resp.text);
+    if (parsed.success) {
+        blueprints = std::move(parsed.objects);
+        GV_LOG_INFO("AI level generation returned " + std::to_string(blueprints.size()) + " objects.");
+    } else {
+        GV_LOG_WARN("AI level parse failed: " + parsed.errorMessage);
+    }
     return blueprints;
 }
 
@@ -541,12 +574,18 @@ GameObject* AIManager::GenerateObjectFromPrompt(const std::string& prompt, Scene
     AIResponse resp = SendPrompt(aiPrompt);
 
     // 2. Parse AI response into an ObjectBlueprint.
-    //    In production: use nlohmann::json to parse resp.text.
-    //    Skeleton: create a sensible default so the function still works.
     ObjectBlueprint bp;
-    if (resp.success) {
-        // TODO: JSON parse resp.text -> bp fields
-        GV_LOG_INFO("AI returned object description (parse not implemented in skeleton).");
+    if (resp.success && !resp.text.empty()) {
+        // Parse the single-object JSON response using our scene parser
+        // (wrap in array brackets so the parser can handle it)
+        std::string asArray = "[" + resp.text + "]";
+        SceneGenResult parsed = ParseSceneGenResponse(asArray);
+        if (parsed.success && !parsed.objects.empty()) {
+            bp = parsed.objects[0];
+            GV_LOG_INFO("AI returned object: name='" + bp.name + "', mesh='" + bp.meshType + "'");
+        } else {
+            GV_LOG_WARN("AI response parse failed, using keyword fallback.");
+        }
     } else {
         GV_LOG_WARN("AI call failed (" + resp.errorMessage + "), using defaults.");
     }
