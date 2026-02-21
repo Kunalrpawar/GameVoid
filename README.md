@@ -86,9 +86,6 @@ cmake --build .
 | libcurl | HTTP for Gemini API | https://curl.se/libcurl |
 | nlohmann/json | JSON parsing | https://github.com/nlohmann/json |
 
-## License
-
-MIT — use freely for any project.
 
 
 .\GameVoid.exe --editor-gui
