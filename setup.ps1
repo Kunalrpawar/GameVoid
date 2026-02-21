@@ -15,7 +15,7 @@ $srcDir      = "glfw-$glfwVersion"
 
 Write-Host "=== GameVoid Engine - Dependency Setup ===" -ForegroundColor Cyan
 
-# ── Build GLFW from source ──────────────────────────────────────────────────
+
 if (Test-Path "deps/glfw/lib/libglfw3.a") {
     Write-Host "GLFW already installed in deps/glfw/. Skipping." -ForegroundColor Yellow
 } else {
