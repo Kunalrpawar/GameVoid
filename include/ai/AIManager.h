@@ -29,11 +29,18 @@ class GameObject;
 // ============================================================================
 struct AIConfig {
     std::string apiKey;                        // Google Gemini API key
-    std::string model   = "gemini-2.0-flash";  // Model identifier
+    std::string model   = "gemini-2.5-flash-lite";  // Model identifier
     std::string baseUrl = "https://generativelanguage.googleapis.com/v1beta/models/";
     f32 temperature     = 0.7f;
     u32 maxTokens       = 4096;
     std::string configFilePath = "gamevoid_config.ini"; // stores API key securely
+
+    // Fallback models tried in order when the primary model hits quota limits
+    std::vector<std::string> fallbackModels = {
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-flash",
+        "gemini-2.0-flash"
+    };
 };
 
 // ============================================================================
@@ -141,6 +148,12 @@ public:
 private:
     /// Build the full request URL for the configured model.
     std::string BuildRequestURL() const;
+
+    /// Build request URL for a specific model (used for fallback).
+    std::string BuildRequestURL(const std::string& modelOverride) const;
+
+    /// Returns true if the response error looks like a quota/rate-limit issue.
+    static bool IsQuotaError(const AIResponse& resp);
 
     /// Perform the actual HTTP POST (stubbed in skeleton).
     AIResponse HttpPost(const std::string& url, const std::string& jsonBody) const;

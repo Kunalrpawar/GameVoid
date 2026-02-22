@@ -78,7 +78,25 @@ bool AIManager::LoadConfigFromFile() {
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 std::string AIManager::BuildRequestURL() const {
-    return m_Config.baseUrl + m_Config.model + ":generateContent?key=" + m_Config.apiKey;
+    return BuildRequestURL(m_Config.model);
+}
+
+std::string AIManager::BuildRequestURL(const std::string& modelOverride) const {
+    return m_Config.baseUrl + modelOverride + ":generateContent?key=" + m_Config.apiKey;
+}
+
+bool AIManager::IsQuotaError(const AIResponse& resp) {
+    // Check both the error message and raw JSON for quota/rate-limit keywords
+    auto contains = [](const std::string& haystack, const std::string& needle) {
+        std::string h = haystack, n = needle;
+        std::transform(h.begin(), h.end(), h.begin(), ::tolower);
+        std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+        return h.find(n) != std::string::npos;
+    };
+    return contains(resp.errorMessage, "quota") ||
+           contains(resp.errorMessage, "rate")  ||
+           contains(resp.rawJSON, "RESOURCE_EXHAUSTED") ||
+           contains(resp.rawJSON, "quota");
 }
 
 // ── HTTP POST (WinInet on Windows, placeholder elsewhere) ──────────────────
@@ -296,8 +314,28 @@ AIResponse AIManager::SendPrompt(const std::string& prompt) const {
         R"("generationConfig":{"temperature":)" + std::to_string(m_Config.temperature) +
         R"(,"maxOutputTokens":)" + std::to_string(m_Config.maxTokens) + R"(}})";
 
+    // Try primary model first
     std::string url = BuildRequestURL();
-    return HttpPost(url, json);
+    AIResponse resp = HttpPost(url, json);
+
+    // If quota error, try fallback models in order
+    if (!resp.success && IsQuotaError(resp)) {
+        for (const auto& fallback : m_Config.fallbackModels) {
+            if (fallback == m_Config.model) continue; // skip if same as primary
+            GV_LOG_INFO("AIManager — primary model '" + m_Config.model +
+                        "' quota exhausted, trying fallback '" + fallback + "'...");
+            url = BuildRequestURL(fallback);
+            resp = HttpPost(url, json);
+            if (resp.success || !IsQuotaError(resp)) {
+                if (resp.success) {
+                    GV_LOG_INFO("AIManager — fallback model '" + fallback + "' succeeded.");
+                }
+                break;
+            }
+        }
+    }
+
+    return resp;
 }
 
 std::string AIManager::GenerateScript(const std::string& behaviourDescription) const {
