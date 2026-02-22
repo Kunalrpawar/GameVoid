@@ -1841,6 +1841,22 @@ void EditorUI::AIGenerate() {
     std::string prompt(m_AIPromptBuf);
     if (prompt.empty()) return;
 
+    // Reject prompts that are too short / vague for scene generation (< 8 chars)
+    {
+        // Strip whitespace to get actual content length
+        std::string trimmed = prompt;
+        size_t s = trimmed.find_first_not_of(" \t\n\r");
+        size_t e = trimmed.find_last_not_of(" \t\n\r");
+        if (s == std::string::npos) { trimmed.clear(); }
+        else { trimmed = trimmed.substr(s, e - s + 1); }
+
+        if (trimmed.size() < 8) {
+            m_AIStatusMsg = "Prompt too short — describe a scene (e.g. 'medieval castle with towers').";
+            PushLog("[AI] Rejected short prompt: \"" + trimmed + "\"");
+            return;
+        }
+    }
+
     m_AIGenerating = true;
     m_AIProgress   = 0.1f;
     m_AIStatusMsg  = "Sending prompt to Gemini 3.0...";
