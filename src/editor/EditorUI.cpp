@@ -2577,6 +2577,25 @@ void EditorUI::DrawViewportOverlayControls(f32 vpX, f32 vpY) {
     overlayBtn("N", m_ShowNormals,         IM_COL32(100, 100, 200, 220));
     overlayBtn("G", m_ShowGrid,            IM_COL32(120, 120, 120, 220));
     overlayBtn("P", m_ShowCameraPiP,       IM_COL32(160, 80, 160, 220));
+
+    // Navigation hint (small text below overlay buttons)
+    const char* navHint = "MMB:Orbit  Shift+MMB:Pan  Scroll:Zoom  RMB+WASD:Fly  F:Focus";
+    ImVec2 hintPos(vpX + 8, vpY + 30);
+    ImVec2 hintSz = ImGui::CalcTextSize(navHint);
+    dl->AddRectFilled(hintPos, ImVec2(hintPos.x + hintSz.x + 8, hintPos.y + hintSz.y + 4),
+                      IM_COL32(15, 15, 20, 180), 3.0f);
+    dl->AddText(ImVec2(hintPos.x + 4, hintPos.y + 2), IM_COL32(180, 180, 180, 160), navHint);
+
+    // Projection mode indicator (Persp / Ortho)
+    Camera* cam2 = m_Scene ? m_Scene->GetActiveCamera() : nullptr;
+    if (cam2) {
+        const char* projLabel = (cam2->projectionType == ProjectionType::Perspective) ? "Persp" : "Ortho";
+        ImVec2 projPos(vpX + 8, vpY + 48);
+        ImVec2 projSz = ImGui::CalcTextSize(projLabel);
+        dl->AddRectFilled(projPos, ImVec2(projPos.x + projSz.x + 8, projPos.y + projSz.y + 4),
+                          IM_COL32(40, 40, 60, 200), 3.0f);
+        dl->AddText(ImVec2(projPos.x + 4, projPos.y + 2), IM_COL32(120, 200, 255, 220), projLabel);
+    }
 }
 
 // ============================================================================
