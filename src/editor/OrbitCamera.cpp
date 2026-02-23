@@ -99,4 +99,61 @@ void OrbitCameraController::ApplyToTransform(Transform& t) const {
     t.rotation = qYaw * qPitch;
 }
 
+// ── Fly-through helpers ────────────────────────────────────────────────────
+
+void OrbitCameraController::FlyLook(f32 dx, f32 dy) {
+    yaw   -= dx * flySensitivity;
+    pitch -= dy * flySensitivity;
+    if (pitch > pitchMax) pitch = pitchMax;
+    if (pitch < pitchMin) pitch = pitchMin;
+    if (yaw > 360.0f) yaw -= 360.0f;
+    if (yaw < 0.0f)   yaw += 360.0f;
+}
+
+void OrbitCameraController::FlyMove(f32 fwd, f32 right, f32 up, f32 dt, bool sprint) {
+    f32 speed = flySpeed * (sprint ? flySprintMul : 1.0f) * dt;
+
+    f32 yawRad   = yaw   * kDeg2Rad;
+    f32 pitchRad = pitch * kDeg2Rad;
+
+    Vec3 forward(
+        std::sin(yawRad) * std::cos(pitchRad),
+        std::sin(pitchRad),
+        std::cos(yawRad) * std::cos(pitchRad)
+    );
+    // Negate forward because the camera looks along -forward in this convention
+    forward = forward * (-1.0f);
+
+    Vec3 rightVec(std::cos(yawRad), 0.0f, -std::sin(yawRad));
+    Vec3 upVec(0.0f, 1.0f, 0.0f);  // world up for fly mode
+
+    focusPoint = focusPoint + forward * (fwd * speed)
+                            + rightVec * (right * speed)
+                            + upVec * (up * speed);
+}
+
+void OrbitCameraController::FlyAdjustSpeed(f32 scrollDelta) {
+    // Exponential speed adjustment (feels natural)
+    flySpeed *= (1.0f + scrollDelta * 0.15f);
+    if (flySpeed < flyMinSpeed) flySpeed = flyMinSpeed;
+    if (flySpeed > flyMaxSpeed) flySpeed = flyMaxSpeed;
+}
+
+void OrbitCameraController::SyncOrbitFromEye(const Vec3& eye) {
+    // Set orbit focus a fixed distance ahead of the current eye position
+    Vec3 forward = GetForwardDir();
+    focusPoint = eye + forward * distance;
+}
+
+Vec3 OrbitCameraController::GetForwardDir() const {
+    f32 yawRad   = yaw   * kDeg2Rad;
+    f32 pitchRad = pitch * kDeg2Rad;
+    Vec3 fwd(
+        -std::sin(yawRad) * std::cos(pitchRad),
+        -std::sin(pitchRad),
+        -std::cos(yawRad) * std::cos(pitchRad)
+    );
+    return fwd;
+}
+
 } // namespace gv

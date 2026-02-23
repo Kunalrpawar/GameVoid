@@ -28,6 +28,13 @@ public:
     f32 pitchMin       = -89.0f;
     f32 pitchMax       =  89.0f;
 
+    // ── Fly-through tuning ─────────────────────────────────────────────────
+    f32 flySpeed       = 8.0f;    // base fly speed (units/sec)
+    f32 flySprintMul   = 2.5f;    // speed multiplier while Shift held
+    f32 flyMinSpeed    = 0.5f;    // min speed (scroll-adjustable)
+    f32 flyMaxSpeed    = 80.0f;   // max speed (scroll-adjustable)
+    f32 flySensitivity = 0.15f;   // degrees per pixel in fly mode
+
     // ── State (read / write) ───────────────────────────────────────────────
     Vec3 focusPoint  { 0, 0, 0 };   // point the camera orbits around
     f32  distance    = 18.0f;       // distance from focus (farther back for better overview)
@@ -53,6 +60,22 @@ public:
 
     /// Get the computed eye position.
     Vec3 GetEyePosition() const;
+
+    // ── Fly-through mode ───────────────────────────────────────────────────
+    /// Rotate view by mouse pixel deltas during fly-through (RMB held).
+    void FlyLook(f32 dx, f32 dy);
+
+    /// Move camera in fly-through mode.  forward/right/up are [-1..1].
+    void FlyMove(f32 forward, f32 right, f32 up, f32 dt, bool sprint);
+
+    /// Adjust fly speed with scroll wheel.
+    void FlyAdjustSpeed(f32 scrollDelta);
+
+    /// After exiting fly mode, recalculate orbit params from eye position.
+    void SyncOrbitFromEye(const Vec3& eye);
+
+    /// Get computed forward direction.
+    Vec3 GetForwardDir() const;
 };
 
 } // namespace gv
