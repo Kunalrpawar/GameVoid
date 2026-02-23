@@ -386,6 +386,12 @@ private:
     bool m_OrbitActive     = false;    // true while orbiting (MMB or RMB drag)
     bool m_PanActive       = false;    // true while panning  (Shift+MMB)
     Vec2 m_LastMousePos    {};         // previous mouse pos for delta calc
+
+    // ── WASD Fly-through mode (Godot-style: hold RMB + WASD) ────────────
+    bool m_FlyMode         = false;    // true while right-mouse is held and flying
+    Vec3 m_FlyEyePos       {};         // eye position during fly mode
+    f32  m_FlyYaw          = 0.0f;     // yaw during fly mode
+    f32  m_FlyPitch        = 0.0f;     // pitch during fly mode
     // ── Code Script editor state ────────────────────────────────────────
     char m_ScriptCodeBuf[4096] = {};   // inline script source editor
     char m_ScriptPathBuf[256]  = {};   // script file path
