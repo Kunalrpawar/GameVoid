@@ -2543,8 +2543,8 @@ void OpenGLRenderer::RenderHighlight(Camera& camera, const Mat4& model, Primitiv
 void OpenGLRenderer::InitGrid() {
     if (!glGenVertexArrays) return;
 
-    // Godot-style ground grid: large, with colored X (red) and Z (blue) axes
-    const int halfSize = 50;      // 100x100 unit grid
+    // Godot-style ground grid with colored axes: X=red, Y=green (vertical), Z=blue
+    const int halfSize = 80;      // 160x160 unit grid (larger for open-world feel)
     const float step = 1.0f;
     std::vector<float> gridVerts;
 
@@ -2554,14 +2554,17 @@ void OpenGLRenderer::InitGrid() {
 
         if (i == 0) {
             // X axis (red) — the line along X at Z=0
-            gridVerts.insert(gridVerts.end(), { -limit, 0, 0,  0.75f, 0.15f, 0.15f });
-            gridVerts.insert(gridVerts.end(), {  limit, 0, 0,  0.75f, 0.15f, 0.15f });
+            gridVerts.insert(gridVerts.end(), { -limit, 0, 0,  0.85f, 0.20f, 0.20f });
+            gridVerts.insert(gridVerts.end(), {  limit, 0, 0,  0.85f, 0.20f, 0.20f });
             // Z axis (blue) — the line along Z at X=0
-            gridVerts.insert(gridVerts.end(), { 0, 0, -limit,  0.15f, 0.15f, 0.75f });
-            gridVerts.insert(gridVerts.end(), { 0, 0,  limit,  0.15f, 0.15f, 0.75f });
+            gridVerts.insert(gridVerts.end(), { 0, 0, -limit,  0.20f, 0.25f, 0.85f });
+            gridVerts.insert(gridVerts.end(), { 0, 0,  limit,  0.20f, 0.25f, 0.85f });
         } else {
-            // Every 5th line is slightly brighter for readability
-            float brightness = (i % 5 == 0) ? 0.28f : 0.18f;
+            // Every 10th line = brightest, every 5th = medium, rest = dim
+            float brightness;
+            if (i % 10 == 0)    brightness = 0.35f;
+            else if (i % 5 == 0) brightness = 0.25f;
+            else                  brightness = 0.16f;
             // Lines parallel to Z (varying X)
             gridVerts.insert(gridVerts.end(), { fi, 0, -limit, brightness, brightness, brightness });
             gridVerts.insert(gridVerts.end(), { fi, 0,  limit, brightness, brightness, brightness });
@@ -2570,6 +2573,11 @@ void OpenGLRenderer::InitGrid() {
             gridVerts.insert(gridVerts.end(), {  limit, 0, fi, brightness, brightness, brightness });
         }
     }
+
+    // Y axis (green) — vertical line at origin, from -10 to +30 for visibility
+    gridVerts.insert(gridVerts.end(), { 0, -10.0f, 0,  0.20f, 0.80f, 0.20f });
+    gridVerts.insert(gridVerts.end(), { 0,  30.0f, 0,  0.20f, 0.80f, 0.20f });
+
     m_GridVertCount = static_cast<i32>(gridVerts.size() / 6);
 
     glGenVertexArrays(1, &m_GridVAO);
