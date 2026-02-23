@@ -182,10 +182,12 @@ void EditorUI::Render(f32 dt) {
         }
         // Delete selected
         if (ImGui::IsKeyPressed(ImGuiKey_Delete)) { DeleteSelected(); }
-        // Gizmo mode shortcuts: W/E/R
-        if (ImGui::IsKeyPressed(ImGuiKey_W)) { m_GizmoMode = GizmoMode::Translate; }
-        if (ImGui::IsKeyPressed(ImGuiKey_E)) { m_GizmoMode = GizmoMode::Rotate; }
-        if (ImGui::IsKeyPressed(ImGuiKey_R)) { m_GizmoMode = GizmoMode::Scale; }
+        // Gizmo mode shortcuts: W/E/R (only when NOT in fly mode)
+        if (!m_FlyMode) {
+            if (ImGui::IsKeyPressed(ImGuiKey_W)) { m_GizmoMode = GizmoMode::Translate; }
+            if (ImGui::IsKeyPressed(ImGuiKey_E)) { m_GizmoMode = GizmoMode::Rotate; }
+            if (ImGui::IsKeyPressed(ImGuiKey_R)) { m_GizmoMode = GizmoMode::Scale; }
+        }
         // Toggle wireframe
         if (ImGui::IsKeyPressed(ImGuiKey_Z) && !io.KeyCtrl) { m_ShowWireframe = !m_ShowWireframe; }
     }
