@@ -2502,7 +2502,7 @@ void OpenGLRenderer::RenderGizmo(Camera& camera, const Vec3& pos, GizmoMode mode
     glUseProgram(0);
 }
 
-void OpenGLRenderer::RenderHighlight(Camera& camera, const Mat4& model, PrimitiveType type) {
+void OpenGLRenderer::RenderHighlight(Camera& camera, const Mat4& model, PrimitiveType type, Shared<Mesh> mesh) {
     if (!m_SceneShader) return;
     Mat4 view = camera.GetViewMatrix();
     Mat4 proj = camera.GetProjectionMatrix();
@@ -2513,12 +2513,21 @@ void OpenGLRenderer::RenderHighlight(Camera& camera, const Mat4& model, Primitiv
     glUniformMatrix4fv(glGetUniformLocation(m_SceneShader, "u_Proj"),  1, GL_FALSE, proj.m);
     glUniform4f(glGetUniformLocation(m_SceneShader, "u_Color"), 1.0f, 0.8f, 0.0f, 1.0f);
     glUniform1i(glGetUniformLocation(m_SceneShader, "u_LightingEnabled"), 0);
+    glUniform1i(glGetUniformLocation(m_SceneShader, "u_HasAlbedoMap"), 0);
+    glUniform1i(glGetUniformLocation(m_SceneShader, "u_HasNormalMap"), 0);
 
     glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
     glLineWidth(2.0f);
     glDisable(GL_DEPTH_TEST);
 
-    if (type == PrimitiveType::Cube) {
+    if (mesh && mesh->GetIndexCount() > 0) {
+        // Custom loaded mesh (imported model)
+        mesh->Bind();
+        glDrawElements(GL_TRIANGLES,
+                       static_cast<GLsizei>(mesh->GetIndexCount()),
+                       GL_UNSIGNED_INT, nullptr);
+        mesh->Unbind();
+    } else if (type == PrimitiveType::Cube) {
         glBindVertexArray(m_CubeVAO);
         glDrawElements(GL_TRIANGLES, m_CubeIndexCount, GL_UNSIGNED_INT, nullptr);
         glBindVertexArray(0);

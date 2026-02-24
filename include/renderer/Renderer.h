@@ -22,6 +22,7 @@ namespace gv {
 class Camera;
 class Scene;
 class Window;
+class Mesh;
 
 /// Gizmo modes (shared between editor and renderer).
 enum class GizmoMode { Translate, Rotate, Scale };
@@ -251,7 +252,7 @@ public:
     void RenderSkybox(Camera& camera, f32 dt);
     void RenderGrid(Camera& camera);
     void RenderGizmo(Camera& camera, const Vec3& position, GizmoMode mode, i32 activeAxis = -1);
-    void RenderHighlight(Camera& camera, const Mat4& model, PrimitiveType type);
+    void RenderHighlight(Camera& camera, const Mat4& model, PrimitiveType type, Shared<Mesh> mesh = nullptr);
 
     // ── Deferred Rendering + SSAO ──────────────────────────────────────────
     void SetDeferredEnabled(bool e) { m_DeferredEnabled = e; }

@@ -32,7 +32,7 @@ bool Window::Init(u32 width, u32 height, const std::string& title) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
-    glfwWindowHint(GLFW_SAMPLES, 4);   // 4x MSAA
+    glfwWindowHint(GLFW_SAMPLES, 0);   // No MSAA on default FB (scene renders to its own FBO)
 
     m_Window = glfwCreateWindow(static_cast<int>(width),
                                 static_cast<int>(height),
