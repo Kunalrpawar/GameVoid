@@ -1316,6 +1316,11 @@ void EditorUI::DrawViewport(f32 dt) {
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
+    // Ensure FBO rendering is fully submitted before the texture is
+    // sampled by ImGui – works around AMD driver synchronisation issues
+    // where a render-target-turned-texture may contain stale data.
+    glFlush();
+
     // Display the FBO colour attachment as an ImGui Image
     ImTextureID texID = static_cast<ImTextureID>(m_ViewportColor);
     ImGui::Image(texID, size, ImVec2(0, 1), ImVec2(1, 0));   // flip Y

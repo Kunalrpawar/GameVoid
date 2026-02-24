@@ -258,24 +258,29 @@ void Engine::Run() {
             // ── Audio update ───────────────────────────────────────────
             m_Audio.Update();
 
-            // ── ImGui frame (scene is rendered to FBO inside DrawViewport) ──
-            m_EditorUI.BeginFrame();
-            m_EditorUI.Render(dt);
-
-            // Clear the default framebuffer before ImGui draws on it.
-            // Without this, double-buffering leaves undefined back-buffer
-            // content which causes objects to flicker / vanish when the
-            // camera is stationary (AMD drivers especially).
+            // ── Clear default framebuffer BEFORE the ImGui frame ───
+            // This guarantees a clean back-buffer every frame and avoids
+            // undefined content from double-buffering (AMD drivers).
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             glViewport(0, 0, static_cast<GLsizei>(m_Window.GetWidth()),
                              static_cast<GLsizei>(m_Window.GetHeight()));
             glClearColor(0.06f, 0.06f, 0.08f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+            // ── ImGui frame (scene is rendered to FBO inside DrawViewport) ──
+            m_EditorUI.BeginFrame();
+            m_EditorUI.Render(dt);
+
+            // Make sure we are on the default FB with the correct viewport
+            // before ImGui_ImplOpenGL3_RenderDrawData draws the UI.
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glViewport(0, 0, static_cast<GLsizei>(m_Window.GetWidth()),
+                             static_cast<GLsizei>(m_Window.GetHeight()));
+
             m_EditorUI.EndFrame();
 
             // ── Present ────────────────────────────────────────────────
-            glFlush();   // ensure all draw commands are submitted to GPU
+            glFinish();  // wait for ALL GPU work before swap (AMD sync)
             m_Window.SwapBuffers();
         }
 
