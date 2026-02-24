@@ -488,7 +488,19 @@ void OpenGLRenderer::RenderScene(Scene& scene, Camera& camera) {
 
         // Frustum culling: test object bounding sphere
         Vec3 objPos = obj->GetTransform().GetWorldPosition();
-        f32  objScale = obj->GetTransform().scale.x; // approximate with x scale
+        f32  objScale = obj->GetTransform().scale.x; // default: approximate with x scale
+        // For imported meshes the uniform scale can be tiny (auto-fit)
+        // while the mesh's local extents are huge.  Use the actual
+        // world-space bounding radius so objects aren't incorrectly culled.
+        if (mr->GetMesh() && mr->GetMesh()->GetIndexCount() > 0) {
+            Vec3 bMin, bMax;
+            mr->GetMesh()->GetBounds(bMin, bMax);
+            Vec3 extent = bMax - bMin;
+            f32 maxExt = extent.x;
+            if (extent.y > maxExt) maxExt = extent.y;
+            if (extent.z > maxExt) maxExt = extent.z;
+            objScale = maxExt * obj->GetTransform().scale.x * 0.5f;
+        }
         if (!frustum.TestObject(objPos, objScale)) {
             culledCount++;
             continue;
