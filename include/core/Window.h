@@ -10,6 +10,7 @@
 #include "core/Types.h"
 #include "core/Math.h"
 #include <string>
+#include <vector>
 
 // ── Key codes  (values match GLFW — use these to avoid including GLFW) ─────
 namespace gv { namespace GVKey {

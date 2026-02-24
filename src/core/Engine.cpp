@@ -261,6 +261,17 @@ void Engine::Run() {
             // ── ImGui frame (scene is rendered to FBO inside DrawViewport) ──
             m_EditorUI.BeginFrame();
             m_EditorUI.Render(dt);
+
+            // Clear the default framebuffer before ImGui draws on it.
+            // Without this, double-buffering leaves undefined back-buffer
+            // content which causes objects to flicker / vanish when the
+            // camera is stationary (AMD drivers especially).
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glViewport(0, 0, static_cast<GLsizei>(m_Window.GetWidth()),
+                             static_cast<GLsizei>(m_Window.GetHeight()));
+            glClearColor(0.06f, 0.06f, 0.08f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
             m_EditorUI.EndFrame();
 
             // ── Present ────────────────────────────────────────────────
