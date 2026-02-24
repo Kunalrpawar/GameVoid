@@ -56,7 +56,9 @@ if ($CliOnly) {
     $windowSources = @(
         "src/core/Window.cpp",
         "src/core/GLLoader.cpp",
-        "src/editor/EditorUI.cpp"
+        "src/editor/EditorUI.cpp",
+        "src/camera/EditorCamera.cpp",
+        "src/input/ViewportInput.cpp"
     )
     $imguiSources = @(
         "deps/imgui/imgui.cpp",
