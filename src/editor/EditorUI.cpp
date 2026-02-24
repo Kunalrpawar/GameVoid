@@ -519,8 +519,9 @@ void EditorUI::DrawHierarchy() {
         bool selected = (m_Selected == obj.get()) || (m_MultiSelected.count(obj.get()) > 0);
         std::string label = obj->GetName() + "##" + std::to_string(obj->GetID());
 
-        // Highlight multi-selected objects
-        if (m_MultiSelected.count(obj.get()) > 0 && m_Selected != obj.get())
+        // Highlight multi-selected objects (save condition so Pop always matches Push)
+        bool pushedMultiColor = (m_MultiSelected.count(obj.get()) > 0 && m_Selected != obj.get());
+        if (pushedMultiColor)
             ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.2f, 0.4f, 0.6f, 0.6f));
 
         if (ImGui::Selectable(label.c_str(), selected)) {
@@ -529,7 +530,7 @@ void EditorUI::DrawHierarchy() {
             SelectObject(obj.get(), ctrl || shift);
         }
 
-        if (m_MultiSelected.count(obj.get()) > 0 && m_Selected != obj.get())
+        if (pushedMultiColor)
             ImGui::PopStyleColor();
 
         // ── Drag-and-drop reparenting ──────────────────────────────────────
