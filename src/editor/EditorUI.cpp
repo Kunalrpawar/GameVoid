@@ -108,14 +108,15 @@ bool EditorUI::Init(Window* window, OpenGLRenderer* renderer, Scene* scene,
     if (cam && cam->GetOwner()) {
         Vec3 camPos = cam->GetOwner()->GetTransform().position;
         // Default: look at origin from the camera's initial position
-        m_OrbitCam.focusPoint = Vec3(0, 0, 0);
-        Vec3 diff = camPos - m_OrbitCam.focusPoint;
-        m_OrbitCam.distance = diff.Length();
-        if (m_OrbitCam.distance < 0.1f) m_OrbitCam.distance = 8.0f;
+        Vec3 focusPt(0, 0, 0);
+        Vec3 diff = camPos - focusPt;
+        f32 dist = diff.Length();
+        if (dist < 0.1f) dist = 8.0f;
         // Compute yaw/pitch from offset
-        m_OrbitCam.yaw   = std::atan2(diff.x, diff.z) * (180.0f / 3.14159265f);
-        m_OrbitCam.pitch = -std::asin(diff.y / m_OrbitCam.distance) * (180.0f / 3.14159265f);
-        m_OrbitCam.ApplyToTransform(cam->GetOwner()->GetTransform());
+        f32 yaw   = std::atan2(diff.x, diff.z) * (180.0f / 3.14159265f);
+        f32 pitch = -std::asin(diff.y / dist) * (180.0f / 3.14159265f);
+        m_EditorCam.SetOrbitState(focusPt, yaw, pitch, dist);
+        m_EditorCam.ApplyToTransform(cam->GetOwner()->GetTransform());
     }
 
     m_Initialised = true;
@@ -183,7 +184,7 @@ void EditorUI::Render(f32 dt) {
         // Delete selected
         if (ImGui::IsKeyPressed(ImGuiKey_Delete)) { DeleteSelected(); }
         // Gizmo mode shortcuts: W/E/R (only when NOT in fly mode)
-        if (!m_FlyMode) {
+        if (!m_ViewInput.IsFlying()) {
             if (ImGui::IsKeyPressed(ImGuiKey_W)) { m_GizmoMode = GizmoMode::Translate; }
             if (ImGui::IsKeyPressed(ImGuiKey_E)) { m_GizmoMode = GizmoMode::Rotate; }
             if (ImGui::IsKeyPressed(ImGuiKey_R)) { m_GizmoMode = GizmoMode::Scale; }
@@ -1017,6 +1018,28 @@ void EditorUI::DrawInspectorScripts() {
         }
         ImGui::PopStyleColor(2);
 
+        // Attach script file from disk (.gvs)
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.35f, 0.1f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.65f, 0.45f, 0.15f, 1.0f));
+        if (ImGui::Button("+ Attach Script File (.gvs)...", ImVec2(-1, 24))) {
+            std::string scriptFile = OpenFileDialog(
+                "GVScript Files (*.gvs)\0*.gvs\0"
+                "All Script Files (*.gvs;*.lua;*.py;*.js)\0*.gvs;*.lua;*.py;*.js\0"
+                "All Files (*.*)\0*.*\0",
+                "Attach Script to Object");
+            if (!scriptFile.empty()) {
+                auto* sc = m_Selected->AddComponent<ScriptComponent>(scriptFile);
+                if (m_Script) sc->SetEngine(m_Script);
+                // Extract filename for display
+                std::string sName = scriptFile;
+                auto sl = scriptFile.find_last_of("/\\");
+                if (sl != std::string::npos) sName = scriptFile.substr(sl + 1);
+                PushLog("[Inspector] Attached script '" + sName + "' to " + m_Selected->GetName());
+                ImportAssetFile(scriptFile);
+            }
+        }
+        ImGui::PopStyleColor(2);
+
         // Behavior dropdown: add new behavior
         ImGui::Separator();
         auto names = BehaviorRegistry::Instance().GetNames();
@@ -1118,6 +1141,22 @@ void EditorUI::DrawInspectorAddComponent() {
             auto* sc2 = m_Selected->AddComponent<ScriptComponent>();
             if (m_Script) sc2->SetEngine(m_Script);
             PushLog("[Inspector] Added ScriptComponent.");
+        }
+        if (ImGui::MenuItem("Attach Script File...")) {
+            std::string scriptFile = OpenFileDialog(
+                "GVScript Files (*.gvs)\0*.gvs\0"
+                "All Script Files (*.gvs;*.lua;*.py;*.js)\0*.gvs;*.lua;*.py;*.js\0"
+                "All Files (*.*)\0*.*\0",
+                "Attach Script to Object");
+            if (!scriptFile.empty()) {
+                auto* sc3 = m_Selected->AddComponent<ScriptComponent>(scriptFile);
+                if (m_Script) sc3->SetEngine(m_Script);
+                std::string sName = scriptFile;
+                auto sl = scriptFile.find_last_of("/\\");
+                if (sl != std::string::npos) sName = scriptFile.substr(sl + 1);
+                PushLog("[Inspector] Attached script file: " + sName);
+                ImportAssetFile(scriptFile);
+            }
         }
 
         ImGui::Separator();
@@ -1420,7 +1459,7 @@ void EditorUI::DrawViewport(f32 dt) {
 
         // Left-click: commit placement
         if (vpHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && m_PlacementValid
-            && !m_OrbitActive && !m_PanActive && !ImGui::GetIO().KeyAlt) {
+            && !m_ViewInput.IsOrbiting() && !m_ViewInput.IsPanning() && !ImGui::GetIO().KeyAlt) {
             FinishPlacement();
         }
 
@@ -1435,7 +1474,7 @@ void EditorUI::DrawViewport(f32 dt) {
     if (vpHovered && m_Selected && cam && m_ShowGizmos) {
         // Start drag: check if mouse is near a gizmo axis
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !m_Dragging
-            && !m_OrbitActive && !m_PanActive && !ImGui::GetIO().KeyAlt
+            && !m_ViewInput.IsOrbiting() && !m_ViewInput.IsPanning() && !ImGui::GetIO().KeyAlt
             && m_PlacementType == PlacementType::None) {
             f32 mx = (mousePos.x - m_VpScreenX) / m_VpScreenW;
             f32 my = (mousePos.y - m_VpScreenY) / m_VpScreenH;
@@ -1453,7 +1492,7 @@ void EditorUI::DrawViewport(f32 dt) {
             };
 
             // Scale gizmo length with camera distance for consistent screen size
-            f32 gizScale = m_OrbitCam.distance * 0.12f;
+            f32 gizScale = m_EditorCam.GetDistance() * 0.12f;
             if (gizScale < 1.0f) gizScale = 1.0f;
             if (gizScale > 5.0f) gizScale = 5.0f;
 
@@ -1513,7 +1552,7 @@ void EditorUI::DrawViewport(f32 dt) {
             f32 delta = (m_DragAxis == 1) ? dy : dx; // Y-axis uses vertical mouse movement
 
             // Scale sensitivity with camera distance so dragging feels consistent
-            f32 camDist = m_OrbitCam.distance;
+            f32 camDist = m_EditorCam.GetDistance();
             f32 sensitivity = 0.005f * (camDist / 10.0f);
             if (sensitivity < 0.002f) sensitivity = 0.002f;
             Transform& t = m_Selected->GetTransform();
@@ -1573,7 +1612,7 @@ void EditorUI::DrawViewport(f32 dt) {
     // ── Object Picking via ray-cast ────────────────────────────────────────
     // Only pick on Left-click when NOT orbiting/panning, NOT placing, and NOT dragging a gizmo
     if (vpHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && cam
-        && !m_Dragging && !gizmoHit && !m_OrbitActive && !m_PanActive && !ImGui::GetIO().KeyAlt
+        && !m_Dragging && !gizmoHit && !m_ViewInput.IsOrbiting() && !m_ViewInput.IsPanning() && !ImGui::GetIO().KeyAlt
         && m_PlacementType == PlacementType::None) {
         // Convert mouse to viewport-local NDC
         f32 mx = (mousePos.x - m_VpScreenX) / m_VpScreenW;
@@ -2617,17 +2656,17 @@ void EditorUI::DrawGizmoCube(f32 vpX, f32 vpY, f32 vpW, f32 vpH, Camera* cam) {
                 // Snap orbit camera to view angle
                 switch (projected[i].angle) {
                     case ViewAngle::Top:
-                        m_OrbitCam.yaw = 0; m_OrbitCam.pitch = -89.0f;
+                        m_EditorCam.SnapView(0, -89.0f);
                         break;
                     case ViewAngle::Front:
-                        m_OrbitCam.yaw = 0; m_OrbitCam.pitch = 0;
+                        m_EditorCam.SnapView(0, 0);
                         break;
                     case ViewAngle::Right:
-                        m_OrbitCam.yaw = 90; m_OrbitCam.pitch = 0;
+                        m_EditorCam.SnapView(90, 0);
                         break;
                     default: break;
                 }
-                m_OrbitCam.ApplyToTransform(cam->GetOwner()->GetTransform());
+                m_EditorCam.ApplyToTransform(cam->GetOwner()->GetTransform());
                 PushLog("[Viewport] Snapped to " + std::string(projected[i].label) + " view.");
             }
         }
@@ -3997,6 +4036,11 @@ void EditorUI::ImportModelIntoScene(const std::string& path) {
     matComp->roughness = 0.5f;
     matComp->metallic = 0.0f;
 
+    // Add a ScriptComponent so users can immediately attach logic to the model.
+    // The script starts empty — user can assign a .gvs file or write inline code.
+    auto* sc = obj->AddComponent<ScriptComponent>();
+    if (m_Script) sc->SetEngine(m_Script);
+
     // Select the new object
     m_Selected = obj;
     ClearSelection();
@@ -4007,7 +4051,8 @@ void EditorUI::ImportModelIntoScene(const std::string& path) {
 
     PushLog("[Import] Added '" + name + "' to scene (" +
             std::to_string(mesh->GetVertexCount()) + " verts, " +
-            std::to_string(mesh->GetIndexCount() / 3) + " tris).");
+            std::to_string(mesh->GetIndexCount() / 3) + " tris). "
+            "Script component attached — use Inspector to assign a .gvs file or write code.");
 }
 
 void EditorUI::ImportTextureToSelected(const std::string& path) {
