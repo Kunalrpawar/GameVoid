@@ -113,6 +113,18 @@ private:
 
     /// Internal OBJ file parser.
     bool LoadOBJ(const std::string& path);
+
+    /// Internal STL file parser (binary + ASCII).
+    bool LoadSTL(const std::string& path);
+
+    /// Internal PLY file parser (ASCII + binary little-endian).
+    bool LoadPLY(const std::string& path);
+
+    /// Internal Collada (.dae) file parser (basic mesh extraction).
+    bool LoadDAE(const std::string& path);
+
+    /// Internal FBX file parser (ASCII FBX 7.x).
+    bool LoadFBX(const std::string& path);
 };
 
 // ============================================================================
@@ -243,6 +255,10 @@ public:
     /// Determine the file type from extension.
     enum class FileType { Unknown, Texture, Model, Script, Audio };
     static FileType DetectFileType(const std::string& path);
-};
+    /// Returns true if the given file extension is a supported 3D model format.
+    static bool IsSupportedModelFormat(const std::string& ext);
+
+    /// Returns a human-readable string of all supported 3D formats.
+    static const char* SupportedModelFormats();};
 
 } // namespace gv
