@@ -1269,185 +1269,128 @@ void EditorUI::DrawViewport(f32 dt) {
     if (m_ShowCameraPiP)
         DrawCameraPreviewPiP(m_VpScreenX, m_VpScreenY, m_VpScreenW, m_VpScreenH);
 
-    // ── Orbit / Pan / Zoom / Fly camera controls (Godot-style) ───────────
+    // ── Unified camera controls via EditorCamera + ViewportInputManager ──
     bool vpHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
     ImVec2 mousePos = ImGui::GetIO().MousePos;
 
     if (cam) {
-        bool mmb = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
-        bool rmb = ImGui::IsMouseDown(ImGuiMouseButton_Right);
-        bool shiftHeld = ImGui::GetIO().KeyShift;
-        bool altHeld   = ImGui::GetIO().KeyAlt;
+        // Collect input state for ViewportInputManager
+        ViewportInputState inp;
+        inp.mousePos       = Vec2(mousePos.x, mousePos.y);
+        inp.mouseDelta     = Vec2(ImGui::GetIO().MouseDelta.x, ImGui::GetIO().MouseDelta.y);
+        inp.scrollDelta    = ImGui::GetIO().MouseWheel;
+        inp.lmbDown        = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+        inp.lmbClicked     = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+        inp.lmbReleased    = ImGui::IsMouseReleased(ImGuiMouseButton_Left);
+        inp.mmbDown        = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
+        inp.mmbClicked     = ImGui::IsMouseClicked(ImGuiMouseButton_Middle);
+        inp.rmbDown        = ImGui::IsMouseDown(ImGuiMouseButton_Right);
+        inp.rmbClicked     = ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+        inp.rmbReleased    = ImGui::IsMouseReleased(ImGuiMouseButton_Right);
+        inp.shiftHeld      = ImGui::GetIO().KeyShift;
+        inp.ctrlHeld       = ImGui::GetIO().KeyCtrl;
+        inp.altHeld        = ImGui::GetIO().KeyAlt;
+        inp.keyW           = ImGui::IsKeyDown(ImGuiKey_W);
+        inp.keyA           = ImGui::IsKeyDown(ImGuiKey_A);
+        inp.keyS           = ImGui::IsKeyDown(ImGuiKey_S);
+        inp.keyD           = ImGui::IsKeyDown(ImGuiKey_D);
+        inp.keyQ           = ImGui::IsKeyDown(ImGuiKey_Q);
+        inp.keyE           = ImGui::IsKeyDown(ImGuiKey_E);
+        inp.keyF           = ImGui::IsKeyPressed(ImGuiKey_F);
+        inp.keyDelete      = ImGui::IsKeyPressed(ImGuiKey_Delete);
+        inp.numpad0        = ImGui::IsKeyPressed(ImGuiKey_Keypad0);
+        inp.numpad1        = ImGui::IsKeyPressed(ImGuiKey_Keypad1);
+        inp.numpad3        = ImGui::IsKeyPressed(ImGuiKey_Keypad3);
+        inp.numpad5        = ImGui::IsKeyPressed(ImGuiKey_Keypad5);
+        inp.numpad7        = ImGui::IsKeyPressed(ImGuiKey_Keypad7);
+        inp.viewportHovered = vpHovered;
 
-        // ── WASD Fly-through mode (Godot-style: hold RMB in viewport) ──
-        // Enter fly mode on RMB click in viewport
-        if (vpHovered && !m_FlyMode && !m_OrbitActive && !m_PanActive
-            && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && !altHeld) {
-            m_FlyMode = true;
-            m_FlyEyePos = cam->GetOwner()->GetTransform().position;
-            m_FlyYaw = m_OrbitCam.yaw;
-            m_FlyPitch = m_OrbitCam.pitch;
-            m_LastMousePos = Vec2(mousePos.x, mousePos.y);
-        }
+        m_ViewInput.Update(inp);
+        ViewportAction action = m_ViewInput.GetAction();
+        Vec2 delta = m_ViewInput.GetMouseDelta();
 
-        // Continue fly mode while RMB held
-        if (m_FlyMode) {
-            if (rmb) {
-                // Mouse look
-                f32 dx = mousePos.x - m_LastMousePos.x;
-                f32 dy = mousePos.y - m_LastMousePos.y;
-                m_LastMousePos = Vec2(mousePos.x, mousePos.y);
-                m_OrbitCam.FlyLook(dx, dy);
-                m_FlyYaw = m_OrbitCam.yaw;
-                m_FlyPitch = m_OrbitCam.pitch;
-
-                // WASD + Q/E movement
-                f32 fwd = 0, right = 0, up = 0;
-                if (ImGui::IsKeyDown(ImGuiKey_W)) fwd   += 1.0f;
-                if (ImGui::IsKeyDown(ImGuiKey_S)) fwd   -= 1.0f;
-                if (ImGui::IsKeyDown(ImGuiKey_D)) right += 1.0f;
-                if (ImGui::IsKeyDown(ImGuiKey_A)) right -= 1.0f;
-                if (ImGui::IsKeyDown(ImGuiKey_E)) up    += 1.0f;
-                if (ImGui::IsKeyDown(ImGuiKey_Q)) up    -= 1.0f;
-
-                m_OrbitCam.FlyMove(fwd, right, up, dt, shiftHeld);
-
-                // Scroll = adjust fly speed
-                f32 scroll = ImGui::GetIO().MouseWheel;
-                if (scroll != 0.0f) {
-                    m_OrbitCam.FlyAdjustSpeed(scroll);
+        // Dispatch action to EditorCamera
+        switch (action) {
+            case ViewportAction::Orbit:
+                m_EditorCam.Orbit(delta.x, delta.y);
+                break;
+            case ViewportAction::Pan:
+                m_EditorCam.Pan(delta.x, delta.y);
+                break;
+            case ViewportAction::Zoom:
+                m_EditorCam.Zoom(m_ViewInput.GetScrollDelta());
+                break;
+            case ViewportAction::FlyBegin:
+                m_EditorCam.BeginFly();
+                break;
+            case ViewportAction::FlyUpdate:
+                m_EditorCam.FlyUpdate(delta.x, delta.y,
+                    m_ViewInput.GetFlyForward(), m_ViewInput.GetFlyRight(), m_ViewInput.GetFlyUp(),
+                    dt, m_ViewInput.IsSprinting());
+                break;
+            case ViewportAction::FlyEnd:
+                m_EditorCam.EndFly();
+                break;
+            case ViewportAction::FlySpeedScroll:
+                m_EditorCam.FlyAdjustSpeed(m_ViewInput.GetScrollDelta());
+                // Also do the fly update for the frame
+                m_EditorCam.FlyUpdate(delta.x, delta.y,
+                    m_ViewInput.GetFlyForward(), m_ViewInput.GetFlyRight(), m_ViewInput.GetFlyUp(),
+                    dt, m_ViewInput.IsSprinting());
+                break;
+            case ViewportAction::FocusSelected:
+                if (m_Selected) {
+                    m_EditorCam.FocusOn(m_Selected->GetTransform().position);
                 }
-
-                // Apply position directly (fly mode uses focusPoint as eye)
-                // In fly mode: eye = focusPoint, we look forward from there
-                cam->GetOwner()->GetTransform().position = m_OrbitCam.focusPoint;
-                Quaternion qYaw   = Quaternion::FromAxisAngle(Vec3::Up(), (m_OrbitCam.yaw + 180.0f) * (3.14159265f / 180.0f));
-                Quaternion qPitch = Quaternion::FromAxisAngle(Vec3::Right(), -m_OrbitCam.pitch * (3.14159265f / 180.0f));
-                cam->GetOwner()->GetTransform().rotation = qYaw * qPitch;
-
-                // Draw fly mode HUD
-                ImDrawList* dl = ImGui::GetForegroundDrawList();
-                f32 hudY = m_VpScreenY + m_VpScreenH - 36;
-                f32 hudX = m_VpScreenX + 8;
-                char speedBuf[64];
-                std::snprintf(speedBuf, sizeof(speedBuf), "Fly Mode | Speed: %.1f | WASD+QE | Shift=Sprint | Scroll=Speed", m_OrbitCam.flySpeed);
-                ImVec2 txtSz = ImGui::CalcTextSize(speedBuf);
-                dl->AddRectFilled(ImVec2(hudX, hudY), ImVec2(hudX + txtSz.x + 16, hudY + txtSz.y + 8), IM_COL32(20, 20, 30, 220), 4.0f);
-                dl->AddRect(ImVec2(hudX, hudY), ImVec2(hudX + txtSz.x + 16, hudY + txtSz.y + 8), IM_COL32(80, 140, 255, 180), 4.0f);
-                dl->AddText(ImVec2(hudX + 8, hudY + 4), IM_COL32(120, 200, 255, 255), speedBuf);
-
-                // Crosshair in viewport center
-                f32 cx = m_VpScreenX + m_VpScreenW * 0.5f;
-                f32 cy = m_VpScreenY + m_VpScreenH * 0.5f;
-                f32 crossSz = 8.0f;
-                dl->AddLine(ImVec2(cx - crossSz, cy), ImVec2(cx + crossSz, cy), IM_COL32(255, 255, 255, 100), 1.0f);
-                dl->AddLine(ImVec2(cx, cy - crossSz), ImVec2(cx, cy + crossSz), IM_COL32(255, 255, 255, 100), 1.0f);
-            } else {
-                // RMB released — exit fly mode, sync orbit from current position
-                m_FlyMode = false;
-                Vec3 eye = cam->GetOwner()->GetTransform().position;
-                m_OrbitCam.SyncOrbitFromEye(eye);
-                m_OrbitCam.ApplyToTransform(cam->GetOwner()->GetTransform());
-            }
-        }
-
-        // ── Scroll → zoom (only when hovered, NOT in fly mode) ─────────
-        if (vpHovered && !m_FlyMode) {
-            f32 scroll = ImGui::GetIO().MouseWheel;
-            if (scroll != 0.0f) {
-                m_OrbitCam.Zoom(scroll);
-                m_OrbitCam.ApplyToTransform(cam->GetOwner()->GetTransform());
-            }
-        }
-
-        // ── Start orbit/pan drag: only when viewport is hovered ────────
-        if (vpHovered && !m_OrbitActive && !m_PanActive && !m_FlyMode) {
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ||
-                (altHeld && ImGui::IsMouseClicked(ImGuiMouseButton_Left))) {
-                m_LastMousePos = Vec2(mousePos.x, mousePos.y);
-                if (shiftHeld) {
-                    m_PanActive = true;
-                } else {
-                    m_OrbitActive = true;
-                }
-            }
-        }
-
-        // ── Continue orbit drag: works even when mouse leaves viewport ──
-        if (m_OrbitActive && !m_FlyMode) {
-            if (mmb || (altHeld && ImGui::IsMouseDown(ImGuiMouseButton_Left))) {
-                f32 dx = mousePos.x - m_LastMousePos.x;
-                f32 dy = mousePos.y - m_LastMousePos.y;
-                m_LastMousePos = Vec2(mousePos.x, mousePos.y);
-                if (shiftHeld) {
-                    m_OrbitCam.Pan(dx, dy);  // shift mid-drag switches to pan
-                } else {
-                    m_OrbitCam.Orbit(dx, dy);
-                }
-                m_OrbitCam.ApplyToTransform(cam->GetOwner()->GetTransform());
-            } else {
-                m_OrbitActive = false;  // button released
-            }
-        }
-
-        if (m_PanActive && !m_FlyMode) {
-            if (mmb) {
-                f32 dx = mousePos.x - m_LastMousePos.x;
-                f32 dy = mousePos.y - m_LastMousePos.y;
-                m_LastMousePos = Vec2(mousePos.x, mousePos.y);
-                m_OrbitCam.Pan(dx, dy);
-                m_OrbitCam.ApplyToTransform(cam->GetOwner()->GetTransform());
-            } else {
-                m_PanActive = false;  // button released
-            }
-        }
-
-        // ── Numpad view shortcuts (Godot-style) ────────────────────────
-        if (vpHovered && !m_FlyMode) {
-            // Numpad 1 = Front view
-            if (ImGui::IsKeyPressed(ImGuiKey_Keypad1)) {
-                m_OrbitCam.yaw = 0; m_OrbitCam.pitch = 0;
-                m_OrbitCam.ApplyToTransform(cam->GetOwner()->GetTransform());
-                PushLog("[Viewport] Front view");
-            }
-            // Numpad 3 = Right view
-            if (ImGui::IsKeyPressed(ImGuiKey_Keypad3)) {
-                m_OrbitCam.yaw = 90; m_OrbitCam.pitch = 0;
-                m_OrbitCam.ApplyToTransform(cam->GetOwner()->GetTransform());
-                PushLog("[Viewport] Right view");
-            }
-            // Numpad 7 = Top view
-            if (ImGui::IsKeyPressed(ImGuiKey_Keypad7)) {
-                m_OrbitCam.yaw = 0; m_OrbitCam.pitch = -89.0f;
-                m_OrbitCam.ApplyToTransform(cam->GetOwner()->GetTransform());
-                PushLog("[Viewport] Top view");
-            }
-            // Numpad 5 = Toggle perspective/orthographic
-            if (ImGui::IsKeyPressed(ImGuiKey_Keypad5)) {
+                break;
+            case ViewportAction::SnapFront:   m_EditorCam.SnapView(0.0f, 0.0f); PushLog("[Viewport] Front view"); break;
+            case ViewportAction::SnapBack:    m_EditorCam.SnapView(180.0f, 0.0f); PushLog("[Viewport] Back view"); break;
+            case ViewportAction::SnapRight:   m_EditorCam.SnapView(90.0f, 0.0f); PushLog("[Viewport] Right view"); break;
+            case ViewportAction::SnapLeft:    m_EditorCam.SnapView(270.0f, 0.0f); PushLog("[Viewport] Left view"); break;
+            case ViewportAction::SnapTop:     m_EditorCam.SnapView(0.0f, -89.0f); PushLog("[Viewport] Top view"); break;
+            case ViewportAction::SnapBottom:  m_EditorCam.SnapView(0.0f, 89.0f); PushLog("[Viewport] Bottom view"); break;
+            case ViewportAction::ToggleOrtho:
                 if (cam->projectionType == ProjectionType::Perspective) {
                     cam->projectionType = ProjectionType::Orthographic;
-                    cam->orthoSize = m_OrbitCam.distance * 0.5f;
+                    cam->orthoSize = m_EditorCam.GetDistance() * 0.5f;
                     PushLog("[Viewport] Orthographic");
                 } else {
                     cam->projectionType = ProjectionType::Perspective;
                     PushLog("[Viewport] Perspective");
                 }
-            }
-            // Numpad 0 = Reset to default perspective view
-            if (ImGui::IsKeyPressed(ImGuiKey_Keypad0)) {
-                m_OrbitCam.yaw = 30.0f; m_OrbitCam.pitch = -25.0f; m_OrbitCam.distance = 18.0f;
-                m_OrbitCam.focusPoint = Vec3(0, 0, 0);
+                break;
+            case ViewportAction::ResetView:
+                m_EditorCam.SetOrbitState(Vec3(0,0,0), 30.0f, -25.0f, 18.0f);
                 cam->projectionType = ProjectionType::Perspective;
-                m_OrbitCam.ApplyToTransform(cam->GetOwner()->GetTransform());
                 PushLog("[Viewport] Reset view");
-            }
+                break;
+            default:
+                break;
         }
-    }
 
-    // ── Focus on selected object (F key) ───────────────────────────────────
-    if (vpHovered && !m_FlyMode && ImGui::IsKeyPressed(ImGuiKey_F) && m_Selected && cam) {
-        m_OrbitCam.FocusOn(m_Selected->GetTransform().position);
-        m_OrbitCam.ApplyToTransform(cam->GetOwner()->GetTransform());
+        // Smooth-update camera every frame
+        m_EditorCam.Update(dt);
+        m_EditorCam.ApplyToTransform(cam->GetOwner()->GetTransform());
+
+        // Fly mode HUD
+        if (m_ViewInput.IsFlying()) {
+            ImDrawList* dl = ImGui::GetForegroundDrawList();
+            f32 hudY = m_VpScreenY + m_VpScreenH - 36;
+            f32 hudX = m_VpScreenX + 8;
+            char speedBuf[64];
+            std::snprintf(speedBuf, sizeof(speedBuf), "Fly Mode | Speed: %.1f | WASD+QE | Shift=Sprint | Scroll=Speed", m_EditorCam.GetFlySpeed());
+            ImVec2 txtSz = ImGui::CalcTextSize(speedBuf);
+            dl->AddRectFilled(ImVec2(hudX, hudY), ImVec2(hudX + txtSz.x + 16, hudY + txtSz.y + 8), IM_COL32(20, 20, 30, 220), 4.0f);
+            dl->AddRect(ImVec2(hudX, hudY), ImVec2(hudX + txtSz.x + 16, hudY + txtSz.y + 8), IM_COL32(80, 140, 255, 180), 4.0f);
+            dl->AddText(ImVec2(hudX + 8, hudY + 4), IM_COL32(120, 200, 255, 255), speedBuf);
+
+            // Crosshair
+            f32 cx = m_VpScreenX + m_VpScreenW * 0.5f;
+            f32 cy = m_VpScreenY + m_VpScreenH * 0.5f;
+            f32 crossSz = 8.0f;
+            dl->AddLine(ImVec2(cx - crossSz, cy), ImVec2(cx + crossSz, cy), IM_COL32(255, 255, 255, 100), 1.0f);
+            dl->AddLine(ImVec2(cx, cy - crossSz), ImVec2(cx, cy + crossSz), IM_COL32(255, 255, 255, 100), 1.0f);
+        }
     }
 
     // ── Placement mode: preview + click-to-place ─────────────────────────
