@@ -193,6 +193,14 @@ void EditorUI::Render(f32 dt) {
         if (ImGui::IsKeyPressed(ImGuiKey_Z) && !io.KeyCtrl) { m_ShowWireframe = !m_ShowWireframe; }
     }
 
+    // ── Process drag-and-drop from OS file explorer ────────────────────────
+    if (m_Window) {
+        auto dropped = m_Window->PollDroppedFiles();
+        if (!dropped.empty()) {
+            ProcessDroppedFiles(dropped);
+        }
+    }
+
     // FPS counter
     m_FPSAccum += dt;
     m_FPSCount++;
@@ -4384,6 +4392,94 @@ void EditorUI::ExportScene() {
 void EditorUI::DrawImportAssetDialog() {
     // Handled inline via OpenFileDialog — this method exists for future
     // custom import dialog with preview, scale settings, etc.
+}
+
+// ── Drag-and-drop from OS file explorer ────────────────────────────────────
+
+void EditorUI::ProcessDroppedFiles(const std::vector<std::string>& paths) {
+    if (paths.empty()) return;
+    PushLog("[Drop] Received " + std::to_string(paths.size()) + " item(s).");
+    for (const auto& p : paths) {
+        ProcessDroppedPath(p);
+    }
+}
+
+// Helper: check if path is a directory (Win32 or fallback)
+static bool IsDirectory(const std::string& path) {
+#ifdef _WIN32
+    DWORD attr = GetFileAttributesA(path.c_str());
+    return (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY));
+#else
+    return false;
+#endif
+}
+
+// Helper: recursively enumerate files in a directory (Win32)
+static void EnumerateFilesRecursive(const std::string& dir, std::vector<std::string>& out) {
+#ifdef _WIN32
+    std::string search = dir + "\\*";
+    WIN32_FIND_DATAA fd;
+    HANDLE hFind = FindFirstFileA(search.c_str(), &fd);
+    if (hFind == INVALID_HANDLE_VALUE) return;
+    do {
+        std::string name = fd.cFileName;
+        if (name == "." || name == "..") continue;
+        std::string full = dir + "\\" + name;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            EnumerateFilesRecursive(full, out);
+        } else {
+            out.push_back(full);
+        }
+    } while (FindNextFileA(hFind, &fd));
+    FindClose(hFind);
+#endif
+}
+
+// Helper: get filename from path
+static std::string GetFileName(const std::string& path) {
+    auto pos = path.find_last_of("/\\");
+    return (pos != std::string::npos) ? path.substr(pos + 1) : path;
+}
+
+void EditorUI::ProcessDroppedPath(const std::string& path) {
+    if (IsDirectory(path)) {
+        // Recursively scan folder for supported files
+        std::vector<std::string> files;
+        EnumerateFilesRecursive(path, files);
+        int count = 0;
+        for (const auto& f : files) {
+            auto type = AssetLoader::DetectFileType(f);
+            if (type != AssetLoader::FileType::Unknown) {
+                ProcessDroppedPath(f);
+                ++count;
+            }
+        }
+        PushLog("[Drop] Scanned folder '" + GetFileName(path)
+                + "' \xe2\x80\x94 found " + std::to_string(count) + " asset(s).");
+        return;
+    }
+
+    // Check it's a file with an extension we recognise
+    auto type = AssetLoader::DetectFileType(path);
+    switch (type) {
+    case AssetLoader::FileType::Model:
+        ImportModelIntoScene(path);
+        break;
+    case AssetLoader::FileType::Texture:
+        if (m_Selected) {
+            ImportTextureToSelected(path);
+        } else {
+            ImportAssetFile(path);
+        }
+        break;
+    case AssetLoader::FileType::Script:
+    case AssetLoader::FileType::Audio:
+        ImportAssetFile(path);
+        break;
+    default:
+        PushLog("[Drop] Unsupported file type: " + path);
+        break;
+    }
 }
 
 } // namespace gv

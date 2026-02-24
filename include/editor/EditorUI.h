@@ -166,6 +166,10 @@ private:
     void ImportModelIntoScene(const std::string& path);
     void ImportTextureToSelected(const std::string& path);
 
+    // ── Drag-and-drop helpers ──────────────────────────────────────────────
+    void ProcessDroppedFiles(const std::vector<std::string>& paths);
+    void ProcessDroppedPath(const std::string& path);  // single file or folder
+
     // ── Build system helpers ───────────────────────────────────────────────
     void BuildGame();
     void BuildAndRun();
