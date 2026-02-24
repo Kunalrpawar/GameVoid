@@ -3,6 +3,8 @@
 // ============================================================================
 #include "core/Window.h"
 #include "core/Types.h"
+#include <string>
+#include <vector>
 
 #ifdef GV_HAS_GLFW
 
@@ -56,6 +58,7 @@ bool Window::Init(u32 width, u32 height, const std::string& title) {
     glfwSetCursorPosCallback(m_Window, CursorPosCallback);
     glfwSetScrollCallback(m_Window, ScrollCallback);
     glfwSetFramebufferSizeCallback(m_Window, FramebufferSizeCallback);
+    glfwSetDropCallback(m_Window, DropCallback);
 
     // Get initial mouse position
     glfwGetCursorPos(m_Window, &m_MouseX, &m_MouseY);
@@ -196,6 +199,22 @@ void Window::FramebufferSizeCallback(GLFWwindow* w, int width, int height) {
         self->m_Height = static_cast<u32>(height);
     }
     glViewport(0, 0, width, height);
+}
+
+void Window::DropCallback(GLFWwindow* w, int count, const char** paths) {
+    Window* self = static_cast<Window*>(glfwGetWindowUserPointer(w));
+    if (!self) return;
+    for (int i = 0; i < count; ++i) {
+        if (paths[i]) {
+            self->m_DroppedFiles.emplace_back(paths[i]);
+        }
+    }
+}
+
+std::vector<std::string> Window::PollDroppedFiles() {
+    std::vector<std::string> result;
+    result.swap(m_DroppedFiles);
+    return result;
 }
 
 } // namespace gv

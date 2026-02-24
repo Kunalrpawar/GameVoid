@@ -106,6 +106,11 @@ public:
     GLFWwindow* GetNativeWindow() const { return m_Window; }
 #endif
 
+    // ── Drag-and-drop ──────────────────────────────────────────────────────
+    /// Returns (and clears) all file/folder paths dropped onto the window
+    /// since the last call.  Call once per frame from your editor loop.
+    std::vector<std::string> PollDroppedFiles();
+
 private:
 #ifdef GV_HAS_GLFW
     GLFWwindow* m_Window = nullptr;
@@ -121,12 +126,16 @@ private:
     f64  m_LastMouseX = 0.0, m_LastMouseY = 0.0;
     f32  m_ScrollDelta = 0.0f;
 
+    // ── Drag-and-drop state ──────────────────────────────────────────────
+    std::vector<std::string> m_DroppedFiles;
+
     // Static GLFW callbacks (retrieve Window* via glfwGetWindowUserPointer)
     static void KeyCallback(GLFWwindow* w, int key, int scancode, int action, int mods);
     static void MouseButtonCallback(GLFWwindow* w, int button, int action, int mods);
     static void CursorPosCallback(GLFWwindow* w, double xpos, double ypos);
     static void ScrollCallback(GLFWwindow* w, double xoffset, double yoffset);
     static void FramebufferSizeCallback(GLFWwindow* w, int width, int height);
+    static void DropCallback(GLFWwindow* w, int count, const char** paths);
 #endif
 
     u32  m_Width  = 0;
