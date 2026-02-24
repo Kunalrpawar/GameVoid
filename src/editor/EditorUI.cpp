@@ -275,16 +275,17 @@ void EditorUI::DrawMenuBar() {
             ImGui::Separator();
             if (ImGui::MenuItem("Import Asset...", "Ctrl+I")) {
                 std::string file = OpenFileDialog(
-                    "3D Models (*.obj;*.fbx;*.gltf;*.glb)\0*.obj;*.fbx;*.gltf;*.glb\0"
+                    "3D Models (*.obj;*.fbx;*.gltf;*.glb;*.stl;*.ply;*.dae)\0*.obj;*.fbx;*.gltf;*.glb;*.stl;*.ply;*.dae\0"
                     "Textures (*.png;*.jpg;*.bmp;*.tga)\0*.png;*.jpg;*.bmp;*.tga\0"
                     "Audio (*.wav;*.mp3;*.ogg)\0*.wav;*.mp3;*.ogg\0"
+                    "Scripts (*.gvs)\0*.gvs\0"
                     "All Files (*.*)\0*.*\0",
                     "Import Asset");
                 if (!file.empty()) ImportAssetFile(file);
             }
             if (ImGui::MenuItem("Import 3D Model...")) {
                 std::string file = OpenFileDialog(
-                    "3D Models (*.obj;*.fbx;*.gltf;*.glb)\0*.obj;*.fbx;*.gltf;*.glb\0"
+                    "3D Models (*.obj;*.fbx;*.gltf;*.glb;*.stl;*.ply;*.dae)\0*.obj;*.fbx;*.gltf;*.glb;*.stl;*.ply;*.dae\0"
                     "All Files (*.*)\0*.*\0",
                     "Import 3D Model");
                 if (!file.empty()) ImportModelIntoScene(file);
@@ -2221,9 +2222,10 @@ void EditorUI::DrawAssetBrowser() {
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.7f, 0.35f, 1.0f));
     if (ImGui::Button("Import Asset...")) {
         std::string file = OpenFileDialog(
-            "All Supported\\0*.obj;*.fbx;*.gltf;*.glb;*.png;*.jpg;*.bmp;*.tga;*.wav;*.mp3;*.ogg\\0"
-            "3D Models\\0*.obj;*.fbx;*.gltf;*.glb\\0"
+            "All Supported\\0*.obj;*.fbx;*.gltf;*.glb;*.stl;*.ply;*.dae;*.3ds;*.png;*.jpg;*.bmp;*.tga;*.wav;*.mp3;*.ogg;*.gvs\\0"
+            "3D Models\\0*.obj;*.fbx;*.gltf;*.glb;*.stl;*.ply;*.dae;*.3ds\\0"
             "Textures\\0*.png;*.jpg;*.bmp;*.tga\\0"
+            "Scripts\\0*.gvs\\0"
             "Audio\\0*.wav;*.mp3;*.ogg\\0"
             "All Files\\0*.*\\0",
             "Import Asset");
@@ -2233,7 +2235,7 @@ void EditorUI::DrawAssetBrowser() {
     ImGui::SameLine();
     if (ImGui::Button("Import Model to Scene")) {
         std::string file = OpenFileDialog(
-            "3D Models (*.obj;*.fbx;*.gltf;*.glb)\\0*.obj;*.fbx;*.gltf;*.glb\\0"
+            "3D Models (*.obj;*.fbx;*.gltf;*.glb;*.stl;*.ply;*.dae)\\0*.obj;*.fbx;*.gltf;*.glb;*.stl;*.ply;*.dae\\0"
             "All Files\\0*.*\\0",
             "Import 3D Model into Scene");
         if (!file.empty()) ImportModelIntoScene(file);

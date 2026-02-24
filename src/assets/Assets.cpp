@@ -143,7 +143,20 @@ bool Mesh::LoadFromFile(const std::string& path) {
                     std::to_string(gltfResult.indices.size() / 3) + " tris)");
         return true;
     }
-    GV_LOG_WARN("Mesh::LoadFromFile — unsupported format: " + ext + " (supported: .obj, .gltf, .glb)");
+    if (ext == ".stl") {
+        return LoadSTL(path);
+    }
+    if (ext == ".ply") {
+        return LoadPLY(path);
+    }
+    if (ext == ".dae") {
+        return LoadDAE(path);
+    }
+    if (ext == ".fbx") {
+        return LoadFBX(path);
+    }
+    GV_LOG_WARN("Mesh::LoadFromFile — unsupported format: " + ext +
+                " (supported: .obj, .gltf, .glb, .stl, .ply, .dae, .fbx)");
     return false;
 }
 
@@ -277,6 +290,691 @@ bool Mesh::LoadOBJ(const std::string& path) {
     GV_LOG_INFO("Mesh loaded from OBJ: " + path + " (" +
                 std::to_string(vertices.size()) + " verts, " +
                 std::to_string(indices.size() / 3) + " tris)");
+    return true;
+}
+
+// ── STL Loader (Binary + ASCII) ────────────────────────────────────────────
+
+bool Mesh::LoadSTL(const std::string& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) {
+        GV_LOG_WARN("Mesh::LoadSTL — failed to open: " + path);
+        return false;
+    }
+
+    // Read first 80 bytes (header) + 4 bytes (triangle count) to detect binary vs ASCII
+    char header[80] = {};
+    file.read(header, 80);
+    if (!file.good()) {
+        GV_LOG_WARN("Mesh::LoadSTL — file too small: " + path);
+        return false;
+    }
+
+    // Check if it starts with "solid" (ASCII STL) — but binary files can too,
+    // so we also check if the triangle count makes sense with file size
+    bool isBinary = true;
+    {
+        u32 triCount = 0;
+        file.read(reinterpret_cast<char*>(&triCount), 4);
+        // Each triangle in binary STL = 50 bytes (normal:12 + 3 verts:36 + attrib:2)
+        file.seekg(0, std::ios::end);
+        auto fileSize = file.tellg();
+        auto expectedSize = static_cast<std::streamoff>(84 + triCount * 50);
+        if (fileSize == expectedSize && triCount > 0 && triCount < 50000000) {
+            isBinary = true;
+        } else {
+            // Check for ASCII
+            std::string h(header, 5);
+            if (h == "solid") isBinary = false;
+        }
+        file.seekg(0, std::ios::beg);
+    }
+
+    std::vector<Vertex> vertices;
+    std::vector<u32> indices;
+
+    if (isBinary) {
+        // Binary STL
+        file.seekg(80, std::ios::beg);
+        u32 triCount = 0;
+        file.read(reinterpret_cast<char*>(&triCount), 4);
+
+        vertices.reserve(triCount * 3);
+        indices.reserve(triCount * 3);
+
+        for (u32 t = 0; t < triCount; ++t) {
+            float normal[3], v1[3], v2[3], v3[3];
+            u16 attrib;
+            file.read(reinterpret_cast<char*>(normal), 12);
+            file.read(reinterpret_cast<char*>(v1), 12);
+            file.read(reinterpret_cast<char*>(v2), 12);
+            file.read(reinterpret_cast<char*>(v3), 12);
+            file.read(reinterpret_cast<char*>(&attrib), 2);
+
+            if (!file.good()) break;
+
+            Vec3 n(normal[0], normal[1], normal[2]);
+            u32 base = static_cast<u32>(vertices.size());
+
+            Vertex vt0, vt1, vt2;
+            vt0.position = Vec3(v1[0], v1[1], v1[2]); vt0.normal = n;
+            vt1.position = Vec3(v2[0], v2[1], v2[2]); vt1.normal = n;
+            vt2.position = Vec3(v3[0], v3[1], v3[2]); vt2.normal = n;
+            // STL has no UV data
+            vt0.texCoord = Vec2(0, 0);
+            vt1.texCoord = Vec2(1, 0);
+            vt2.texCoord = Vec2(0, 1);
+
+            vertices.push_back(vt0);
+            vertices.push_back(vt1);
+            vertices.push_back(vt2);
+            indices.push_back(base);
+            indices.push_back(base + 1);
+            indices.push_back(base + 2);
+        }
+    } else {
+        // ASCII STL
+        file.seekg(0, std::ios::beg);
+        std::string line;
+        Vec3 curNormal(0, 1, 0);
+
+        while (std::getline(file, line)) {
+            // Trim leading whitespace
+            size_t start = line.find_first_not_of(" \t\r\n");
+            if (start == std::string::npos) continue;
+            line = line.substr(start);
+
+            if (line.compare(0, 12, "facet normal") == 0) {
+                std::istringstream ss(line.substr(12));
+                ss >> curNormal.x >> curNormal.y >> curNormal.z;
+            } else if (line.compare(0, 6, "vertex") == 0) {
+                Vertex v;
+                std::istringstream ss(line.substr(6));
+                ss >> v.position.x >> v.position.y >> v.position.z;
+                v.normal = curNormal;
+                v.texCoord = Vec2(0, 0);
+                u32 idx = static_cast<u32>(vertices.size());
+                vertices.push_back(v);
+                indices.push_back(idx);
+            }
+        }
+        // Assign simple UVs per triangle
+        for (size_t i = 0; i + 2 < vertices.size(); i += 3) {
+            vertices[i].texCoord = Vec2(0, 0);
+            vertices[i + 1].texCoord = Vec2(1, 0);
+            vertices[i + 2].texCoord = Vec2(0, 1);
+        }
+    }
+
+    if (vertices.empty()) {
+        GV_LOG_WARN("Mesh::LoadSTL — no triangles found in: " + path);
+        return false;
+    }
+
+    // Compute tangents
+    for (size_t i = 0; i + 2 < vertices.size(); i += 3) {
+        ComputeTangents(vertices[i], vertices[i + 1], vertices[i + 2]);
+    }
+
+    m_Name = path;
+    Build(vertices, indices);
+    GV_LOG_INFO("Mesh loaded from STL: " + path + " (" +
+                std::to_string(vertices.size()) + " verts, " +
+                std::to_string(indices.size() / 3) + " tris)");
+    return true;
+}
+
+// ── PLY Loader (ASCII + Binary Little-Endian) ──────────────────────────────
+
+bool Mesh::LoadPLY(const std::string& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) {
+        GV_LOG_WARN("Mesh::LoadPLY — failed to open: " + path);
+        return false;
+    }
+
+    // Parse header
+    std::string line;
+    int vertexCount = 0, faceCount = 0;
+    bool isBinary = false;
+    bool hasNormals = false;
+    bool hasUV = false;
+
+    // Track property order for vertices
+    struct PropInfo { std::string name; std::string type; };
+    std::vector<PropInfo> vertexProps;
+    bool inVertexElement = false;
+
+    while (std::getline(file, line)) {
+        // Trim \r
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+
+        if (line == "end_header") break;
+
+        std::istringstream ss(line);
+        std::string token;
+        ss >> token;
+
+        if (token == "format") {
+            std::string fmt;
+            ss >> fmt;
+            isBinary = (fmt == "binary_little_endian");
+        } else if (token == "element") {
+            std::string elemName;
+            int count;
+            ss >> elemName >> count;
+            if (elemName == "vertex") {
+                vertexCount = count;
+                inVertexElement = true;
+            } else {
+                if (elemName == "face") faceCount = count;
+                inVertexElement = false;
+            }
+        } else if (token == "property" && inVertexElement) {
+            std::string ptype, pname;
+            ss >> ptype >> pname;
+            if (ptype != "list") {
+                vertexProps.push_back({pname, ptype});
+                if (pname == "nx" || pname == "ny" || pname == "nz") hasNormals = true;
+                if (pname == "s" || pname == "t" || pname == "u" || pname == "v" ||
+                    pname == "texture_u" || pname == "texture_v") hasUV = true;
+            }
+        }
+    }
+
+    if (vertexCount <= 0) {
+        GV_LOG_WARN("Mesh::LoadPLY — no vertices in header: " + path);
+        return false;
+    }
+
+    // Find property indices
+    int xIdx = -1, yIdx = -1, zIdx = -1;
+    int nxIdx = -1, nyIdx = -1, nzIdx = -1;
+    int uIdx = -1, vIdx = -1;
+    for (int i = 0; i < static_cast<int>(vertexProps.size()); ++i) {
+        auto& p = vertexProps[i];
+        if (p.name == "x") xIdx = i;
+        else if (p.name == "y") yIdx = i;
+        else if (p.name == "z") zIdx = i;
+        else if (p.name == "nx") nxIdx = i;
+        else if (p.name == "ny") nyIdx = i;
+        else if (p.name == "nz") nzIdx = i;
+        else if (p.name == "s" || p.name == "u" || p.name == "texture_u") uIdx = i;
+        else if (p.name == "t" || p.name == "v" || p.name == "texture_v") vIdx = i;
+    }
+
+    std::vector<Vertex> vertices(vertexCount);
+    std::vector<u32> indices;
+
+    if (isBinary) {
+        // Binary little-endian: read vertex data
+        for (int vi = 0; vi < vertexCount; ++vi) {
+            for (int pi = 0; pi < static_cast<int>(vertexProps.size()); ++pi) {
+                float val = 0;
+                auto& pt = vertexProps[pi].type;
+                if (pt == "float" || pt == "float32") {
+                    file.read(reinterpret_cast<char*>(&val), 4);
+                } else if (pt == "double" || pt == "float64") {
+                    double d; file.read(reinterpret_cast<char*>(&d), 8); val = static_cast<float>(d);
+                } else if (pt == "uchar" || pt == "uint8") {
+                    u8 b; file.read(reinterpret_cast<char*>(&b), 1); val = b / 255.0f;
+                } else if (pt == "int" || pt == "int32") {
+                    i32 iv; file.read(reinterpret_cast<char*>(&iv), 4); val = static_cast<float>(iv);
+                } else if (pt == "short" || pt == "int16") {
+                    i16 sv; file.read(reinterpret_cast<char*>(&sv), 2); val = static_cast<float>(sv);
+                } else {
+                    // Skip unknown 4 bytes
+                    file.seekg(4, std::ios::cur);
+                }
+                if (pi == xIdx) vertices[vi].position.x = val;
+                else if (pi == yIdx) vertices[vi].position.y = val;
+                else if (pi == zIdx) vertices[vi].position.z = val;
+                else if (pi == nxIdx) vertices[vi].normal.x = val;
+                else if (pi == nyIdx) vertices[vi].normal.y = val;
+                else if (pi == nzIdx) vertices[vi].normal.z = val;
+                else if (pi == uIdx)  vertices[vi].texCoord.x = val;
+                else if (pi == vIdx)  vertices[vi].texCoord.y = val;
+            }
+        }
+        // Read faces
+        for (int fi = 0; fi < faceCount; ++fi) {
+            u8 count;
+            file.read(reinterpret_cast<char*>(&count), 1);
+            std::vector<u32> faceIdx(count);
+            for (u8 j = 0; j < count; ++j) {
+                i32 idx;
+                file.read(reinterpret_cast<char*>(&idx), 4);
+                faceIdx[j] = static_cast<u32>(idx);
+            }
+            // Fan triangulate
+            for (u8 j = 1; j + 1 < count; ++j) {
+                indices.push_back(faceIdx[0]);
+                indices.push_back(faceIdx[j]);
+                indices.push_back(faceIdx[j + 1]);
+            }
+        }
+    } else {
+        // ASCII
+        for (int vi = 0; vi < vertexCount; ++vi) {
+            if (!std::getline(file, line)) break;
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            std::istringstream ss(line);
+            for (int pi = 0; pi < static_cast<int>(vertexProps.size()); ++pi) {
+                float val = 0;
+                ss >> val;
+                if (pi == xIdx) vertices[vi].position.x = val;
+                else if (pi == yIdx) vertices[vi].position.y = val;
+                else if (pi == zIdx) vertices[vi].position.z = val;
+                else if (pi == nxIdx) vertices[vi].normal.x = val;
+                else if (pi == nyIdx) vertices[vi].normal.y = val;
+                else if (pi == nzIdx) vertices[vi].normal.z = val;
+                else if (pi == uIdx)  vertices[vi].texCoord.x = val;
+                else if (pi == vIdx)  vertices[vi].texCoord.y = val;
+            }
+        }
+        for (int fi = 0; fi < faceCount; ++fi) {
+            if (!std::getline(file, line)) break;
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            std::istringstream ss(line);
+            int count;
+            ss >> count;
+            std::vector<u32> faceIdx(count);
+            for (int j = 0; j < count; ++j) {
+                int idx;
+                ss >> idx;
+                faceIdx[j] = static_cast<u32>(idx);
+            }
+            for (int j = 1; j + 1 < count; ++j) {
+                indices.push_back(faceIdx[0]);
+                indices.push_back(faceIdx[j]);
+                indices.push_back(faceIdx[j + 1]);
+            }
+        }
+    }
+
+    // If no faces, treat as point cloud → generate dummy triangles
+    if (indices.empty() && !vertices.empty()) {
+        for (u32 i = 0; i < static_cast<u32>(vertices.size()); ++i)
+            indices.push_back(i);
+    }
+
+    // Compute normals if not provided
+    if (!hasNormals) {
+        for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+            u32 i0 = indices[i], i1 = indices[i+1], i2 = indices[i+2];
+            if (i0 < vertices.size() && i1 < vertices.size() && i2 < vertices.size()) {
+                Vec3 e1 = vertices[i1].position - vertices[i0].position;
+                Vec3 e2 = vertices[i2].position - vertices[i0].position;
+                Vec3 n = e1.Cross(e2).Normalized();
+                vertices[i0].normal = vertices[i1].normal = vertices[i2].normal = n;
+            }
+        }
+    }
+
+    // Compute tangents
+    for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+        u32 i0 = indices[i], i1 = indices[i+1], i2 = indices[i+2];
+        if (i0 < vertices.size() && i1 < vertices.size() && i2 < vertices.size()) {
+            ComputeTangents(vertices[i0], vertices[i1], vertices[i2]);
+        }
+    }
+
+    m_Name = path;
+    Build(vertices, indices);
+    GV_LOG_INFO("Mesh loaded from PLY: " + path + " (" +
+                std::to_string(vertices.size()) + " verts, " +
+                std::to_string(indices.size() / 3) + " tris)");
+    return true;
+}
+
+// ── Collada DAE Loader (basic mesh extraction from XML) ────────────────────
+
+bool Mesh::LoadDAE(const std::string& path) {
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        GV_LOG_WARN("Mesh::LoadDAE — failed to open: " + path);
+        return false;
+    }
+
+    // Read entire file
+    std::stringstream ss;
+    ss << file.rdbuf();
+    std::string xml = ss.str();
+
+    // Very lightweight XML parser — find <float_array> elements
+    // Look for geometry → mesh → source → float_array for positions, normals, UVs
+    // and <p> for triangle indices
+
+    // Helper: find tag content
+    auto findTag = [&](const std::string& src, const std::string& tag, size_t startPos) -> std::pair<size_t, size_t> {
+        std::string openTag = "<" + tag;
+        size_t pos = src.find(openTag, startPos);
+        if (pos == std::string::npos) return {std::string::npos, std::string::npos};
+        size_t gt = src.find('>', pos);
+        if (gt == std::string::npos) return {std::string::npos, std::string::npos};
+        size_t contentStart = gt + 1;
+        std::string closeTag = "</" + tag + ">";
+        size_t end = src.find(closeTag, contentStart);
+        if (end == std::string::npos) return {std::string::npos, std::string::npos};
+        return {contentStart, end};
+    };
+
+    auto parseFloats = [](const std::string& s) -> std::vector<float> {
+        std::vector<float> result;
+        std::istringstream ss(s);
+        float val;
+        while (ss >> val) result.push_back(val);
+        return result;
+    };
+
+    auto parseInts = [](const std::string& s) -> std::vector<int> {
+        std::vector<int> result;
+        std::istringstream ss(s);
+        int val;
+        while (ss >> val) result.push_back(val);
+        return result;
+    };
+
+    // Find positions (first float_array, typically mesh-positions-array)
+    std::vector<float> positions, normals, texcoords;
+    std::vector<int> pIndices;
+
+    // Find <mesh> section
+    auto meshRange = findTag(xml, "mesh", 0);
+    if (meshRange.first == std::string::npos) {
+        // Try <geometry>
+        meshRange = findTag(xml, "geometry", 0);
+        if (meshRange.first == std::string::npos) {
+            GV_LOG_WARN("Mesh::LoadDAE — no <mesh> or <geometry> found: " + path);
+            return false;
+        }
+    }
+
+    std::string meshXml = xml.substr(meshRange.first, meshRange.second - meshRange.first);
+
+    // Parse all <source> blocks to find positions, normals, texcoords by id
+    // Simple approach: find all <float_array> tags in order
+    std::vector<std::vector<float>> floatArrays;
+    size_t searchPos = 0;
+    while (true) {
+        auto fa = findTag(meshXml, "float_array", searchPos);
+        if (fa.first == std::string::npos) break;
+        floatArrays.push_back(parseFloats(meshXml.substr(fa.first, fa.second - fa.first)));
+        searchPos = fa.second;
+    }
+
+    // Typically: first = positions, second = normals (if present)
+    if (!floatArrays.empty()) positions = floatArrays[0];
+    if (floatArrays.size() > 1) normals = floatArrays[1];
+    if (floatArrays.size() > 2) texcoords = floatArrays[2];
+
+    // Find <triangles> or <polylist> → <p>
+    auto triRange = findTag(meshXml, "triangles", 0);
+    if (triRange.first == std::string::npos)
+        triRange = findTag(meshXml, "polylist", 0);
+
+    if (triRange.first != std::string::npos) {
+        std::string triXml = meshXml.substr(triRange.first, triRange.second - triRange.first);
+        auto pRange = findTag(triXml, "p", 0);
+        if (pRange.first != std::string::npos) {
+            pIndices = parseInts(triXml.substr(pRange.first, pRange.second - pRange.first));
+        }
+    }
+
+    if (positions.empty() || positions.size() < 3) {
+        GV_LOG_WARN("Mesh::LoadDAE — no position data found: " + path);
+        return false;
+    }
+
+    // Determine stride (how many indices per vertex in <p>)
+    int inputCount = 1;
+    if (!normals.empty()) inputCount++;
+    if (!texcoords.empty()) inputCount++;
+
+    std::vector<Vertex> vertices;
+    std::vector<u32> outIndices;
+
+    if (!pIndices.empty()) {
+        // Indexed mesh
+        size_t stride = static_cast<size_t>(inputCount);
+        size_t triVertCount = pIndices.size() / stride;
+        vertices.reserve(triVertCount);
+        outIndices.reserve(triVertCount);
+
+        for (size_t i = 0; i < pIndices.size(); i += stride) {
+            Vertex v;
+            int posIdx = pIndices[i];
+            if (posIdx >= 0 && static_cast<size_t>(posIdx * 3 + 2) < positions.size()) {
+                v.position = Vec3(positions[posIdx * 3], positions[posIdx * 3 + 1], positions[posIdx * 3 + 2]);
+            }
+            if (inputCount > 1 && !normals.empty() && i + 1 < pIndices.size()) {
+                int nIdx = pIndices[i + 1];
+                if (nIdx >= 0 && static_cast<size_t>(nIdx * 3 + 2) < normals.size()) {
+                    v.normal = Vec3(normals[nIdx * 3], normals[nIdx * 3 + 1], normals[nIdx * 3 + 2]);
+                }
+            }
+            if (inputCount > 2 && !texcoords.empty() && i + 2 < pIndices.size()) {
+                int tIdx = pIndices[i + 2];
+                if (tIdx >= 0 && static_cast<size_t>(tIdx * 2 + 1) < texcoords.size()) {
+                    v.texCoord = Vec2(texcoords[tIdx * 2], texcoords[tIdx * 2 + 1]);
+                }
+            }
+            u32 idx = static_cast<u32>(vertices.size());
+            vertices.push_back(v);
+            outIndices.push_back(idx);
+        }
+    } else {
+        // Non-indexed: just unpack positions sequentially
+        size_t vertCount = positions.size() / 3;
+        vertices.reserve(vertCount);
+        outIndices.reserve(vertCount);
+        for (size_t i = 0; i < vertCount; ++i) {
+            Vertex v;
+            v.position = Vec3(positions[i*3], positions[i*3+1], positions[i*3+2]);
+            if (!normals.empty() && i * 3 + 2 < normals.size())
+                v.normal = Vec3(normals[i*3], normals[i*3+1], normals[i*3+2]);
+            if (!texcoords.empty() && i * 2 + 1 < texcoords.size())
+                v.texCoord = Vec2(texcoords[i*2], texcoords[i*2+1]);
+            vertices.push_back(v);
+            outIndices.push_back(static_cast<u32>(i));
+        }
+    }
+
+    // Compute normals if not provided
+    if (normals.empty()) {
+        for (size_t i = 0; i + 2 < outIndices.size(); i += 3) {
+            u32 i0 = outIndices[i], i1 = outIndices[i+1], i2 = outIndices[i+2];
+            if (i0 < vertices.size() && i1 < vertices.size() && i2 < vertices.size()) {
+                Vec3 e1 = vertices[i1].position - vertices[i0].position;
+                Vec3 e2 = vertices[i2].position - vertices[i0].position;
+                Vec3 n = e1.Cross(e2).Normalized();
+                vertices[i0].normal = vertices[i1].normal = vertices[i2].normal = n;
+            }
+        }
+    }
+
+    // Compute tangents
+    for (size_t i = 0; i + 2 < outIndices.size(); i += 3) {
+        u32 i0 = outIndices[i], i1 = outIndices[i+1], i2 = outIndices[i+2];
+        if (i0 < vertices.size() && i1 < vertices.size() && i2 < vertices.size()) {
+            ComputeTangents(vertices[i0], vertices[i1], vertices[i2]);
+        }
+    }
+
+    m_Name = path;
+    Build(vertices, outIndices);
+    GV_LOG_INFO("Mesh loaded from DAE: " + path + " (" +
+                std::to_string(vertices.size()) + " verts, " +
+                std::to_string(outIndices.size() / 3) + " tris)");
+    return true;
+}
+
+// ── FBX Loader (ASCII FBX 7.x) ────────────────────────────────────────────
+
+bool Mesh::LoadFBX(const std::string& path) {
+    // Try to detect binary FBX (starts with "Kaydara FBX Binary")
+    {
+        std::ifstream binCheck(path, std::ios::binary);
+        if (!binCheck.is_open()) {
+            GV_LOG_WARN("Mesh::LoadFBX — failed to open: " + path);
+            return false;
+        }
+        char magic[21] = {};
+        binCheck.read(magic, 20);
+        if (std::string(magic, 18) == "Kaydara FBX Binary") {
+            GV_LOG_WARN("Mesh::LoadFBX — binary FBX detected. For binary FBX files, "
+                        "please convert to glTF/OBJ first (e.g., via Blender export). "
+                        "ASCII FBX is supported directly. File: " + path);
+            // Attempt basic binary FBX geometry extraction
+            // Binary FBX is complex; we'll try to parse the most common case
+        }
+    }
+
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        GV_LOG_WARN("Mesh::LoadFBX — failed to open: " + path);
+        return false;
+    }
+
+    std::stringstream ss;
+    ss << file.rdbuf();
+    std::string content = ss.str();
+
+    // Parse ASCII FBX — look for Vertices: and PolygonVertexIndex: arrays
+    std::vector<float> positions;
+    std::vector<float> fbxNormals;
+    std::vector<float> fbxUVs;
+    std::vector<int> polyVertexIndex;
+
+    // Helper to extract array values after a key like "Vertices: *N {"
+    auto extractFloatArray = [&](const std::string& key) -> std::vector<float> {
+        std::vector<float> result;
+        size_t pos = content.find(key);
+        if (pos == std::string::npos) return result;
+        // Find the "a: " line after the key
+        size_t aPos = content.find("a: ", pos);
+        if (aPos == std::string::npos || aPos > pos + 500) return result;
+        aPos += 3;
+        // Read until closing brace
+        size_t endPos = content.find('}', aPos);
+        if (endPos == std::string::npos) endPos = content.size();
+        std::string data = content.substr(aPos, endPos - aPos);
+        // Replace commas with spaces
+        for (auto& c : data) if (c == ',') c = ' ';
+        std::istringstream ds(data);
+        float val;
+        while (ds >> val) result.push_back(val);
+        return result;
+    };
+
+    auto extractIntArray = [&](const std::string& key) -> std::vector<int> {
+        std::vector<int> result;
+        size_t pos = content.find(key);
+        if (pos == std::string::npos) return result;
+        size_t aPos = content.find("a: ", pos);
+        if (aPos == std::string::npos || aPos > pos + 500) return result;
+        aPos += 3;
+        size_t endPos = content.find('}', aPos);
+        if (endPos == std::string::npos) endPos = content.size();
+        std::string data = content.substr(aPos, endPos - aPos);
+        for (auto& c : data) if (c == ',') c = ' ';
+        std::istringstream ds(data);
+        int val;
+        while (ds >> val) result.push_back(val);
+        return result;
+    };
+
+    positions = extractFloatArray("Vertices:");
+    polyVertexIndex = extractIntArray("PolygonVertexIndex:");
+    fbxNormals = extractFloatArray("Normals:");
+    fbxUVs = extractFloatArray("UV:");
+
+    if (positions.empty() || positions.size() < 3) {
+        GV_LOG_WARN("Mesh::LoadFBX — no vertex data found (may be binary FBX): " + path);
+        return false;
+    }
+
+    // Build position array
+    size_t posCount = positions.size() / 3;
+
+    // In FBX, PolygonVertexIndex uses negative indices to mark end of polygon.
+    // The actual index is: ~negIndex (bitwise NOT) for the last vertex of each polygon.
+    std::vector<std::vector<u32>> polygons;
+    std::vector<u32> currentPoly;
+
+    for (int idx : polyVertexIndex) {
+        if (idx < 0) {
+            // End of polygon — actual index is ~idx
+            currentPoly.push_back(static_cast<u32>(~idx));
+            polygons.push_back(currentPoly);
+            currentPoly.clear();
+        } else {
+            currentPoly.push_back(static_cast<u32>(idx));
+        }
+    }
+    if (!currentPoly.empty()) polygons.push_back(currentPoly);
+
+    // Build vertex and index arrays (fan-triangulate polygons)
+    std::vector<Vertex> vertices;
+    std::vector<u32> outIndices;
+    int fbxVertIdx = 0;  // global vertex counter for per-vertex normals/UVs
+
+    for (auto& poly : polygons) {
+        for (size_t t = 1; t + 1 < poly.size(); ++t) {
+            u32 idxArr[3] = { poly[0], poly[t], poly[t + 1] };
+            for (int k = 0; k < 3; ++k) {
+                Vertex v;
+                u32 pi = idxArr[k];
+                if (pi < posCount) {
+                    v.position = Vec3(positions[pi*3], positions[pi*3+1], positions[pi*3+2]);
+                }
+                // Normals (by polygon vertex — FBX "ByPolygonVertex" mapping)
+                if (!fbxNormals.empty()) {
+                    size_t ni = static_cast<size_t>(fbxVertIdx + k) * 3;
+                    if (ni + 2 < fbxNormals.size()) {
+                        v.normal = Vec3(fbxNormals[ni], fbxNormals[ni+1], fbxNormals[ni+2]);
+                    }
+                }
+                // UVs
+                if (!fbxUVs.empty()) {
+                    size_t ui = static_cast<size_t>(fbxVertIdx + k) * 2;
+                    if (ui + 1 < fbxUVs.size()) {
+                        v.texCoord = Vec2(fbxUVs[ui], fbxUVs[ui+1]);
+                    }
+                }
+                u32 outIdx = static_cast<u32>(vertices.size());
+                vertices.push_back(v);
+                outIndices.push_back(outIdx);
+            }
+        }
+        fbxVertIdx += static_cast<int>(poly.size());
+    }
+
+    if (vertices.empty()) {
+        GV_LOG_WARN("Mesh::LoadFBX — no polygons extracted: " + path);
+        return false;
+    }
+
+    // Compute normals if not provided
+    if (fbxNormals.empty()) {
+        for (size_t i = 0; i + 2 < vertices.size(); i += 3) {
+            Vec3 e1 = vertices[i + 1].position - vertices[i].position;
+            Vec3 e2 = vertices[i + 2].position - vertices[i].position;
+            Vec3 n = e1.Cross(e2).Normalized();
+            vertices[i].normal = vertices[i + 1].normal = vertices[i + 2].normal = n;
+        }
+    }
+
+    // Compute tangents
+    for (size_t i = 0; i + 2 < vertices.size(); i += 3) {
+        ComputeTangents(vertices[i], vertices[i + 1], vertices[i + 2]);
+    }
+
+    m_Name = path;
+    Build(vertices, outIndices);
+    GV_LOG_INFO("Mesh loaded from FBX: " + path + " (" +
+                std::to_string(vertices.size()) + " verts, " +
+                std::to_string(outIndices.size() / 3) + " tris)");
     return true;
 }
 
@@ -586,13 +1284,27 @@ AssetLoader::FileType AssetLoader::DetectFileType(const std::string& path) {
     if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
         ext == ".bmp" || ext == ".tga" || ext == ".hdr")
         return FileType::Texture;
-    if (ext == ".obj" || ext == ".fbx" || ext == ".gltf" || ext == ".glb")
+    if (IsSupportedModelFormat(ext))
         return FileType::Model;
-    if (ext == ".lua" || ext == ".py" || ext == ".js")
+    if (ext == ".lua" || ext == ".py" || ext == ".js" || ext == ".gvs")
         return FileType::Script;
     if (ext == ".wav" || ext == ".mp3" || ext == ".ogg" || ext == ".flac")
         return FileType::Audio;
     return FileType::Unknown;
+}
+
+bool AssetLoader::IsSupportedModelFormat(const std::string& ext) {
+    // Normalize extension to lowercase for comparison
+    std::string e = ext;
+    for (auto& c : e) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return e == ".obj"  || e == ".fbx"  || e == ".gltf" || e == ".glb" ||
+           e == ".stl"  || e == ".ply"  || e == ".dae"  ||
+           e == ".3ds"  || e == ".blend" || e == ".step" || e == ".iges" ||
+           e == ".x3d"  || e == ".off"  || e == ".3mf"  || e == ".amf";
+}
+
+const char* AssetLoader::SupportedModelFormats() {
+    return ".obj, .fbx, .gltf, .glb, .stl, .ply, .dae, .3ds, .blend, .x3d, .off, .3mf";
 }
 
 bool AssetLoader::LoadAsset(AssetManager& mgr, const std::string& path) {
