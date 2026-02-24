@@ -1245,7 +1245,7 @@ void EditorUI::DrawViewport(f32 dt) {
             if (obj && obj->GetComponent<MeshRenderer>()) {
                 auto* mr = obj->GetComponent<MeshRenderer>();
                 Mat4 model = obj->GetTransform().GetModelMatrix();
-                m_Renderer->RenderHighlight(*cam, model, mr->primitiveType);
+                m_Renderer->RenderHighlight(*cam, model, mr->primitiveType, mr->GetMesh());
             }
         };
         drawHighlight(m_Selected);
@@ -1258,10 +1258,22 @@ void EditorUI::DrawViewport(f32 dt) {
             for (auto& obj : m_Scene->GetAllObjects()) {
                 if (!obj || !obj->IsActive()) continue;
                 auto* mr = obj->GetComponent<MeshRenderer>();
-                if (!mr || mr->primitiveType == PrimitiveType::None) continue;
+                if (!mr) continue;
+                if (mr->primitiveType == PrimitiveType::None && !mr->GetMesh()) continue;
                 Transform& t = obj->GetTransform();
-                Vec3 half(0.5f * t.scale.x, 0.5f * t.scale.y, 0.5f * t.scale.z);
-                m_Renderer->DrawDebugBox(t.position, half, Vec4(0.0f, 1.0f, 0.0f, 0.5f));
+                Vec3 half;
+                if (mr->GetMesh() && mr->GetMesh()->GetIndexCount() > 0) {
+                    Vec3 meshMin, meshMax;
+                    mr->GetMesh()->GetBounds(meshMin, meshMax);
+                    Vec3 center = (meshMin + meshMax) * 0.5f;
+                    Vec3 extent = (meshMax - meshMin) * 0.5f;
+                    half = Vec3(extent.x * t.scale.x, extent.y * t.scale.y, extent.z * t.scale.z);
+                    Vec3 boxCenter = t.position + Vec3(center.x * t.scale.x, center.y * t.scale.y, center.z * t.scale.z);
+                    m_Renderer->DrawDebugBox(boxCenter, half, Vec4(0.0f, 1.0f, 0.0f, 0.5f));
+                } else {
+                    half = Vec3(0.5f * t.scale.x, 0.5f * t.scale.y, 0.5f * t.scale.z);
+                    m_Renderer->DrawDebugBox(t.position, half, Vec4(0.0f, 1.0f, 0.0f, 0.5f));
+                }
             }
         }
 
@@ -1644,15 +1656,27 @@ void EditorUI::DrawViewport(f32 dt) {
             for (auto& obj : m_Scene->GetAllObjects()) {
                 if (!obj || !obj->IsActive()) continue;
                 auto* mr = obj->GetComponent<MeshRenderer>();
-                if (!mr || mr->primitiveType == PrimitiveType::None) continue;
+                if (!mr) continue;
+                // Skip if no primitive type AND no custom mesh
+                if (mr->primitiveType == PrimitiveType::None && !mr->GetMesh()) continue;
 
                 Transform& t = obj->GetTransform();
-                Vec3 half(0.5f * t.scale.x, 0.5f * t.scale.y, 0.5f * t.scale.z);
-                // For planes, half-Y is very thin
-                if (mr->primitiveType == PrimitiveType::Plane)
-                    half = Vec3(0.5f * t.scale.x, 0.05f, 0.5f * t.scale.z);
-                Vec3 bmin = t.position - half;
-                Vec3 bmax = t.position + half;
+                Vec3 bmin, bmax;
+
+                if (mr->GetMesh() && mr->GetMesh()->GetIndexCount() > 0) {
+                    // Use actual mesh bounds for imported models
+                    Vec3 meshMin, meshMax;
+                    mr->GetMesh()->GetBounds(meshMin, meshMax);
+                    // Scale bounds by object transform
+                    bmin = t.position + Vec3(meshMin.x * t.scale.x, meshMin.y * t.scale.y, meshMin.z * t.scale.z);
+                    bmax = t.position + Vec3(meshMax.x * t.scale.x, meshMax.y * t.scale.y, meshMax.z * t.scale.z);
+                } else {
+                    Vec3 half(0.5f * t.scale.x, 0.5f * t.scale.y, 0.5f * t.scale.z);
+                    if (mr->primitiveType == PrimitiveType::Plane)
+                        half = Vec3(0.5f * t.scale.x, 0.05f, 0.5f * t.scale.z);
+                    bmin = t.position - half;
+                    bmax = t.position + half;
+                }
 
                 f32 tHit = 0;
                 if (RayAABBIntersect(rayOrigin, rayDir, bmin, bmax, tHit)) {

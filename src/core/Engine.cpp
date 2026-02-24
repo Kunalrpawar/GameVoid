@@ -275,9 +275,7 @@ void Engine::Run() {
             m_EditorUI.EndFrame();
 
             // ── Present ────────────────────────────────────────────────
-            // Restore default framebuffer viewport to full window before swap
-            glViewport(0, 0, static_cast<GLsizei>(m_Window.GetWidth()),
-                               static_cast<GLsizei>(m_Window.GetHeight()));
+            glFlush();   // ensure all draw commands are submitted to GPU
             m_Window.SwapBuffers();
         }
 
