@@ -61,12 +61,11 @@ public:
         if (!m_Parent) {
             position = worldPos;
         } else {
-            // Compute inverse parent world transform and convert
+            // Properly invert parent world transform to get local position
             Mat4 parentWorld = m_Parent->GetModelMatrix();
-            // Simple inverse for TRS: scale^-1 * rot^-1 * translate^-1
-            // For now, use the position delta approach
-            Vec3 parentWorldPos(parentWorld.m[12], parentWorld.m[13], parentWorld.m[14]);
-            position = worldPos - parentWorldPos;
+            Mat4 invParent = parentWorld.Inverse();
+            Vec3 local = invParent.TransformPoint(worldPos);
+            position = local;
         }
     }
 

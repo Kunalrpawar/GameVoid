@@ -12,6 +12,9 @@ namespace gv {
 void FPSCameraController::UpdateFromInput(Window& window, f32 dt) {
     if (!m_Owner) return;
 
+    // Skip mouse-look when cursor is not captured (e.g. user released it with Tab)
+    if (!window.IsCursorCaptured()) return;
+
     Transform& transform = m_Owner->GetTransform();
 
     // ── Mouse look ─────────────────────────────────────────────────────────

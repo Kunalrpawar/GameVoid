@@ -108,7 +108,9 @@ public:
 
     /// Dispatch an event to all matching listeners.
     void Dispatch(const Event& event) {
-        for (auto& listener : m_Listeners) {
+        // Copy listeners to avoid invalidation if callbacks modify the list
+        auto listenersCopy = m_Listeners;
+        for (auto& listener : listenersCopy) {
             if (listener.type != event.type) continue;
             // Apply object filter if set
             if (listener.filter) {
