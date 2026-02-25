@@ -8,6 +8,7 @@
 
 #include "core/Engine.h"
 #include <string>
+#include <stdexcept>
 
 int main(int argc, char* argv[]) {
     gv::EngineConfig config;
@@ -25,9 +26,21 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--api-key" && i + 1 < argc) {
             config.geminiAPIKey = argv[++i];
         } else if (arg == "--width" && i + 1 < argc) {
-            config.windowWidth = static_cast<gv::u32>(std::stoi(argv[++i]));
+            try {
+                int w = std::stoi(argv[++i]);
+                if (w <= 0) { std::cerr << "Invalid width, using default.\n"; w = 1280; }
+                config.windowWidth = static_cast<gv::u32>(w);
+            } catch (const std::exception&) {
+                std::cerr << "Invalid width value, using default.\n";
+            }
         } else if (arg == "--height" && i + 1 < argc) {
-            config.windowHeight = static_cast<gv::u32>(std::stoi(argv[++i]));
+            try {
+                int h = std::stoi(argv[++i]);
+                if (h <= 0) { std::cerr << "Invalid height, using default.\n"; h = 720; }
+                config.windowHeight = static_cast<gv::u32>(h);
+            } catch (const std::exception&) {
+                std::cerr << "Invalid height value, using default.\n";
+            }
         } else if (arg == "--help" || arg == "-h") {
             std::cout << "GameVoid Engine v0.1.0\n"
                       << "Usage: GameVoid [options]\n"

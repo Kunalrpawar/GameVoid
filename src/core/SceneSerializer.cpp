@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <iomanip>
 #include <cstdlib>
+#include <cmath>
 
 namespace gv {
 
@@ -82,11 +83,16 @@ GameObject* Prefab::Instantiate(Scene& scene, PhysicsWorld* physics) const {
 
     // Instantiate children
     for (auto& childPrefab : children) {
-        // Children are instantiated as separate objects; parent linking is managed by scene
         auto* child = childPrefab.Instantiate(scene, physics);
         if (child) {
-            // For now, children are just at their offset positions
-            // Full hierarchy linking happens via AddChild
+            // Link child to parent hierarchy
+            // We need to use the scene's shared_ptr for AddChild
+            for (auto& sobj : scene.GetAllObjects()) {
+                if (sobj.get() == child) {
+                    obj->AddChild(sobj);
+                    break;
+                }
+            }
         }
     }
 
@@ -101,8 +107,25 @@ Prefab PrefabLibrary::CreateFromObject(const GameObject* obj) const {
     p.name = obj->GetName();
     p.position = obj->GetTransform().position;
     p.scale = obj->GetTransform().scale;
-    // rotation stored as quaternion → convert to euler (simplified)
-    p.rotation = Vec3(0, 0, 0);
+    // rotation stored as quaternion → store quaternion components as euler-like angles
+    const Quaternion& q = obj->GetTransform().rotation;
+    // Store quaternion components directly for lossless round-trip
+    p.rotation = Vec3(q.x, q.y, q.z);  // Will need w component too
+    // Note: We also store w in a separate field if needed; for now, store euler-approx
+    // Simple quaternion to euler conversion (YXZ order)
+    {
+        f32 sinP = 2.0f * (q.w * q.x - q.z * q.y);
+        if (std::fabs(sinP) >= 1.0f)
+            p.rotation.x = std::copysign(3.14159265f / 2.0f, sinP) * 180.0f / 3.14159265f;
+        else
+            p.rotation.x = std::asin(sinP) * 180.0f / 3.14159265f;
+        f32 sinY = 2.0f * (q.w * q.y + q.x * q.z);
+        f32 cosY = 1.0f - 2.0f * (q.x * q.x + q.y * q.y);
+        p.rotation.y = std::atan2(sinY, cosY) * 180.0f / 3.14159265f;
+        f32 sinR = 2.0f * (q.w * q.z + q.x * q.y);
+        f32 cosR = 1.0f - 2.0f * (q.x * q.x + q.z * q.z);
+        p.rotation.z = std::atan2(sinR, cosR) * 180.0f / 3.14159265f;
+    }
 
     if (auto* mr = obj->GetComponent<MeshRenderer>()) {
         p.hasMeshRenderer = true;
@@ -177,8 +200,13 @@ bool PrefabLibrary::SaveToFile(const std::string& path) const {
     f << "{\n  \"prefabs\": [\n";
     size_t idx = 0;
     for (auto it = m_Prefabs.begin(); it != m_Prefabs.end(); ++it) {
-        f << "    " << SceneSerializer::SerializeObject(nullptr, 4);
-        // Use prefab name as a marker
+        // Serialize prefab data (create a temporary object representation)
+        f << "    {\n";
+        f << "      \"name\": \"" << EscapeJsonString(it->second.name) << "\",\n";
+        f << "      \"position\": " << SceneSerializer::SerializeVec3(it->second.position) << ",\n";
+        f << "      \"rotation\": " << SceneSerializer::SerializeVec3(it->second.rotation) << ",\n";
+        f << "      \"scale\": " << SceneSerializer::SerializeVec3(it->second.scale) << "\n";
+        f << "    }";
         if (++idx < m_Prefabs.size()) f << ",";
         f << "\n";
     }
@@ -191,7 +219,30 @@ bool PrefabLibrary::SaveToFile(const std::string& path) const {
 bool PrefabLibrary::LoadFromFile(const std::string& path) {
     std::ifstream f(path);
     if (!f.is_open()) return false;
-    GV_LOG_INFO("PrefabLibrary loaded from: " + path);
+
+    std::stringstream ss;
+    ss << f.rdbuf();
+    std::string json = ss.str();
+    f.close();
+
+    size_t pos = 0;
+    auto root = SceneSerializer::ParseJson(json, pos);
+    if (root.type != SceneSerializer::JsonValue::Object) return false;
+
+    if (root.Has("prefabs")) {
+        auto& prefabs = root["prefabs"];
+        for (size_t i = 0; i < prefabs.arrVal.size(); ++i) {
+            auto& jp = prefabs.arrVal[i];
+            Prefab p;
+            p.name = jp["name"].AsStr();
+            if (jp.Has("position")) p.position = SceneSerializer::ParseVec3(jp["position"]);
+            if (jp.Has("rotation")) p.rotation = SceneSerializer::ParseVec3(jp["rotation"]);
+            if (jp.Has("scale"))    p.scale    = SceneSerializer::ParseVec3(jp["scale"]);
+            m_Prefabs[p.name] = p;
+        }
+    }
+
+    GV_LOG_INFO("PrefabLibrary loaded from: " + path + " (" + std::to_string(m_Prefabs.size()) + " prefabs)");
     return true;
 }
 
@@ -296,6 +347,9 @@ std::string SceneSerializer::SerializeObject(const GameObject* obj, int indent) 
     // Transform
     ss << in1 << "\"transform\": {\n";
     ss << in2 << "\"position\": " << SerializeVec3(obj->GetTransform().position) << ",\n";
+    ss << in2 << "\"rotation\": " << SerializeVec4(Vec4(obj->GetTransform().rotation.x,
+        obj->GetTransform().rotation.y, obj->GetTransform().rotation.z,
+        obj->GetTransform().rotation.w)) << ",\n";
     ss << in2 << "\"scale\": " << SerializeVec3(obj->GetTransform().scale) << "\n";
     ss << in1 << "},\n";
 
@@ -589,6 +643,10 @@ void SceneSerializer::DeserializeObject(Scene& scene, const JsonValue& jObj,
             Vec3 scl = ParseVec3(t["scale"]);
             obj->GetTransform().SetScale(scl.x, scl.y, scl.z);
         }
+        if (t.Has("rotation")) {
+            Vec4 rot = ParseVec4(t["rotation"]);
+            obj->GetTransform().rotation = Quaternion(rot.x, rot.y, rot.z, rot.w);
+        }
     }
 
     // Components
@@ -657,7 +715,12 @@ void SceneSerializer::DeserializeObject(Scene& scene, const JsonValue& jObj,
             }
             else if (type == "Camera") {
                 auto* cam = obj->AddComponent<Camera>();
-                cam->SetPerspective(60.0f, 16.0f / 9.0f, 0.1f, 1000.0f);
+                // Restore camera params from file if available, else use sensible defaults
+                f32 fov = comp.Has("fov") ? comp["fov"].AsFloat() : 60.0f;
+                f32 aspect = comp.Has("aspect") ? comp["aspect"].AsFloat() : 16.0f / 9.0f;
+                f32 nearP = comp.Has("near") ? comp["near"].AsFloat() : 0.1f;
+                f32 farP = comp.Has("far") ? comp["far"].AsFloat() : 1000.0f;
+                cam->SetPerspective(fov, aspect, nearP, farP);
             }
         }
     }
@@ -683,6 +746,14 @@ bool SceneSerializer::LoadScene(Scene& scene, const std::string& path,
         GV_LOG_ERROR("SceneSerializer — invalid JSON in: " + path);
         return false;
     }
+
+    // Clear existing scene objects before loading
+    auto& existingObjects = scene.GetAllObjects();
+    // We need to destroy all existing objects - collect pointers first
+    for (auto& obj : existingObjects) {
+        scene.DestroyGameObject(obj.get());
+    }
+    scene.Update(0.0f);  // flush destroy queue
 
     // Deserialize objects
     if (root.Has("objects")) {

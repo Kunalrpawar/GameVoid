@@ -10,6 +10,7 @@
 #include "core/Types.h"
 #include "core/GameObject.h"
 #include "renderer/Camera.h"
+#include "physics/Physics.h"
 #include <string>
 #include <algorithm>
 
@@ -50,6 +51,9 @@ public:
     void DestroyGameObject(GameObject* obj) {
         m_PendingDestroy.push_back(obj);
     }
+
+    /// Set the physics world reference for automatic body unregistration.
+    void SetPhysicsWorld(PhysicsWorld* pw) { m_Physics = pw; }
 
     /// Get all objects (read-only).
     const std::vector<Shared<GameObject>>& GetAllObjects() const { return m_Objects; }
@@ -94,6 +98,19 @@ public:
 private:
     void FlushDestroyQueue() {
         for (auto* obj : m_PendingDestroy) {
+            // Nullify active camera if it belongs to this object
+            if (m_ActiveCamera && m_ActiveCamera->GetOwner() == obj) {
+                m_ActiveCamera = nullptr;
+            }
+            // Unregister physics body before destruction
+            if (m_Physics) {
+                auto* rb = obj->GetComponent<RigidBody>();
+                if (rb) m_Physics->UnregisterBody(rb);
+            }
+            // Call OnDetach on all components before destruction
+            for (auto& comp : obj->GetComponents()) {
+                comp->OnDetach();
+            }
             m_Objects.erase(
                 std::remove_if(m_Objects.begin(), m_Objects.end(),
                     [obj](const Shared<GameObject>& o) { return o.get() == obj; }),
@@ -106,6 +123,7 @@ private:
     std::vector<Shared<GameObject>> m_Objects;
     std::vector<GameObject*>        m_PendingDestroy;
     Camera*                         m_ActiveCamera = nullptr;
+    PhysicsWorld*                   m_Physics = nullptr;
     u32                             m_NextID = 1;
     bool                            m_Started = false;
 };
@@ -138,6 +156,12 @@ public:
     Scene* GetActiveScene() const { return m_ActiveScene; }
 
     const std::vector<Unique<Scene>>& GetAllScenes() const { return m_Scenes; }
+
+    /// Clear all scenes (call during shutdown).
+    void Clear() {
+        m_ActiveScene = nullptr;
+        m_Scenes.clear();
+    }
 
 private:
     std::vector<Unique<Scene>> m_Scenes;

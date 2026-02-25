@@ -15,12 +15,16 @@
 #include "core/GLDefs.h"
 #endif
 #include <chrono>
-#include <cstdlib>   // rand()
+#include <cstdlib>   // rand(), srand()
+#include <ctime>     // time()
 
 namespace gv {
 
 bool Engine::Init(const EngineConfig& config) {
     m_Config = config;
+
+    // Seed random number generator
+    std::srand(static_cast<unsigned>(std::time(nullptr)));
     GV_LOG_INFO("========================================");
     GV_LOG_INFO("  GameVoid Engine v0.1.0 — Initialising");
     GV_LOG_INFO("========================================");
@@ -46,6 +50,12 @@ bool Engine::Init(const EngineConfig& config) {
 
     // ── Scene ──────────────────────────────────────────────────────────────
     Scene* defaultScene = m_SceneManager.CreateScene("Default");
+
+    // ── Physics (init before registering bodies) ───────────────────────────
+    if (config.enablePhysics) {
+        m_Physics.Init();
+    }
+    defaultScene->SetPhysicsWorld(&m_Physics);
 
     // Create a default camera
     auto* camObj = defaultScene->CreateGameObject("MainCamera");
@@ -84,7 +94,7 @@ bool Engine::Init(const EngineConfig& config) {
     cubeRB->useGravity = true;
     cubeObj->AddComponent<Collider>()->type = ColliderType::Box;
     m_Physics.RegisterBody(cubeRB);
-    GV_LOG_INFO("[StartupScene] Created 'DefaultCube' at (0, 3, 0) with RigidBody.");
+    GV_LOG_INFO("[StartupScene] Created 'DefaultCube' at (0, 1.5, 0) with RigidBody.");
 
     // 2. A flat triangle offset to the left
     auto* triObj = defaultScene->CreateGameObject("DefaultTriangle");
@@ -122,11 +132,6 @@ bool Engine::Init(const EngineConfig& config) {
     floorCol->boxHalfExtents = Vec3(0.5f, 0.01f, 0.5f);  // scaled by transform
     m_Physics.RegisterBody(floorRB);
     GV_LOG_INFO("[StartupScene] Created ground plane with physics.");
-
-    // ── Physics ────────────────────────────────────────────────────────────
-    if (config.enablePhysics) {
-        m_Physics.Init();
-    }
 
     // ── Scripting ──────────────────────────────────────────────────────────
     if (config.enableScripting) {
@@ -307,6 +312,7 @@ void Engine::Run() {
         auto now = Clock::now();
         f32 dt = std::chrono::duration<f32>(now - lastTime).count();
         lastTime = now;
+        if (dt > 0.1f) dt = 0.1f;   // clamp stalls (prevent physics explosion)
 
         // ── Input ──────────────────────────────────────────────────────
         m_Window.BeginFrame();
@@ -463,10 +469,18 @@ void Engine::Run() {
 void Engine::Shutdown() {
     GV_LOG_INFO("Engine shutting down...");
 
+    // Clear EventBus to release dangling listener pointers
+    EventBus::Instance().Clear();
+
     m_Scripting.Shutdown();
     m_Physics.Shutdown();
     m_Audio.Shutdown();
     m_Assets.Clear();
+
+    // Clear all scenes before shutting down renderer/window
+    // (components may hold references to subsystem resources)
+    m_SceneManager.Clear();
+
     if (m_Renderer) m_Renderer->Shutdown();
     m_Window.Shutdown();
 

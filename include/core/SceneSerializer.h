@@ -139,7 +139,9 @@ private:
             return nil;
         }
         const JsonValue& operator[](size_t idx) const {
-            return (idx < arrVal.size()) ? arrVal[idx] : *this;
+            if (idx < arrVal.size()) return arrVal[idx];
+            static JsonValue nil;
+            return nil;
         }
         f64 AsNum() const { return numVal; }
         f32 AsFloat() const { return static_cast<f32>(numVal); }

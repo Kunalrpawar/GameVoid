@@ -194,6 +194,8 @@ void Window::ScrollCallback(GLFWwindow* w, double /*xoffset*/, double yoffset) {
 
 void Window::FramebufferSizeCallback(GLFWwindow* w, int width, int height) {
     Window* self = static_cast<Window*>(glfwGetWindowUserPointer(w));
+    // Ignore zero-size framebuffer (e.g. on minimize) to prevent division by zero
+    if (width <= 0 || height <= 0) return;
     if (self) {
         self->m_Width  = static_cast<u32>(width);
         self->m_Height = static_cast<u32>(height);
@@ -246,6 +248,7 @@ f32  Window::GetScrollDelta() const         { return 0; }
 bool Window::IsInitialised() const          { return false; }
 void Window::SetTitle(const std::string&)   {}
 void Window::SetCursorCaptured(bool)         {}
+std::vector<std::string> Window::PollDroppedFiles() { return {}; }
 
 } // namespace gv
 

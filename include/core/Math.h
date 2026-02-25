@@ -39,7 +39,10 @@ struct Vec3 {
     Vec3 operator+(const Vec3& o) const { return { x + o.x, y + o.y, z + o.z }; }
     Vec3 operator-(const Vec3& o) const { return { x - o.x, y - o.y, z - o.z }; }
     Vec3 operator*(f32 s) const         { return { x * s, y * s, z * s }; }
-    Vec3 operator/(f32 s) const         { return { x / s, y / s, z / s }; }
+    Vec3 operator/(f32 s) const         {
+        if (std::fabs(s) < 1e-8f) return { 0, 0, 0 };
+        return { x / s, y / s, z / s };
+    }
     Vec3 operator-() const              { return { -x, -y, -z }; }
 
     Vec3& operator+=(const Vec3& o) { x += o.x; y += o.y; z += o.z; return *this; }
@@ -119,7 +122,10 @@ struct Mat4 {
     /// Perspective projection (field of view in radians).
     static Mat4 Perspective(f32 fov, f32 aspect, f32 near, f32 far) {
         Mat4 r;
+        if (std::fabs(far - near) < 1e-8f || std::fabs(aspect) < 1e-8f || std::fabs(fov) < 1e-8f)
+            return Identity();
         f32 tanHalf = std::tan(fov / 2.0f);
+        if (std::fabs(tanHalf) < 1e-8f) return Identity();
         r.m[0]  = 1.0f / (aspect * tanHalf);
         r.m[5]  = 1.0f / tanHalf;
         r.m[10] = -(far + near) / (far - near);
@@ -142,8 +148,11 @@ struct Mat4 {
 
     /// Look-at view matrix.
     static Mat4 LookAt(const Vec3& eye, const Vec3& target, const Vec3& up) {
-        Vec3 f = (target - eye).Normalized();
+        Vec3 diff = target - eye;
+        if (diff.Length() < 1e-8f) return Identity();
+        Vec3 f = diff.Normalized();
         Vec3 r = f.Cross(up).Normalized();
+        if (r.Length() < 1e-8f) return Identity();
         Vec3 u = r.Cross(f);
         Mat4 m = Identity();
         m.m[0] = r.x;  m.m[4] = r.y;  m.m[8]  = r.z;
