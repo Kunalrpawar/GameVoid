@@ -131,7 +131,10 @@ void OpenGLRenderer::RenderScene(Scene& scene, Camera& camera) {
     Vec3 lightDir(0.3f, 1.0f, 0.5f);
     Vec3 lightColor(1.0f, 1.0f, 1.0f);
     Vec3 ambientColor(0.15f, 0.15f, 0.15f);
-    Vec3 camPos = camera.GetOwner()->GetTransform().position;
+    Vec3 camPos(0, 0, 0);
+    if (camera.GetOwner()) {
+        camPos = camera.GetOwner()->GetTransform().position;
+    }
 
     // Point lights (max 8)
     struct PointLightData {

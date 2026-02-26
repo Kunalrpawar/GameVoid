@@ -77,8 +77,8 @@ void EditorCamera::Pan(f32 dx, f32 dy) {
     Vec3 up = right.Cross(forward).Normalized();
 
     // Scale by distance so panning feels uniform at any zoom
-    f32 scale = panSensitivity * m_DistCur * 0.12f;
-    if (scale < 0.001f) scale = 0.001f;
+    f32 scale = panSensitivity * m_DistCur * 0.25f;
+    if (scale < 0.002f) scale = 0.002f;
 
     m_FocusTgt = m_FocusTgt - right * (dx * scale) + up * (dy * scale);
     m_Mode = EditorCamMode::Orbit;
@@ -86,7 +86,7 @@ void EditorCamera::Pan(f32 dx, f32 dy) {
 
 void EditorCamera::Zoom(f32 scrollDelta) {
     // Exponential zoom for consistent feel
-    f32 factor = 1.0f - scrollDelta * 0.12f;
+    f32 factor = 1.0f - scrollDelta * 0.18f;
     if (factor < 0.05f) factor = 0.05f;
     m_DistTgt *= factor;
     m_DistTgt = Clamp(m_DistTgt, minDist, maxDist);
