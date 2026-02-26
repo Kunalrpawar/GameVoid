@@ -191,6 +191,11 @@ void EditorUI::Render(f32 dt) {
         }
         // Toggle wireframe
         if (ImGui::IsKeyPressed(ImGuiKey_Z) && !io.KeyCtrl) { m_ShowWireframe = !m_ShowWireframe; }
+        // Jump to floor center (Home key)
+        if (ImGui::IsKeyPressed(ImGuiKey_Home)) {
+            m_EditorCam.SetOrbitState(Vec3(0, 0, 0), 30.0f, -25.0f, 15.0f);
+            PushLog("[Viewport] Jumped to floor center");
+        }
     }
 
     // ── Process drag-and-drop from OS file explorer ────────────────────────
@@ -398,6 +403,11 @@ void EditorUI::DrawMenuBar() {
                 ImGui::EndMenu();
             }
             ImGui::Separator();
+            if (ImGui::MenuItem("Jump to Floor Center", "Home")) {
+                m_EditorCam.SetOrbitState(Vec3(0, 0, 0), 30.0f, -25.0f, 15.0f);
+                PushLog("[Viewport] Jumped to floor center");
+            }
+            ImGui::Separator();
             if (ImGui::MenuItem("Grid & Snap Settings")) { m_ShowGridSnapSettings = true; }
             if (ImGui::MenuItem("Keyboard Shortcuts"))   { m_ShowKeyboardShortcuts = true; }
             if (ImGui::MenuItem("Editor Settings"))      { m_ShowEditorSettings = true; }
@@ -493,6 +503,18 @@ void EditorUI::DrawToolbar() {
     }
     ImGui::SameLine();
     if (ImGui::Button("Delete"))  DeleteSelected();
+
+    ImGui::SameLine(); ImGui::Separator(); ImGui::SameLine();
+
+    // Jump-to-center button — teleports camera to look at floor center
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.4f, 1.0f));
+    if (ImGui::Button("Center")) {
+        m_EditorCam.SetOrbitState(Vec3(0, 0, 0), 30.0f, -25.0f, 15.0f);
+        PushLog("[Viewport] Jumped to floor center");
+    }
+    ImGui::PopStyleColor();
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Jump camera to floor center (Home)");
 
     ImGui::End();
 }

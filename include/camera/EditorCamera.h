@@ -52,21 +52,21 @@ public:
     EditorCamera() = default;
 
     // ── Tuning — Orbit ─────────────────────────────────────────────────────
-    f32 orbitSensitivity  = 0.30f;   // degrees per pixel of mouse drag
-    f32 panSensitivity    = 0.012f;  // world-units per pixel (scaled by distance)
-    f32 zoomSensitivity   = 1.2f;    // multiplier per scroll tick
+    f32 orbitSensitivity  = 0.35f;   // degrees per pixel of mouse drag (was 0.30)
+    f32 panSensitivity    = 0.025f;  // world-units per pixel — much easier panning (was 0.012)
+    f32 zoomSensitivity   = 1.5f;    // multiplier per scroll tick (was 1.2)
     f32 minDist           = 0.3f;
     f32 maxDist           = 800.0f;
 
     // ── Tuning — Fly ───────────────────────────────────────────────────────
-    f32 flySpeed          = 10.0f;   // base speed (units/sec)
-    f32 flySprintMul      = 3.0f;
-    f32 flyMinSpeed       = 0.5f;
-    f32 flyMaxSpeed       = 100.0f;
-    f32 flySensitivity    = 0.18f;   // degrees per pixel
+    f32 flySpeed          = 18.0f;   // base speed — faster movement (was 10)
+    f32 flySprintMul      = 3.5f;    // sprint multiplier (was 3.0)
+    f32 flyMinSpeed       = 1.0f;    // minimum fly speed (was 0.5)
+    f32 flyMaxSpeed       = 150.0f;  // max fly speed (was 100)
+    f32 flySensitivity    = 0.20f;   // degrees per pixel (was 0.18)
 
     // ── Tuning — Smoothing ─────────────────────────────────────────────────
-    f32 smoothFactor      = 12.0f;   // higher = snappier; 0 = no smoothing
+    f32 smoothFactor      = 16.0f;   // higher = snappier response (was 12)
 
     // ── Pitch limits ───────────────────────────────────────────────────────
     f32 pitchMin = -89.0f;
