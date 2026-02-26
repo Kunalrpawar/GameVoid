@@ -28,6 +28,8 @@
 #include "camera/EditorCamera.h"
 #include "input/ViewportInput.h"
 #include "editor/UndoRedo.h"
+#include "editor2d/Editor2DTypes.h"
+#include "editor2d/Editor2DViewport.h"
 #include <string>
 #include <vector>
 #include <deque>
@@ -114,6 +116,11 @@ private:
     void DrawViewport(f32 dt);
     void DrawAIGenerator();
     void DrawBottomTabs();
+
+    // ── 2D editor panels ───────────────────────────────────────────────────
+    void DrawHierarchy2D();
+    void DrawInspector2D();
+    void DrawToolbar2D();
 
     // ── New system panels ──────────────────────────────────────────────────
     void DrawTerrainPanel();
@@ -389,6 +396,10 @@ private:
     // ── Editor camera & viewport input ────────────────────────────────────
     EditorCamera          m_EditorCam;    // unified orbit/fly/snap camera
     ViewportInputManager  m_ViewInput;    // translates ImGui input → actions
+
+    // ── 2D / 3D editor mode switch ─────────────────────────────────────────
+    EditorDimMode         m_DimMode = EditorDimMode::Mode3D;
+    Editor2DViewport      m_2DViewport;   // 2D viewport panel & scene
     // ── Code Script editor state ────────────────────────────────────────
     char m_ScriptCodeBuf[4096] = {};   // inline script source editor
     char m_ScriptPathBuf[256]  = {};   // script file path
