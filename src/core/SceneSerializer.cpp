@@ -193,6 +193,9 @@ Prefab PrefabLibrary::CreateFromObject(const GameObject* obj) const {
     return p;
 }
 
+// Forward declaration (defined below at ~line 319)
+static std::string EscapeJsonString(const std::string& s);
+
 bool PrefabLibrary::SaveToFile(const std::string& path) const {
     std::ofstream f(path);
     if (!f.is_open()) return false;
