@@ -32,6 +32,8 @@
 #include "scripting/ScriptEngine.h"
 #include "editor/UndoRedo.h"
 #include "assets/Assets.h"
+#include "editor2d/Editor2DTypes.h"
+#include "editor2d/Editor2DViewport.h"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -58,6 +60,11 @@ std::deque<std::string> EditorUI::s_Logs;
 void EditorUI::PushLog(const std::string& msg) {
     s_Logs.push_back(msg);
     while (s_Logs.size() > kMaxLogs) s_Logs.pop_front();
+}
+
+// ── 2D log bridge (called from Editor2DViewport) ──────────────────────────
+void EditorUI_PushLog2D(const std::string& msg) {
+    EditorUI::PushLog("[2D] " + msg);
 }
 
 // ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -120,6 +127,10 @@ bool EditorUI::Init(Window* window, OpenGLRenderer* renderer, Scene* scene,
     }
 
     m_Initialised = true;
+
+    // ── Initialise 2D viewport ───────────────────────────────────────────────
+    m_2DViewport.Init(m_Window, m_Renderer);
+
     GV_LOG_INFO("EditorUI initialised (Dear ImGui " + std::string(IMGUI_VERSION) + ").");
     PushLog("[Editor] Ready.");
     return true;
@@ -127,6 +138,7 @@ bool EditorUI::Init(Window* window, OpenGLRenderer* renderer, Scene* scene,
 
 void EditorUI::Shutdown() {
     if (!m_Initialised) return;
+    m_2DViewport.Shutdown();
     DestroyViewportFBO();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
@@ -240,7 +252,11 @@ void EditorUI::Render(f32 dt) {
     const f32 tbY = startY + menuBarH;
     ImGui::SetNextWindowPos(ImVec2(startX, tbY));
     ImGui::SetNextWindowSize(ImVec2(winW, toolbarH));
-    DrawToolbar();
+    if (m_DimMode == EditorDimMode::Mode3D) {
+        DrawToolbar();
+    } else {
+        DrawToolbar2D();
+    }
 
     // Hierarchy — left panel
     const f32 panelY = tbY + toolbarH;
@@ -248,7 +264,11 @@ void EditorUI::Render(f32 dt) {
     const f32 hierH  = panelH - aiPanelH;
     ImGui::SetNextWindowPos(ImVec2(startX, panelY));
     ImGui::SetNextWindowSize(ImVec2(sideW, hierH));
-    DrawHierarchy();
+    if (m_DimMode == EditorDimMode::Mode3D) {
+        DrawHierarchy();
+    } else {
+        DrawHierarchy2D();
+    }
 
     // AI Generator — below hierarchy on the left
     if (m_ShowAIPanel) {
@@ -260,14 +280,29 @@ void EditorUI::Render(f32 dt) {
     // Inspector — right panel
     ImGui::SetNextWindowPos(ImVec2(startX + winW - sideW, panelY));
     ImGui::SetNextWindowSize(ImVec2(sideW, panelH));
-    DrawInspector();
+    if (m_DimMode == EditorDimMode::Mode3D) {
+        DrawInspector();
+    } else {
+        DrawInspector2D();
+    }
 
     // Viewport — centre
     const f32 vpX = startX + sideW;
     const f32 vpW = winW - 2.0f * sideW;
     ImGui::SetNextWindowPos(ImVec2(vpX, panelY));
     ImGui::SetNextWindowSize(ImVec2(vpW, panelH));
-    DrawViewport(dt);
+    if (m_DimMode == EditorDimMode::Mode3D) {
+        DrawViewport(dt);
+    } else {
+        // 2D viewport — render inside an ImGui window
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        ImGui::Begin("2D Viewport");
+        ImGui::PopStyleVar();
+        ImVec2 avail = ImGui::GetContentRegionAvail();
+        ImVec2 vpPos = ImGui::GetCursorScreenPos();
+        m_2DViewport.RenderViewport(dt, vpPos.x, vpPos.y, avail.x, avail.y);
+        ImGui::End();
+    }
 
     // Console — bottom (now tabbed: Console / Terrain / Material / Particle / Animation / Script)
     ImGui::SetNextWindowPos(ImVec2(startX, panelY + panelH));
@@ -408,6 +443,18 @@ void EditorUI::DrawMenuBar() {
                 PushLog("[Viewport] Jumped to floor center");
             }
             ImGui::Separator();
+            if (m_DimMode == EditorDimMode::Mode3D) {
+                if (ImGui::MenuItem("Switch to 2D Editor")) {
+                    m_DimMode = EditorDimMode::Mode2D;
+                    PushLog("[Editor] Switched to 2D mode");
+                }
+            } else {
+                if (ImGui::MenuItem("Switch to 3D Editor")) {
+                    m_DimMode = EditorDimMode::Mode3D;
+                    PushLog("[Editor] Switched to 3D mode");
+                }
+            }
+            ImGui::Separator();
             if (ImGui::MenuItem("Grid & Snap Settings")) { m_ShowGridSnapSettings = true; }
             if (ImGui::MenuItem("Keyboard Shortcuts"))   { m_ShowKeyboardShortcuts = true; }
             if (ImGui::MenuItem("Editor Settings"))      { m_ShowEditorSettings = true; }
@@ -448,6 +495,18 @@ void EditorUI::DrawToolbar() {
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
+
+    // 2D / 3D mode switch — FIRST button so it is always visible
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.3f, 0.7f, 1.0f));
+    if (ImGui::Button("2D")) {
+        m_DimMode = EditorDimMode::Mode2D;
+        PushLog("[Editor] Switched to 2D mode");
+    }
+    ImGui::PopStyleColor();
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Switch to 2D editor (Godot-style)");
+
+    ImGui::SameLine(); ImGui::Separator(); ImGui::SameLine();
 
     bool trSel = (m_GizmoMode == GizmoMode::Translate);
     bool rtSel = (m_GizmoMode == GizmoMode::Rotate);
@@ -515,6 +574,143 @@ void EditorUI::DrawToolbar() {
     ImGui::PopStyleColor();
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Jump camera to floor center (Home)");
+
+    ImGui::End();
+}
+
+// ── 2D Toolbar ─────────────────────────────────────────────────────────────
+
+void EditorUI::DrawToolbar2D() {
+    ImGui::Begin("Toolbar", nullptr,
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
+
+    // 3D / 2D mode switch — go back to 3D
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.5f, 0.8f, 1.0f));
+    if (ImGui::Button("3D")) {
+        m_DimMode = EditorDimMode::Mode3D;
+        PushLog("[Editor] Switched to 3D mode");
+    }
+    ImGui::PopStyleColor();
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Switch to 3D editor");
+
+    ImGui::SameLine();
+
+    // Active mode indicator
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.3f, 0.7f, 1.0f));
+    ImGui::Button("2D Mode");
+    ImGui::PopStyleColor();
+
+    ImGui::SameLine(); ImGui::Separator(); ImGui::SameLine();
+
+    // 2D Gizmo modes
+    auto& vp = m_2DViewport;
+    bool trSel2 = (vp.GetGizmoMode() == Gizmo2DMode::Translate);
+    bool rtSel2 = (vp.GetGizmoMode() == Gizmo2DMode::Rotate);
+    bool scSel2 = (vp.GetGizmoMode() == Gizmo2DMode::Scale);
+
+    if (trSel2) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.5f, 0.8f, 1));
+    if (ImGui::Button("Move##2D"))    vp.SetGizmoMode(Gizmo2DMode::Translate);
+    if (trSel2) ImGui::PopStyleColor();
+
+    ImGui::SameLine();
+    if (rtSel2) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.5f, 0.8f, 1));
+    if (ImGui::Button("Rotate##2D"))  vp.SetGizmoMode(Gizmo2DMode::Rotate);
+    if (rtSel2) ImGui::PopStyleColor();
+
+    ImGui::SameLine();
+    if (scSel2) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.5f, 0.8f, 1));
+    if (ImGui::Button("Scale##2D"))   vp.SetGizmoMode(Gizmo2DMode::Scale);
+    if (scSel2) ImGui::PopStyleColor();
+
+    ImGui::SameLine(); ImGui::Separator(); ImGui::SameLine();
+
+    if (!m_Playing) {
+        if (ImGui::Button("  Play  ##2D")) { m_Playing = true; PushLog("[Editor] Play mode (2D)."); }
+    } else {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.2f, 0.2f, 1));
+        if (ImGui::Button("  Stop  ##2D")) { m_Playing = false; PushLog("[Editor] Stopped."); }
+        ImGui::PopStyleColor();
+    }
+
+    ImGui::SameLine(); ImGui::Separator(); ImGui::SameLine();
+
+    // 2D-specific add buttons
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.7f, 0.3f, 1.0f));
+    if (ImGui::Button("+ Sprite")) {
+        auto* obj = vp.GetScene().CreateGameObject("Sprite");
+        obj->AddComponent<SpriteComponent>();
+        vp.SetSelected(obj);
+        PushLog("[2D] Added Sprite");
+    }
+    ImGui::PopStyleColor();
+
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.7f, 0.3f, 1.0f));
+    if (ImGui::Button("+ TileMap")) {
+        auto* obj = vp.GetScene().CreateGameObject("TileMap");
+        auto* tm = obj->AddComponent<TileMapComponent>();
+        tm->Resize(16, 16);
+        vp.SetSelected(obj);
+        PushLog("[2D] Added TileMap");
+    }
+    ImGui::PopStyleColor();
+
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.7f, 0.3f, 1.0f));
+    if (ImGui::Button("+ Label")) {
+        auto* obj = vp.GetScene().CreateGameObject("Label");
+        obj->AddComponent<Label2D>();
+        vp.SetSelected(obj);
+        PushLog("[2D] Added Label");
+    }
+    ImGui::PopStyleColor();
+
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.7f, 0.3f, 1.0f));
+    if (ImGui::Button("+ Particles2D")) {
+        auto* obj = vp.GetScene().CreateGameObject("Particles");
+        obj->AddComponent<ParticleEmitter2D>();
+        vp.SetSelected(obj);
+        PushLog("[2D] Added Particle Emitter");
+    }
+    ImGui::PopStyleColor();
+
+    ImGui::SameLine(); ImGui::Separator(); ImGui::SameLine();
+
+    // Snap toggle
+    ImGui::Checkbox("Snap##2D", &vp.snapEnabled);
+    if (vp.snapEnabled) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(50);
+        ImGui::DragFloat("##SnapSz2D", &vp.snapSize, 0.1f, 0.1f, 10.0f, "%.1f");
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Delete##2D")) {
+        auto* sel = vp.GetSelected();
+        if (sel) { vp.GetScene().DestroyGameObject(sel); vp.SetSelected(nullptr); }
+    }
+
+    ImGui::SameLine(); ImGui::Separator(); ImGui::SameLine();
+
+    // Center camera
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.4f, 1.0f));
+    if (ImGui::Button("Center##2D")) {
+        vp.GetCamera().Reset();
+        PushLog("[2D] Jumped to center");
+    }
+    ImGui::PopStyleColor();
+
+    ImGui::SameLine();
+
+    // Tilemap mode toggle
+    bool tmMode = vp.tilemapMode;
+    if (tmMode) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.5f, 0.1f, 1.0f));
+    if (ImGui::Button("Tile Paint")) { vp.tilemapMode = !vp.tilemapMode; }
+    if (tmMode) ImGui::PopStyleColor();
 
     ImGui::End();
 }
@@ -4531,6 +4727,349 @@ void EditorUI::ProcessDroppedPath(const std::string& path) {
         PushLog("[Drop] Unsupported file type: " + path);
         break;
     }
+}
+
+// ============================================================================
+// 2D Editor Panels — Hierarchy & Inspector
+// ============================================================================
+
+// ── 2D Hierarchy ───────────────────────────────────────────────────────────
+void EditorUI::DrawHierarchy2D() {
+    ImGui::Begin("2D Hierarchy");
+
+    auto& scene2d = m_2DViewport.GetScene();
+
+    // Header with object count
+    ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1), "2D Scene: %s",
+                       scene2d.GetName().c_str());
+    ImGui::Separator();
+
+    // Sort layers section
+    if (ImGui::TreeNode("Sort Layers")) {
+        auto& layers = scene2d.GetSortLayers();
+        for (size_t i = 0; i < layers.size(); i++) {
+            ImGui::BulletText("%s (order: %d)", layers[i].name.c_str(), layers[i].order);
+        }
+        ImGui::TreePop();
+    }
+    ImGui::Separator();
+
+    // Object list
+    for (auto& obj : scene2d.GetAllObjects()) {
+        if (!obj) continue;
+
+        bool selected = (m_2DViewport.GetSelected() == obj.get());
+        std::string label = obj->GetName() + "##2D" + std::to_string(obj->GetID());
+
+        // Icon prefix based on component
+        std::string icon;
+        if (obj->GetComponent<SpriteComponent>())    icon = "[S] ";
+        else if (obj->GetComponent<TileMapComponent>()) icon = "[T] ";
+        else if (obj->GetComponent<Label2D>())          icon = "[L] ";
+        else if (obj->GetComponent<ParticleEmitter2D>()) icon = "[P] ";
+        else icon = "[O] ";
+
+        std::string displayLabel = icon + obj->GetName() + "##2D" + std::to_string(obj->GetID());
+
+        if (ImGui::Selectable(displayLabel.c_str(), selected)) {
+            m_2DViewport.SetSelected(obj.get());
+        }
+
+        // Right-click context menu
+        if (ImGui::BeginPopupContextItem()) {
+            if (ImGui::MenuItem("Delete")) {
+                if (m_2DViewport.GetSelected() == obj.get())
+                    m_2DViewport.SetSelected(nullptr);
+                scene2d.DestroyGameObject(obj.get());
+            }
+            if (ImGui::MenuItem("Duplicate")) {
+                auto* newObj = scene2d.CreateGameObject(obj->GetName() + " Copy");
+                newObj->GetTransform().position = obj->GetTransform().position;
+                newObj->GetTransform().position.x += 1.0f;
+                newObj->GetTransform().scale = obj->GetTransform().scale;
+                newObj->GetTransform().rotation = obj->GetTransform().rotation;
+                // Copy sprite if present
+                auto* spr = obj->GetComponent<SpriteComponent>();
+                if (spr) {
+                    auto* newSpr = newObj->AddComponent<SpriteComponent>();
+                    newSpr->color = spr->color;
+                    newSpr->size  = spr->size;
+                    newSpr->textureID = spr->textureID;
+                    newSpr->texturePath = spr->texturePath;
+                    newSpr->sortOrder = spr->sortOrder;
+                    newSpr->sortLayer = spr->sortLayer;
+                }
+                m_2DViewport.SetSelected(newObj);
+                PushLog("[2D] Duplicated " + obj->GetName());
+            }
+            if (ImGui::MenuItem("Focus")) {
+                Vec2 pos(obj->GetTransform().position.x, obj->GetTransform().position.y);
+                m_2DViewport.GetCamera().FocusOn(pos);
+            }
+            ImGui::EndPopup();
+        }
+    }
+
+    ImGui::Separator();
+    ImGui::Text("%d objects", static_cast<int>(scene2d.GetAllObjects().size()));
+
+    ImGui::End();
+}
+
+// ── 2D Inspector ───────────────────────────────────────────────────────────
+void EditorUI::DrawInspector2D() {
+    ImGui::Begin("2D Inspector");
+
+    auto* sel = m_2DViewport.GetSelected();
+    if (!sel) {
+        ImGui::TextWrapped("Select a 2D object to inspect.");
+        ImGui::End();
+        return;
+    }
+
+    // ── Name ───────────────────────────────────────────────────────────────
+    char nameBuf[128];
+    std::strncpy(nameBuf, sel->GetName().c_str(), sizeof(nameBuf) - 1);
+    nameBuf[sizeof(nameBuf) - 1] = '\0';
+    if (ImGui::InputText("Name##2D", nameBuf, sizeof(nameBuf))) {
+        sel->SetName(nameBuf);
+    }
+
+    ImGui::Separator();
+
+    // ── Transform (2D: X, Y, Rotation Z, Scale X/Y) ───────────────────────
+    if (ImGui::CollapsingHeader("Transform 2D", ImGuiTreeNodeFlags_DefaultOpen)) {
+        auto& t = sel->GetTransform();
+        ImGui::DragFloat("X##2DPos",   &t.position.x, 0.1f, -10000, 10000, "%.2f");
+        ImGui::DragFloat("Y##2DPos",   &t.position.y, 0.1f, -10000, 10000, "%.2f");
+
+        // Z-depth (for layering)
+        ImGui::DragFloat("Z Depth##2D", &t.position.z, 0.1f, -1000, 1000, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Z depth for draw-order sorting");
+
+        // Rotation (Z-axis only for 2D)
+        Vec3 euler = t.rotation.ToEuler();
+        f32 rotZ = euler.z * (180.0f / 3.14159265f);
+        if (ImGui::DragFloat("Rotation##2D", &rotZ, 1.0f, -360, 360, "%.1f deg")) {
+            t.SetEulerDeg(0.0f, 0.0f, rotZ);
+        }
+
+        f32 scaleArr[2] = { t.scale.x, t.scale.y };
+        if (ImGui::DragFloat2("Scale##2D", scaleArr, 0.01f, 0.01f, 100.0f, "%.2f")) {
+            t.scale.x = scaleArr[0];
+            t.scale.y = scaleArr[1];
+        }
+    }
+
+    // ── Sprite Component ───────────────────────────────────────────────────
+    auto* spr = sel->GetComponent<SpriteComponent>();
+    if (spr) {
+        if (ImGui::CollapsingHeader("Sprite", ImGuiTreeNodeFlags_DefaultOpen)) {
+            f32 col[4] = { spr->color.x, spr->color.y, spr->color.z, spr->color.w };
+            if (ImGui::ColorEdit4("Color##Spr", col)) {
+                spr->color = { col[0], col[1], col[2], col[3] };
+            }
+
+            f32 sz[2] = { spr->size.x, spr->size.y };
+            if (ImGui::DragFloat2("Size##Spr", sz, 0.1f, 0.01f, 100.0f, "%.2f")) {
+                spr->size = { sz[0], sz[1] };
+            }
+
+            f32 pvt[2] = { spr->pivot.x, spr->pivot.y };
+            if (ImGui::DragFloat2("Pivot##Spr", pvt, 0.01f, 0.0f, 1.0f, "%.2f")) {
+                spr->pivot = { pvt[0], pvt[1] };
+            }
+
+            ImGui::Checkbox("Flip X##Spr", &spr->flipX);
+            ImGui::SameLine();
+            ImGui::Checkbox("Flip Y##Spr", &spr->flipY);
+
+            ImGui::Separator();
+            ImGui::Text("Sort Layer");
+            // Dropdown for sort layers
+            auto& layers = m_2DViewport.GetScene().GetSortLayers();
+            if (ImGui::BeginCombo("##SortLayer", spr->sortLayer.c_str())) {
+                for (auto& layer : layers) {
+                    bool isSel = (spr->sortLayer == layer.name);
+                    if (ImGui::Selectable(layer.name.c_str(), isSel))
+                        spr->sortLayer = layer.name;
+                    if (isSel) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::DragInt("Sort Order##Spr", &spr->sortOrder, 1, -1000, 1000);
+
+            ImGui::Separator();
+            ImGui::Text("Texture: %s", spr->texturePath.empty() ? "(none)" : spr->texturePath.c_str());
+            if (spr->textureID) {
+                ImGui::Image(static_cast<ImTextureID>(spr->textureID),
+                             ImVec2(64, 64), ImVec2(0, 0), ImVec2(1, 1));
+            }
+
+            // Sprite-sheet animation
+            ImGui::Separator();
+            if (ImGui::TreeNode("Sprite Animation##Spr")) {
+                ImGui::DragInt("Frame Count", &spr->frameCount, 1, 1, 256);
+                ImGui::DragInt("Columns",     &spr->columns, 1, 1, 64);
+                ImGui::DragFloat("Frame Rate", &spr->frameRate, 1.0f, 0.1f, 120.0f, "%.1f fps");
+                ImGui::Checkbox("Loop##SprAnim", &spr->animLooping);
+                ImGui::Checkbox("Playing##SprAnim", &spr->animPlaying);
+                ImGui::Text("Frame: %d / %d", spr->currentFrame + 1, spr->frameCount);
+                ImGui::TreePop();
+            }
+        }
+    }
+
+    // ── RigidBody2D ────────────────────────────────────────────────────────
+    auto* rb = sel->GetComponent<RigidBody2D>();
+    if (rb) {
+        if (ImGui::CollapsingHeader("RigidBody 2D", ImGuiTreeNodeFlags_DefaultOpen)) {
+            const char* bodyTypes[] = { "Static", "Dynamic", "Kinematic" };
+            int btype = static_cast<int>(rb->bodyType);
+            if (ImGui::Combo("Body Type##RB2D", &btype, bodyTypes, 3))
+                rb->bodyType = static_cast<BodyType2D>(btype);
+
+            ImGui::DragFloat("Mass##RB2D",           &rb->mass, 0.1f, 0.01f, 10000.0f);
+            ImGui::DragFloat("Gravity Scale##RB2D",  &rb->gravityScale, 0.1f, -10.0f, 10.0f);
+            ImGui::DragFloat("Linear Damping##RB2D", &rb->linearDamping, 0.01f, 0.0f, 10.0f);
+            ImGui::DragFloat("Angular Damping##RB2D", &rb->angularDamping, 0.01f, 0.0f, 10.0f);
+            ImGui::Checkbox("Fixed Rotation##RB2D",  &rb->fixedRotation);
+
+            ImGui::Separator();
+            ImGui::Text("Velocity: %.2f, %.2f", rb->velocity.x, rb->velocity.y);
+            ImGui::Text("Angular Vel: %.2f", rb->angularVel);
+        }
+    }
+
+    // ── Collider2D ─────────────────────────────────────────────────────────
+    auto* col = sel->GetComponent<Collider2D>();
+    if (col) {
+        if (ImGui::CollapsingHeader("Collider 2D", ImGuiTreeNodeFlags_DefaultOpen)) {
+            const char* shapes[] = { "Box", "Circle", "Capsule", "Polygon" };
+            int sh = static_cast<int>(col->shape);
+            if (ImGui::Combo("Shape##Col2D", &sh, shapes, 4))
+                col->shape = static_cast<ColliderShape2D>(sh);
+
+            f32 off[2] = { col->offset.x, col->offset.y };
+            if (ImGui::DragFloat2("Offset##Col2D", off, 0.1f))
+                col->offset = { off[0], off[1] };
+
+            if (col->shape == ColliderShape2D::Box) {
+                f32 bs[2] = { col->boxSize.x, col->boxSize.y };
+                if (ImGui::DragFloat2("Half Extents##Col2D", bs, 0.1f, 0.01f, 100.0f))
+                    col->boxSize = { bs[0], bs[1] };
+            }
+            if (col->shape == ColliderShape2D::Circle || col->shape == ColliderShape2D::Capsule) {
+                ImGui::DragFloat("Radius##Col2D", &col->radius, 0.1f, 0.01f, 100.0f);
+            }
+            if (col->shape == ColliderShape2D::Capsule) {
+                ImGui::DragFloat("Height##Col2D", &col->height, 0.1f, 0.01f, 100.0f);
+            }
+            ImGui::Checkbox("Is Trigger##Col2D", &col->isTrigger);
+        }
+    }
+
+    // ── TileMap ────────────────────────────────────────────────────────────
+    auto* tm = sel->GetComponent<TileMapComponent>();
+    if (tm) {
+        if (ImGui::CollapsingHeader("TileMap", ImGuiTreeNodeFlags_DefaultOpen)) {
+            i32 oldW = tm->mapWidth, oldH = tm->mapHeight;
+            ImGui::DragInt("Width##TM",  &tm->mapWidth, 1, 1, 256);
+            ImGui::DragInt("Height##TM", &tm->mapHeight, 1, 1, 256);
+            if (tm->mapWidth != oldW || tm->mapHeight != oldH)
+                tm->Resize(tm->mapWidth, tm->mapHeight);
+
+            ImGui::DragFloat("Tile Size##TM", &tm->tileSize, 0.1f, 0.1f, 10.0f, "%.2f");
+            ImGui::DragInt("Tileset Columns##TM", &tm->tilesetColumns, 1, 1, 64);
+            ImGui::DragInt("Tileset Rows##TM",    &tm->tilesetRows, 1, 1, 64);
+
+            ImGui::Separator();
+            ImGui::Text("Selected Tile: %d", m_2DViewport.selectedTile);
+            ImGui::DragInt("Paint Tile ID##TM", &m_2DViewport.selectedTile, 1, -1, 256);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("-1 = erase");
+        }
+    }
+
+    // ── Label2D ────────────────────────────────────────────────────────────
+    auto* lbl = sel->GetComponent<Label2D>();
+    if (lbl) {
+        if (ImGui::CollapsingHeader("Label 2D", ImGuiTreeNodeFlags_DefaultOpen)) {
+            char txtBuf[256];
+            std::strncpy(txtBuf, lbl->text.c_str(), sizeof(txtBuf) - 1);
+            txtBuf[sizeof(txtBuf) - 1] = '\0';
+            if (ImGui::InputText("Text##Lbl", txtBuf, sizeof(txtBuf)))
+                lbl->text = txtBuf;
+
+            ImGui::DragFloat("Font Size##Lbl", &lbl->fontSize, 1.0f, 4.0f, 200.0f);
+            f32 fc[4] = { lbl->fontColor.x, lbl->fontColor.y, lbl->fontColor.z, lbl->fontColor.w };
+            if (ImGui::ColorEdit4("Font Color##Lbl", fc))
+                lbl->fontColor = { fc[0], fc[1], fc[2], fc[3] };
+            ImGui::Checkbox("World Space##Lbl", &lbl->worldSpace);
+        }
+    }
+
+    // ── ParticleEmitter2D ──────────────────────────────────────────────────
+    auto* pe = sel->GetComponent<ParticleEmitter2D>();
+    if (pe) {
+        if (ImGui::CollapsingHeader("Particle Emitter 2D", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Checkbox("Emitting##PE2D", &pe->emitting);
+            ImGui::DragFloat("Emit Rate##PE2D",  &pe->emitRate, 1.0f, 0.1f, 1000.0f);
+            ImGui::DragFloat("Lifetime##PE2D",   &pe->lifetime, 0.1f, 0.01f, 60.0f);
+            ImGui::DragFloat("Speed##PE2D",      &pe->speed, 0.1f, 0.0f, 100.0f);
+            ImGui::DragFloat("Spread##PE2D",     &pe->spread, 1.0f, 0.0f, 360.0f, "%.0f deg");
+            ImGui::DragFloat("Start Size##PE2D", &pe->startSize, 0.01f, 0.01f, 10.0f);
+            ImGui::DragFloat("End Size##PE2D",   &pe->endSize, 0.01f, 0.0f, 10.0f);
+
+            f32 sc[4] = { pe->startColor.x, pe->startColor.y, pe->startColor.z, pe->startColor.w };
+            if (ImGui::ColorEdit4("Start Color##PE2D", sc))
+                pe->startColor = { sc[0], sc[1], sc[2], sc[3] };
+            f32 ec[4] = { pe->endColor.x, pe->endColor.y, pe->endColor.z, pe->endColor.w };
+            if (ImGui::ColorEdit4("End Color##PE2D", ec))
+                pe->endColor = { ec[0], ec[1], ec[2], ec[3] };
+
+            f32 grav[2] = { pe->gravity.x, pe->gravity.y };
+            if (ImGui::DragFloat2("Gravity##PE2D", grav, 0.1f))
+                pe->gravity = { grav[0], grav[1] };
+        }
+    }
+
+    // ── Add Component button ───────────────────────────────────────────────
+    ImGui::Separator();
+    if (ImGui::Button("Add Component##2D", ImVec2(-1, 0)))
+        ImGui::OpenPopup("AddComp2D");
+
+    if (ImGui::BeginPopup("AddComp2D")) {
+        if (!spr && ImGui::MenuItem("Sprite")) {
+            sel->AddComponent<SpriteComponent>();
+            PushLog("[2D] Added Sprite to " + sel->GetName());
+        }
+        if (!rb && ImGui::MenuItem("RigidBody 2D")) {
+            sel->AddComponent<RigidBody2D>();
+            PushLog("[2D] Added RigidBody2D to " + sel->GetName());
+        }
+        if (!col && ImGui::MenuItem("Collider 2D")) {
+            sel->AddComponent<Collider2D>();
+            PushLog("[2D] Added Collider2D to " + sel->GetName());
+        }
+        if (!tm && ImGui::MenuItem("TileMap")) {
+            auto* newTm = sel->AddComponent<TileMapComponent>();
+            newTm->Resize(16, 16);
+            PushLog("[2D] Added TileMap to " + sel->GetName());
+        }
+        if (!lbl && ImGui::MenuItem("Label 2D")) {
+            sel->AddComponent<Label2D>();
+            PushLog("[2D] Added Label2D to " + sel->GetName());
+        }
+        if (!pe && ImGui::MenuItem("Particle Emitter 2D")) {
+            sel->AddComponent<ParticleEmitter2D>();
+            PushLog("[2D] Added ParticleEmitter2D to " + sel->GetName());
+        }
+        ImGui::EndPopup();
+    }
+
+    ImGui::End();
 }
 
 } // namespace gv

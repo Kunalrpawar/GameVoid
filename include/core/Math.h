@@ -280,6 +280,26 @@ struct Quaternion {
         return (l > 0) ? Quaternion{ x/l, y/l, z/l, w/l } : Quaternion{};
     }
 
+    /// Convert quaternion back to Euler angles (radians, YXZ order).
+    Vec3 ToEuler() const {
+        Vec3 euler;
+        // Roll (X)
+        f32 sinr_cosp = 2.0f * (w * x + y * z);
+        f32 cosr_cosp = 1.0f - 2.0f * (x * x + y * y);
+        euler.x = std::atan2(sinr_cosp, cosr_cosp);
+        // Pitch (Y)
+        f32 sinp = 2.0f * (w * y - z * x);
+        if (std::fabs(sinp) >= 1.0f)
+            euler.y = std::copysign(3.14159265f / 2.0f, sinp);
+        else
+            euler.y = std::asin(sinp);
+        // Yaw (Z)
+        f32 siny_cosp = 2.0f * (w * z + x * y);
+        f32 cosy_cosp = 1.0f - 2.0f * (y * y + z * z);
+        euler.z = std::atan2(siny_cosp, cosy_cosp);
+        return euler;
+    }
+
     /// Rotate a Vec3 by this quaternion (q * v * q^-1).
     Vec3 RotateVec3(const Vec3& v) const {
         // Optimised formula: result = v + 2w*(qxyz x v) + 2*(qxyz x (qxyz x v))
