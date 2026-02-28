@@ -179,12 +179,20 @@ void EditorUI::Render(f32 dt) {
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y)) {
             if (m_UndoStack.CanRedo()) { m_UndoStack.Redo(); PushLog("[Edit] Redo"); }
         }
-        // Copy / Paste / Duplicate
-        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C)) { CopySelected(); }
-        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V)) { PasteClipboard(); }
-        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D)) { DuplicateSelected(); }
+        // Copy / Paste / Duplicate (mode-aware: 2D vs 3D)
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C)) {
+            if (m_DimMode == EditorDimMode::Mode2D) CopySelected2D(); else CopySelected();
+        }
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V)) {
+            if (m_DimMode == EditorDimMode::Mode2D) PasteClipboard2D(); else PasteClipboard();
+        }
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D)) {
+            if (m_DimMode == EditorDimMode::Mode2D) DuplicateSelected2D(); else DuplicateSelected();
+        }
         // Select All
-        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A)) { SelectAll(); }
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A)) {
+            if (m_DimMode == EditorDimMode::Mode2D) SelectAll2D(); else SelectAll();
+        }
         // Import shortcut (Ctrl+I)
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_I)) {
             std::string file = OpenFileDialog(
@@ -193,8 +201,10 @@ void EditorUI::Render(f32 dt) {
                 "Import Asset");
             if (!file.empty()) ImportAssetFile(file);
         }
-        // Delete selected
-        if (ImGui::IsKeyPressed(ImGuiKey_Delete)) { DeleteSelected(); }
+        // Delete selected (mode-aware)
+        if (ImGui::IsKeyPressed(ImGuiKey_Delete)) {
+            if (m_DimMode == EditorDimMode::Mode2D) DeleteSelected2D(); else DeleteSelected();
+        }
         // Gizmo mode shortcuts: W/E/R (only when NOT in fly mode)
         if (!m_ViewInput.IsFlying()) {
             if (ImGui::IsKeyPressed(ImGuiKey_W)) { m_GizmoMode = GizmoMode::Translate; }
@@ -367,17 +377,56 @@ void EditorUI::DrawMenuBar() {
                 PushLog("[Edit] Redo");
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("Copy", "Ctrl+C"))       { CopySelected(); }
-            if (ImGui::MenuItem("Paste", "Ctrl+V"))      { PasteClipboard(); }
-            if (ImGui::MenuItem("Duplicate", "Ctrl+D"))  { DuplicateSelected(); }
-            if (ImGui::MenuItem("Select All", "Ctrl+A")) { SelectAll(); }
+            if (ImGui::MenuItem("Copy", "Ctrl+C")) {
+                if (m_DimMode == EditorDimMode::Mode2D) CopySelected2D(); else CopySelected();
+            }
+            if (ImGui::MenuItem("Paste", "Ctrl+V")) {
+                if (m_DimMode == EditorDimMode::Mode2D) PasteClipboard2D(); else PasteClipboard();
+            }
+            if (ImGui::MenuItem("Duplicate", "Ctrl+D")) {
+                if (m_DimMode == EditorDimMode::Mode2D) DuplicateSelected2D(); else DuplicateSelected();
+            }
+            if (ImGui::MenuItem("Select All", "Ctrl+A")) {
+                if (m_DimMode == EditorDimMode::Mode2D) SelectAll2D(); else SelectAll();
+            }
             ImGui::Separator();
-            if (ImGui::MenuItem("Add Cube"))        { AddCube(); }
-            if (ImGui::MenuItem("Add Light"))       { AddLight(); }
-            if (ImGui::MenuItem("Add Terrain"))     { AddTerrain(); }
-            if (ImGui::MenuItem("Add Particles"))   { AddParticleEmitter(); }
+            if (m_DimMode == EditorDimMode::Mode2D) {
+                auto& vp = m_2DViewport;
+                if (ImGui::MenuItem("Add Sprite"))     {
+                    auto* obj = vp.GetScene().CreateGameObject("Sprite");
+                    obj->AddComponent<SpriteComponent>();
+                    vp.SetSelected(obj);
+                    PushLog("[2D] Added Sprite");
+                }
+                if (ImGui::MenuItem("Add Label"))      {
+                    auto* obj = vp.GetScene().CreateGameObject("Label");
+                    obj->AddComponent<Label2D>();
+                    vp.SetSelected(obj);
+                    PushLog("[2D] Added Label");
+                }
+                if (ImGui::MenuItem("Add Particles"))  {
+                    auto* obj = vp.GetScene().CreateGameObject("Particles");
+                    obj->AddComponent<ParticleEmitter2D>();
+                    vp.SetSelected(obj);
+                    PushLog("[2D] Added Particle Emitter");
+                }
+                if (ImGui::MenuItem("Add TileMap"))    {
+                    auto* obj = vp.GetScene().CreateGameObject("TileMap");
+                    auto* tm = obj->AddComponent<TileMapComponent>();
+                    tm->Resize(16, 16);
+                    vp.SetSelected(obj);
+                    PushLog("[2D] Added TileMap");
+                }
+            } else {
+                if (ImGui::MenuItem("Add Cube"))        { AddCube(); }
+                if (ImGui::MenuItem("Add Light"))       { AddLight(); }
+                if (ImGui::MenuItem("Add Terrain"))     { AddTerrain(); }
+                if (ImGui::MenuItem("Add Particles"))   { AddParticleEmitter(); }
+            }
             ImGui::Separator();
-            if (ImGui::MenuItem("Delete Selected", "Del")) { DeleteSelected(); }
+            if (ImGui::MenuItem("Delete Selected", "Del")) {
+                if (m_DimMode == EditorDimMode::Mode2D) DeleteSelected2D(); else DeleteSelected();
+            }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("View")) {
@@ -2021,13 +2070,20 @@ void EditorUI::DrawAIGenerator() {
             ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1), "%s", m_AIStatusMsg.c_str());
     }
 
-    // Undo button
-    if (!m_AILastSpawnedIDs.empty()) {
+    // Undo button (supports both 2D and 3D)
+    bool hasUndoItems = (m_DimMode == EditorDimMode::Mode2D)
+        ? !m_AILast2DSpawnedIDs.empty()
+        : !m_AILastSpawnedIDs.empty();
+    int undoCount = (m_DimMode == EditorDimMode::Mode2D)
+        ? static_cast<int>(m_AILast2DSpawnedIDs.size())
+        : static_cast<int>(m_AILastSpawnedIDs.size());
+
+    if (hasUndoItems) {
         ImGui::Separator();
         if (ImGui::Button("Undo Last Generation", ImVec2(-1, 22))) {
             AIUndoLastGeneration();
         }
-        ImGui::TextDisabled("(%d objects)", static_cast<int>(m_AILastSpawnedIDs.size()));
+        ImGui::TextDisabled("(%d objects)", undoCount);
     }
 
     ImGui::End();
@@ -2149,7 +2205,21 @@ void EditorUI::DrawChatPanel() {
         std::string fullPrompt =
             "You are a helpful AI assistant inside the GameVoid game engine editor. "
             "The user is chatting with you. Respond in a friendly, conversational way. "
-            "Do NOT output JSON or object lists unless the user explicitly asks you to generate scene objects.\n\n";
+            "Do NOT output JSON or object lists unless the user explicitly asks you to generate scene objects.\n";
+
+        // Add current mode context
+        if (m_DimMode == EditorDimMode::Mode2D) {
+            fullPrompt += "The user is currently in the 2D editor mode, working with sprites, tilemaps, "
+                          "labels, and 2D particle emitters. Help them with 2D game development.\n";
+            auto& scene2d = m_2DViewport.GetScene();
+            fullPrompt += "Current 2D scene has " + std::to_string(scene2d.GetAllObjects().size()) + " objects.\n";
+            if (m_2DViewport.GetSelected()) {
+                fullPrompt += "Selected object: " + m_2DViewport.GetSelected()->GetName() + "\n";
+            }
+        } else {
+            fullPrompt += "The user is in the 3D editor mode.\n";
+        }
+        fullPrompt += "\n";
 
         // Include last few messages for context (up to 6 messages)
         size_t startIdx = 0;
@@ -2397,6 +2467,35 @@ void EditorUI::AISpawnBlueprintsFrom(const std::vector<AIManager::ObjectBlueprin
 }
 
 void EditorUI::AIUndoLastGeneration() {
+    // 2D undo
+    if (m_DimMode == EditorDimMode::Mode2D) {
+        if (m_AILast2DSpawnedIDs.empty()) {
+            PushLog("[AI 2D] Nothing to undo.");
+            return;
+        }
+        auto& scene2d = m_2DViewport.GetScene();
+        int count = 0;
+        for (u32 id : m_AILast2DSpawnedIDs) {
+            auto* obj = scene2d.FindByID(id);
+            if (obj) {
+                scene2d.DestroyGameObject(obj);
+                count++;
+            }
+        }
+        PushLog("[AI 2D] Undid last generation (" + std::to_string(count) + " objects removed).");
+        m_AILast2DSpawnedIDs.clear();
+        m_AIStatusMsg = "Undone (" + std::to_string(count) + " removed).";
+        m_AIProgress = 0.0f;
+        if (m_2DViewport.GetSelected()) {
+            bool found = false;
+            for (auto& o : scene2d.GetAllObjects())
+                if (o.get() == m_2DViewport.GetSelected()) { found = true; break; }
+            if (!found) m_2DViewport.SetSelected(nullptr);
+        }
+        return;
+    }
+
+    // 3D undo
     if (!m_Scene || m_AILastSpawnedIDs.empty()) {
         PushLog("[AI] Nothing to undo.");
         return;
