@@ -148,10 +148,20 @@ private:
     void DrawInspectorAddComponent();   // "Add Component" button & dropdown
 
     // ── AI Generator helpers ───────────────────────────────────────────────
-    void AIGenerate();          // kick off generation
+    void AIGenerate();          // kick off generation (dispatches to 2D/3D)
+    void AIGenerate3D();        // 3D scene generation
+    void AIGenerate2D();        // 2D scene generation (sprites)
     void AISpawnBlueprints();   // instantiate parsed blueprints into scene
     void AISpawnBlueprintsFrom(const std::vector<AIManager::ObjectBlueprint>& blueprints);
+    void AISpawnBlueprints2D(const std::vector<AIManager::ObjectBlueprint>& blueprints);
     void AIUndoLastGeneration();
+
+    // ── 2D clipboard helpers ───────────────────────────────────────────────
+    void CopySelected2D();
+    void PasteClipboard2D();
+    void DuplicateSelected2D();
+    void SelectAll2D();
+    void DeleteSelected2D();
 
     // ── FBO helpers ────────────────────────────────────────────────────────
     void CreateViewportFBO(u32 w, u32 h);
@@ -340,7 +350,25 @@ private:
     bool   m_AIGenerating  = false;
     f32    m_AIProgress    = 0.0f;     // 0..1 progress bar
     std::string m_AIStatusMsg;
-    std::vector<u32> m_AILastSpawnedIDs;   // for undo
+    std::vector<u32> m_AILastSpawnedIDs;   // for undo (3D)
+    std::vector<u32> m_AILast2DSpawnedIDs; // for undo (2D)
+
+    // ── 2D Clipboard ───────────────────────────────────────────────────────
+    struct Clipboard2DEntry {
+        std::string name;
+        Vec3 position;
+        Vec3 scale;
+        Quaternion rotation;
+        Vec4 spriteColor{1,1,1,1};
+        Vec2 spriteSize{1,1};
+        bool hasSprite = false;
+        bool hasRigidBody2D = false;
+        bool hasCollider2D = false;
+        bool hasLabel = false;
+        std::string labelText;
+        bool hasParticle = false;
+    };
+    std::vector<Clipboard2DEntry> m_Clipboard2D;
 
     // ── AI Settings state ──────────────────────────────────────────────────
     char   m_AIKeyBuf[256] = {};        // API key input buffer

@@ -318,6 +318,78 @@ void Editor2DViewport::RenderSprites() {
                 IM_COL32(80, 180, 255, 220), 0.0f, 0, 2.0f);
         }
     }
+
+    // ── Render non-sprite objects as icon markers ──────────────────────────
+    for (auto& obj : m_Scene.GetAllObjects()) {
+        if (!obj || !obj->IsActive()) continue;
+        if (obj->GetComponent<SpriteComponent>()) continue; // already rendered above
+
+        auto& t = obj->GetTransform();
+        Vec2 pos(t.position.x, t.position.y);
+        Vec2 screenPos = m_Camera.WorldToScreen(pos, m_VpW, m_VpH);
+        f32 sx = m_VpX + screenPos.x;
+        f32 sy = m_VpY + screenPos.y;
+
+        // Determine type and draw an icon marker
+        auto* lbl = obj->GetComponent<Label2D>();
+        auto* pe  = obj->GetComponent<ParticleEmitter2D>();
+        auto* tm  = obj->GetComponent<TileMapComponent>();
+
+        ImU32 markerCol;
+        const char* typeLabel;
+        f32 markerSize = 14.0f;
+
+        if (lbl) {
+            markerCol = IM_COL32(255, 200, 80, 220);
+            typeLabel = "T";  // Text
+            // Also render the label text preview
+            dl->AddText(ImVec2(sx - 20, sy + markerSize + 2),
+                        IM_COL32(255, 200, 80, 180), lbl->text.c_str());
+        } else if (pe) {
+            markerCol = IM_COL32(255, 100, 200, 220);
+            typeLabel = "P";  // Particles
+        } else if (tm) {
+            markerCol = IM_COL32(100, 200, 100, 220);
+            typeLabel = "M";  // Map
+        } else {
+            markerCol = IM_COL32(200, 200, 200, 180);
+            typeLabel = "?";
+        }
+
+        // Draw diamond marker
+        dl->AddQuadFilled(
+            ImVec2(sx, sy - markerSize),
+            ImVec2(sx + markerSize, sy),
+            ImVec2(sx, sy + markerSize),
+            ImVec2(sx - markerSize, sy),
+            markerCol);
+        dl->AddQuad(
+            ImVec2(sx, sy - markerSize),
+            ImVec2(sx + markerSize, sy),
+            ImVec2(sx, sy + markerSize),
+            ImVec2(sx - markerSize, sy),
+            IM_COL32(255, 255, 255, 100), 1.5f);
+
+        // Type label centered in diamond
+        ImVec2 textSz = ImGui::CalcTextSize(typeLabel);
+        dl->AddText(ImVec2(sx - textSz.x * 0.5f, sy - textSz.y * 0.5f),
+                    IM_COL32(255, 255, 255, 255), typeLabel);
+
+        // Object name below
+        ImVec2 nameSz = ImGui::CalcTextSize(obj->GetName().c_str());
+        dl->AddText(ImVec2(sx - nameSz.x * 0.5f, sy + markerSize + (lbl ? 16.0f : 2.0f)),
+                    IM_COL32(200, 200, 200, 160), obj->GetName().c_str());
+
+        // Selection highlight
+        if (obj.get() == m_Selected) {
+            dl->AddQuad(
+                ImVec2(sx, sy - markerSize - 2),
+                ImVec2(sx + markerSize + 2, sy),
+                ImVec2(sx, sy + markerSize + 2),
+                ImVec2(sx - markerSize - 2, sy),
+                IM_COL32(80, 180, 255, 255), 2.5f);
+        }
+    }
 }
 
 // ── Gizmo rendering ───────────────────────────────────────────────────────
