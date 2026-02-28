@@ -2404,6 +2404,364 @@ void EditorUI::AIUndoLastGeneration() {
     }
 }
 
+        bool found = false;
+        for (auto& o : m_Scene->GetAllObjects())
+            if (o.get() == m_Selected) { found = true; break; }
+        if (!found) m_Selected = nullptr;
+    }
+}
+
+// ============================================================================
+// 2D AI Generation
+// ============================================================================
+
+void EditorUI::AIGenerate2D() {
+    if (!m_AI) {
+        m_AIStatusMsg = "Error: AI not available.";
+        PushLog("[AI 2D] " + m_AIStatusMsg);
+        return;
+    }
+
+    std::string prompt(m_AIPromptBuf);
+    if (prompt.empty()) return;
+
+    // Reject very short prompts
+    {
+        std::string trimmed = prompt;
+        size_t s = trimmed.find_first_not_of(" \t\n\r");
+        size_t e = trimmed.find_last_not_of(" \t\n\r");
+        if (s == std::string::npos) { trimmed.clear(); }
+        else { trimmed = trimmed.substr(s, e - s + 1); }
+        if (trimmed.size() < 8) {
+            m_AIStatusMsg = "Prompt too short — describe a 2D scene (e.g. 'forest platformer with trees').";
+            PushLog("[AI 2D] Rejected short prompt: \"" + trimmed + "\"");
+            return;
+        }
+    }
+
+    m_AIGenerating = true;
+    m_AIProgress   = 0.1f;
+    m_AIStatusMsg  = "Sending 2D prompt to Gemini...";
+    PushLog("[AI 2D] Prompt: \"" + prompt + "\"");
+
+    // Build a 2D-specific scene generation prompt
+    std::string fullPrompt =
+        "You are an AI assistant for a 2D game engine editor. The user wants to generate 2D game objects.\n"
+        "Generate a JSON array of 2D sprite objects for the scene. Each object has:\n"
+        "- name: string (object name)\n"
+        "- position: [x, y] (2D world coords, x=horizontal, y=vertical)\n"
+        "- scale: [sx, sy] (default 1,1)\n"
+        "- rotation: number (degrees, Z-axis rotation)\n"
+        "- color: [r, g, b, a] (0.0-1.0 RGBA)\n"
+        "- size: [w, h] (sprite size in world units)\n"
+        "- type: \"sprite\" | \"label\" | \"particles\"\n"
+        "- text: string (only for label type)\n"
+        "- sortOrder: number (draw order)\n"
+        "\nRespond ONLY with a JSON array, no other text. Example:\n"
+        "[{\"name\":\"Ground\",\"position\":[0,-3],\"scale\":[1,1],\"size\":[20,1],\"color\":[0.3,0.6,0.2,1],\"type\":\"sprite\",\"sortOrder\":0}]\n"
+        "\nUser prompt: " + prompt;
+
+    m_AIProgress = 0.3f;
+    AIResponse resp = m_AI->SendPrompt(fullPrompt);
+    m_AIProgress = 0.6f;
+
+    if (!resp.success || resp.text.empty()) {
+        PushLog("[AI 2D] API call failed: " + resp.errorMessage);
+        m_AIStatusMsg = "Error: " + (resp.errorMessage.empty() ? "No response" : resp.errorMessage);
+        m_AIGenerating = false;
+        m_AIProgress = 0.0f;
+        return;
+    }
+
+    // Parse the JSON response into 2D blueprints
+    PushLog("[AI 2D] Parsing response...");
+    std::string text = resp.text;
+
+    // Strip markdown code fences if present
+    {
+        size_t start = text.find("```");
+        if (start != std::string::npos) {
+            size_t lineEnd = text.find('\n', start);
+            if (lineEnd != std::string::npos) text = text.substr(lineEnd + 1);
+        }
+        size_t end = text.rfind("```");
+        if (end != std::string::npos) text = text.substr(0, end);
+    }
+
+    // Find the JSON array
+    size_t arrStart = text.find('[');
+    size_t arrEnd   = text.rfind(']');
+    if (arrStart == std::string::npos || arrEnd == std::string::npos || arrEnd <= arrStart) {
+        PushLog("[AI 2D] Could not find JSON array in response.");
+        m_AIStatusMsg = "Error: Invalid AI response format.";
+        m_AIGenerating = false;
+        m_AIProgress = 0.0f;
+        return;
+    }
+    text = text.substr(arrStart, arrEnd - arrStart + 1);
+
+    // Manual JSON parsing for 2D objects (simple approach)
+    std::vector<AIManager::ObjectBlueprint> blueprints;
+    size_t pos = 0;
+    while (pos < text.size()) {
+        size_t objStart = text.find('{', pos);
+        if (objStart == std::string::npos) break;
+        size_t objEnd = text.find('}', objStart);
+        if (objEnd == std::string::npos) break;
+        std::string objStr = text.substr(objStart, objEnd - objStart + 1);
+        pos = objEnd + 1;
+
+        AIManager::ObjectBlueprint bp;
+        bp.name = "2D_Object";
+
+        // Parse name
+        {
+            size_t nk = objStr.find("\"name\"");
+            if (nk != std::string::npos) {
+                size_t q1 = objStr.find('\"', nk + 6);
+                size_t q2 = objStr.find('\"', q1 + 1);
+                size_t q3 = objStr.find('\"', q2 + 1);
+                if (q2 != std::string::npos && q3 != std::string::npos)
+                    bp.name = objStr.substr(q2 + 1, q3 - q2 - 1);
+            }
+        }
+
+        // Helper to parse a float array from JSON
+        auto parseFloatArr = [&](const std::string& key, f32* out, int count) {
+            size_t k = objStr.find("\"" + key + "\"");
+            if (k == std::string::npos) return;
+            size_t bk = objStr.find('[', k);
+            if (bk == std::string::npos) return;
+            size_t be = objStr.find(']', bk);
+            if (be == std::string::npos) return;
+            std::string arr = objStr.substr(bk + 1, be - bk - 1);
+            int idx = 0;
+            size_t p = 0;
+            while (p < arr.size() && idx < count) {
+                size_t comma = arr.find(',', p);
+                std::string val = (comma != std::string::npos) ? arr.substr(p, comma - p) : arr.substr(p);
+                try { out[idx] = std::stof(val); } catch (...) {}
+                idx++;
+                p = (comma != std::string::npos) ? comma + 1 : arr.size();
+            }
+        };
+
+        // Helper to parse a float value
+        auto parseFloat = [&](const std::string& key) -> f32 {
+            size_t k = objStr.find("\"" + key + "\"");
+            if (k == std::string::npos) return 0.0f;
+            size_t colon = objStr.find(':', k);
+            if (colon == std::string::npos) return 0.0f;
+            size_t vs = objStr.find_first_of("-0123456789.", colon + 1);
+            if (vs == std::string::npos) return 0.0f;
+            size_t ve = objStr.find_first_not_of("-0123456789.", vs);
+            std::string val = (ve != std::string::npos) ? objStr.substr(vs, ve - vs) : objStr.substr(vs);
+            try { return std::stof(val); } catch (...) { return 0.0f; }
+        };
+
+        // Helper to parse string value
+        auto parseString = [&](const std::string& key) -> std::string {
+            size_t k = objStr.find("\"" + key + "\"");
+            if (k == std::string::npos) return "";
+            size_t q1 = objStr.find(':', k);
+            if (q1 == std::string::npos) return "";
+            size_t q2 = objStr.find('\"', q1 + 1);
+            size_t q3 = objStr.find('\"', q2 + 1);
+            if (q2 != std::string::npos && q3 != std::string::npos)
+                return objStr.substr(q2 + 1, q3 - q2 - 1);
+            return "";
+        };
+
+        f32 posArr[2] = {0, 0};
+        parseFloatArr("position", posArr, 2);
+        bp.position = Vec3(posArr[0], posArr[1], 0);
+
+        f32 scaleArr[2] = {1, 1};
+        parseFloatArr("scale", scaleArr, 2);
+        bp.scale = Vec3(scaleArr[0], scaleArr[1], 1);
+
+        bp.rotation.z = parseFloat("rotation");
+
+        f32 colorArr[4] = {1, 1, 1, 1};
+        parseFloatArr("color", colorArr, 4);
+        bp.materialName = std::to_string(colorArr[0]) + "," + std::to_string(colorArr[1]) + "," +
+                          std::to_string(colorArr[2]) + "," + std::to_string(colorArr[3]);
+
+        f32 sizeArr[2] = {1, 1};
+        parseFloatArr("size", sizeArr, 2);
+        // Store size in meshType as a hack: "sprite:w,h" or "label:text" or "particles"
+        std::string type = parseString("type");
+        if (type == "label") {
+            std::string labelText = parseString("text");
+            bp.meshType = "label:" + labelText;
+        } else if (type == "particles") {
+            bp.meshType = "particles";
+        } else {
+            bp.meshType = "sprite:" + std::to_string(sizeArr[0]) + "," + std::to_string(sizeArr[1]);
+        }
+
+        bp.scriptSnippet = std::to_string(static_cast<int>(parseFloat("sortOrder")));
+
+        blueprints.push_back(bp);
+    }
+
+    m_AIProgress = 0.8f;
+
+    if (!blueprints.empty()) {
+        PushLog("[AI 2D] Received " + std::to_string(blueprints.size()) + " objects. Spawning...");
+        m_AILast2DSpawnedIDs.clear();
+        AISpawnBlueprints2D(blueprints);
+        m_AIStatusMsg = "Generated " + std::to_string(blueprints.size()) + " 2D objects!";
+        m_AIProgress  = 1.0f;
+    } else {
+        m_AIStatusMsg = "Error: Could not parse any 2D objects from AI response.";
+        PushLog("[AI 2D] Parse failed.");
+    }
+
+    m_AIGenerating = false;
+}
+
+void EditorUI::AISpawnBlueprints2D(const std::vector<AIManager::ObjectBlueprint>& blueprints) {
+    auto& scene2d = m_2DViewport.GetScene();
+
+    for (const auto& bp : blueprints) {
+        auto* obj = scene2d.CreateGameObject(bp.name);
+        obj->GetTransform().position = bp.position;
+        obj->GetTransform().scale = bp.scale;
+        obj->GetTransform().SetEulerDeg(0, 0, bp.rotation.z);
+
+        // Parse color
+        f32 r = 1, g = 1, b = 1, a = 1;
+        if (!bp.materialName.empty()) {
+            std::sscanf(bp.materialName.c_str(), "%f,%f,%f,%f", &r, &g, &b, &a);
+        }
+
+        // Determine type from meshType encoding
+        if (bp.meshType.substr(0, 6) == "label:") {
+            auto* lbl = obj->AddComponent<Label2D>();
+            lbl->text = bp.meshType.substr(6);
+            lbl->fontColor = {r, g, b, a};
+        } else if (bp.meshType == "particles") {
+            auto* pe = obj->AddComponent<ParticleEmitter2D>();
+            pe->startColor = {r, g, b, a};
+        } else {
+            // Default: sprite
+            auto* spr = obj->AddComponent<SpriteComponent>();
+            spr->color = {r, g, b, a};
+
+            // Parse size from "sprite:w,h"
+            if (bp.meshType.substr(0, 7) == "sprite:") {
+                f32 sw = 1, sh = 1;
+                std::sscanf(bp.meshType.c_str() + 7, "%f,%f", &sw, &sh);
+                spr->size = {sw, sh};
+            }
+
+            // Parse sort order
+            try { spr->sortOrder = std::stoi(bp.scriptSnippet); } catch (...) {}
+        }
+
+        m_AILast2DSpawnedIDs.push_back(obj->GetID());
+        PushLog("[AI 2D] Spawned '" + bp.name + "' at (" +
+            std::to_string(bp.position.x) + ", " +
+            std::to_string(bp.position.y) + ")");
+    }
+
+    // Select the last spawned object
+    if (!blueprints.empty()) {
+        auto* last = scene2d.FindByID(m_AILast2DSpawnedIDs.back());
+        if (last) m_2DViewport.SetSelected(last);
+    }
+}
+
+// ============================================================================
+// 2D Clipboard Helpers
+// ============================================================================
+
+void EditorUI::CopySelected2D() {
+    auto* sel = m_2DViewport.GetSelected();
+    if (!sel) { PushLog("[2D] Nothing selected to copy."); return; }
+
+    m_Clipboard2D.clear();
+    Clipboard2DEntry entry;
+    entry.name     = sel->GetName();
+    entry.position = sel->GetTransform().position;
+    entry.scale    = sel->GetTransform().scale;
+    entry.rotation = sel->GetTransform().rotation;
+
+    auto* spr = sel->GetComponent<SpriteComponent>();
+    if (spr) {
+        entry.hasSprite   = true;
+        entry.spriteColor = spr->color;
+        entry.spriteSize  = spr->size;
+    }
+    entry.hasRigidBody2D = (sel->GetComponent<RigidBody2D>() != nullptr);
+    entry.hasCollider2D  = (sel->GetComponent<Collider2D>() != nullptr);
+
+    auto* lbl = sel->GetComponent<Label2D>();
+    if (lbl) {
+        entry.hasLabel  = true;
+        entry.labelText = lbl->text;
+    }
+    entry.hasParticle = (sel->GetComponent<ParticleEmitter2D>() != nullptr);
+
+    m_Clipboard2D.push_back(entry);
+    PushLog("[2D] Copied " + sel->GetName());
+}
+
+void EditorUI::PasteClipboard2D() {
+    if (m_Clipboard2D.empty()) { PushLog("[2D] Nothing to paste."); return; }
+
+    auto& scene2d = m_2DViewport.GetScene();
+    for (auto& entry : m_Clipboard2D) {
+        auto* obj = scene2d.CreateGameObject(entry.name + "_copy");
+        obj->GetTransform().position = entry.position + Vec3(1.0f, 0.0f, 0.0f);
+        obj->GetTransform().scale    = entry.scale;
+        obj->GetTransform().rotation = entry.rotation;
+
+        if (entry.hasSprite) {
+            auto* spr = obj->AddComponent<SpriteComponent>();
+            spr->color = entry.spriteColor;
+            spr->size  = entry.spriteSize;
+        }
+        if (entry.hasRigidBody2D) obj->AddComponent<RigidBody2D>();
+        if (entry.hasCollider2D)  obj->AddComponent<Collider2D>();
+        if (entry.hasLabel) {
+            auto* lbl = obj->AddComponent<Label2D>();
+            lbl->text = entry.labelText;
+        }
+        if (entry.hasParticle) obj->AddComponent<ParticleEmitter2D>();
+
+        m_2DViewport.SetSelected(obj);
+    }
+    PushLog("[2D] Pasted " + std::to_string(m_Clipboard2D.size()) + " object(s).");
+}
+
+void EditorUI::DuplicateSelected2D() {
+    auto* sel = m_2DViewport.GetSelected();
+    if (!sel) return;
+
+    auto saved = m_Clipboard2D;
+    CopySelected2D();
+    PasteClipboard2D();
+    m_Clipboard2D = saved;
+}
+
+void EditorUI::SelectAll2D() {
+    auto& objs = m_2DViewport.GetScene().GetAllObjects();
+    if (!objs.empty()) {
+        m_2DViewport.SetSelected(objs.back().get());
+    }
+    PushLog("[2D] Select all (" + std::to_string(objs.size()) + " objects).");
+}
+
+void EditorUI::DeleteSelected2D() {
+    auto* sel = m_2DViewport.GetSelected();
+    if (!sel) return;
+    PushLog("[2D] Deleted " + sel->GetName());
+    m_2DViewport.GetScene().DestroyGameObject(sel);
+    m_2DViewport.SetSelected(nullptr);
+}
+
 // ============================================================================
 // Multi-Select & Clipboard Helpers
 // ============================================================================
