@@ -539,18 +539,30 @@ void Editor2DViewport::HandlePicking(f32 vpX, f32 vpY, f32 vpW, f32 vpH) {
     f32 localMY = mousePos.y - vpY;
     Vec2 worldMouse = m_Camera.ScreenToWorld(localMX, localMY, vpW, vpH);
 
-    // Check objects in reverse draw order (front-to-back for picking)
-    auto sorted = m_Scene.GetSortedRenderList();
+    // Build a picking list of ALL objects (not just sprites)
+    // Check in reverse order so front-most objects are picked first
+    auto& allObjs = m_Scene.GetAllObjects();
     m_Selected = nullptr;
 
-    for (int i = static_cast<int>(sorted.size()) - 1; i >= 0; i--) {
-        auto* obj = sorted[i];
-        auto* spr = obj->GetComponent<SpriteComponent>();
-        if (!spr) continue;
+    for (int i = static_cast<int>(allObjs.size()) - 1; i >= 0; i--) {
+        auto* obj = allObjs[i].get();
+        if (!obj || !obj->IsActive()) continue;
 
         auto& t = obj->GetTransform();
         Vec2 pos(t.position.x, t.position.y);
-        Vec2 halfSz(spr->size.x * t.scale.x * 0.5f, spr->size.y * t.scale.y * 0.5f);
+        Vec2 halfSz(0.5f, 0.5f); // default half-size for non-sprite objects
+
+        // Determine bounds based on component type
+        auto* spr = obj->GetComponent<SpriteComponent>();
+        if (spr) {
+            halfSz = { spr->size.x * t.scale.x * 0.5f, spr->size.y * t.scale.y * 0.5f };
+        } else {
+            // Use a default clickable area based on scale (1x1 unit * scale)
+            halfSz = { t.scale.x * 0.5f, t.scale.y * 0.5f };
+            // Minimum clickable size so tiny objects are still selectable
+            if (halfSz.x < 0.3f) halfSz.x = 0.3f;
+            if (halfSz.y < 0.3f) halfSz.y = 0.3f;
+        }
 
         if (worldMouse.x >= pos.x - halfSz.x && worldMouse.x <= pos.x + halfSz.x &&
             worldMouse.y >= pos.y - halfSz.y && worldMouse.y <= pos.y + halfSz.y) {
