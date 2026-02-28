@@ -1960,23 +1960,39 @@ void EditorUI::DrawAIGenerator() {
         if (ImGui::SmallButton("Settings")) { m_ShowEditorSettings = true; }
     }
 
-    ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Describe your scene:");
+    ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f),
+        m_DimMode == EditorDimMode::Mode2D ? "Describe your 2D scene:" : "Describe your scene:");
     ImGui::InputTextMultiline("##AIPrompt", m_AIPromptBuf, sizeof(m_AIPromptBuf),
         ImVec2(-1, 60));
 
-    // Example prompts as clickable chips
+    // Example prompts as clickable chips (mode-aware)
     ImGui::TextDisabled("Examples:");
-    ImGui::SameLine();
-    if (ImGui::SmallButton("cyberpunk city")) {
-        std::snprintf(m_AIPromptBuf, sizeof(m_AIPromptBuf), "create cyberpunk city with neon buildings");
-    }
-    ImGui::SameLine();
-    if (ImGui::SmallButton("forest")) {
-        std::snprintf(m_AIPromptBuf, sizeof(m_AIPromptBuf), "forest with river and rocks");
-    }
-    ImGui::SameLine();
-    if (ImGui::SmallButton("shooter map")) {
-        std::snprintf(m_AIPromptBuf, sizeof(m_AIPromptBuf), "make 3d shooter map with cover and platforms");
+    if (m_DimMode == EditorDimMode::Mode2D) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton("platformer")) {
+            std::snprintf(m_AIPromptBuf, sizeof(m_AIPromptBuf), "2D platformer with ground, platforms, and coins");
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("space scene")) {
+            std::snprintf(m_AIPromptBuf, sizeof(m_AIPromptBuf), "space scene with stars, planet, and a spaceship");
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("UI layout")) {
+            std::snprintf(m_AIPromptBuf, sizeof(m_AIPromptBuf), "game menu with title label, play button, and settings button");
+        }
+    } else {
+        ImGui::SameLine();
+        if (ImGui::SmallButton("cyberpunk city")) {
+            std::snprintf(m_AIPromptBuf, sizeof(m_AIPromptBuf), "create cyberpunk city with neon buildings");
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("forest")) {
+            std::snprintf(m_AIPromptBuf, sizeof(m_AIPromptBuf), "forest with river and rocks");
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("shooter map")) {
+            std::snprintf(m_AIPromptBuf, sizeof(m_AIPromptBuf), "make 3d shooter map with cover and platforms");
+        }
     }
 
     // Generate button
@@ -2113,7 +2129,10 @@ void EditorUI::DrawChatPanel() {
     ImGui::PopStyleColor(2);
     if (!genEnabled) ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-        ImGui::SetTooltip("Generate 3D scene objects from your prompt");
+        if (m_DimMode == EditorDimMode::Mode2D)
+            ImGui::SetTooltip("Generate 2D sprites from your prompt");
+        else
+            ImGui::SetTooltip("Generate 3D scene objects from your prompt");
     }
 
     // Send chat message
