@@ -2185,6 +2185,15 @@ void EditorUI::DrawChatPanel() {
 // ── AI Generate ─────────────────────────────────────────────────────────────
 
 void EditorUI::AIGenerate() {
+    // Dispatch to the correct mode based on current editor dimension
+    if (m_DimMode == EditorDimMode::Mode2D) {
+        AIGenerate2D();
+    } else {
+        AIGenerate3D();
+    }
+}
+
+void EditorUI::AIGenerate3D() {
     if (!m_AI || !m_Scene) {
         m_AIStatusMsg = "Error: AI or Scene not available.";
         PushLog("[AI] " + m_AIStatusMsg);
