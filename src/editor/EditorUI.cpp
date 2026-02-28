@@ -2522,13 +2522,6 @@ void EditorUI::AIUndoLastGeneration() {
     }
 }
 
-        bool found = false;
-        for (auto& o : m_Scene->GetAllObjects())
-            if (o.get() == m_Selected) { found = true; break; }
-        if (!found) m_Selected = nullptr;
-    }
-}
-
 // ============================================================================
 // 2D AI Generation
 // ============================================================================
