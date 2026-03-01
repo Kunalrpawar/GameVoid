@@ -182,6 +182,8 @@ private:
     void ImportAssetFile(const std::string& path);
     void ImportModelIntoScene(const std::string& path);
     void ImportTextureToSelected(const std::string& path);
+    void ImportTextureToSprite2D(const std::string& path);        // 2D sprite texture
+    void ImportTextureToSprite2D(const std::string& path, SpriteComponent* spr);  // assign to specific sprite
 
     // ── Drag-and-drop helpers ──────────────────────────────────────────────
     void ProcessDroppedFiles(const std::vector<std::string>& paths);

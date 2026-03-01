@@ -211,4 +211,327 @@ public:
     bool emitting     = true;
 };
 
+// ============================================================================
+// Collision2DInfo — passed to collision callbacks
+// ============================================================================
+struct Collision2DInfo {
+    GameObject* self    = nullptr;   // the object receiving the callback
+    GameObject* other   = nullptr;   // the object we collided with
+    Vec2 normal   { 0, 0 };         // collision normal (from self toward other)
+    f32  overlap  = 0.0f;           // penetration depth
+    Vec2 contactPoint { 0, 0 };     // approximate contact point
+    bool isTrigger = false;         // true if one of the colliders is a trigger
+};
+
+// Callback types
+using Collision2DCallback = std::function<void(const Collision2DInfo&)>;
+
+// ============================================================================
+// CollisionListener2D — attach to receive collision events
+// ============================================================================
+class CollisionListener2D : public Component {
+public:
+    std::string GetTypeName() const override { return "CollisionListener2D"; }
+
+    // User sets these callbacks
+    Collision2DCallback onCollisionEnter;
+    Collision2DCallback onCollisionStay;
+    Collision2DCallback onCollisionExit;
+    Collision2DCallback onTriggerEnter;
+    Collision2DCallback onTriggerStay;
+    Collision2DCallback onTriggerExit;
+};
+
+// ============================================================================
+// PlatformerController2D — Mario-style platformer character controller
+// ============================================================================
+// Attach to a player object with RigidBody2D + Collider2D.
+// Handles horizontal movement, jumping, gravity, wall sliding, coyote time,
+// and ground detection — everything needed for a Mario-type controller.
+// ============================================================================
+class PlatformerController2D : public Component {
+public:
+    std::string GetTypeName() const override { return "PlatformerController2D"; }
+
+    // ── Movement tuning ────────────────────────────────────────────────────
+    f32  moveSpeed          = 8.0f;    // horizontal movement speed
+    f32  acceleration       = 40.0f;   // how fast the player gets to moveSpeed
+    f32  deceleration       = 30.0f;   // how fast the player stops (ground friction)
+    f32  airDeceleration    = 10.0f;   // friction in the air (lower = more floaty)
+
+    // ── Jump tuning ────────────────────────────────────────────────────────
+    f32  jumpForce          = 14.0f;   // initial upward velocity on jump
+    f32  jumpCutMultiplier  = 0.5f;    // multiply velocity by this on early release
+    i32  maxJumps           = 2;       // 1 = single, 2 = double jump, etc.
+    f32  coyoteTime         = 0.1f;    // seconds you can still jump after walking off edge
+    f32  jumpBufferTime     = 0.12f;   // seconds a jump press is remembered before landing
+
+    // ── Wall mechanics ─────────────────────────────────────────────────────
+    bool enableWallSlide    = false;
+    f32  wallSlideSpeed     = 2.0f;    // max fall speed when wall sliding
+    f32  wallJumpForceX     = 10.0f;   // horizontal push from wall jump
+    f32  wallJumpForceY     = 12.0f;   // vertical push from wall jump
+
+    // ── Ground check ───────────────────────────────────────────────────────
+    f32  groundCheckDist    = 0.1f;    // raycast distance below feet
+    f32  headBumpDist       = 0.1f;    // check above head for ceilings
+
+    // ── Runtime state (read by physics / rendering) ────────────────────────
+    bool isGrounded         = false;
+    bool isWallSliding      = false;
+    bool isFacingRight      = true;
+    i32  jumpsRemaining     = 2;
+    f32  coyoteTimer        = 0.0f;
+    f32  jumpBufferTimer    = 0.0f;
+    f32  inputX             = 0.0f;    // -1..+1 horizontal input
+    bool inputJump          = false;   // jump pressed this frame
+    bool inputJumpHeld      = false;   // jump button held
+    bool isDead             = false;
+
+    // ── State machine for animation ────────────────────────────────────────
+    enum class State { Idle, Run, Jump, Fall, WallSlide, Dead };
+    State currentState      = State::Idle;
+
+    /// Call every frame with the input values set. Updates the RigidBody2D velocity.
+    void UpdateController(f32 dt, RigidBody2D* rb) {
+        if (!rb || isDead) return;
+
+        // Update timers
+        if (coyoteTimer > 0) coyoteTimer -= dt;
+        if (jumpBufferTimer > 0) jumpBufferTimer -= dt;
+
+        // Horizontal movement
+        f32 targetVelX = inputX * moveSpeed;
+        f32 accel = (isGrounded ? acceleration : acceleration * 0.7f);
+        f32 decel = isGrounded ? deceleration : airDeceleration;
+
+        if (std::fabs(inputX) > 0.01f) {
+            // Accelerate toward target
+            if (rb->velocity.x < targetVelX)
+                rb->velocity.x += accel * dt;
+            else if (rb->velocity.x > targetVelX)
+                rb->velocity.x -= accel * dt;
+            // Clamp to not overshoot
+            if ((targetVelX > 0 && rb->velocity.x > targetVelX) ||
+                (targetVelX < 0 && rb->velocity.x < targetVelX))
+                rb->velocity.x = targetVelX;
+        } else {
+            // Decelerate to zero
+            if (rb->velocity.x > 0) {
+                rb->velocity.x -= decel * dt;
+                if (rb->velocity.x < 0) rb->velocity.x = 0;
+            } else if (rb->velocity.x < 0) {
+                rb->velocity.x += decel * dt;
+                if (rb->velocity.x > 0) rb->velocity.x = 0;
+            }
+        }
+
+        // Facing direction
+        if (inputX > 0.01f) isFacingRight = true;
+        if (inputX < -0.01f) isFacingRight = false;
+
+        // Jump buffer
+        if (inputJump) jumpBufferTimer = jumpBufferTime;
+
+        // Jump execution
+        bool canJump = (isGrounded || coyoteTimer > 0 || jumpsRemaining > 0);
+        if (jumpBufferTimer > 0 && canJump && jumpsRemaining > 0) {
+            rb->velocity.y = jumpForce;
+            jumpsRemaining--;
+            jumpBufferTimer = 0;
+            coyoteTimer = 0;
+            isGrounded = false;
+        }
+
+        // Variable jump height: cut jump short when button released
+        if (!inputJumpHeld && rb->velocity.y > 0) {
+            rb->velocity.y *= jumpCutMultiplier;
+        }
+
+        // Wall slide
+        isWallSliding = false;
+        if (enableWallSlide && !isGrounded && rb->velocity.y < 0) {
+            // Wall detection would be done by collision system setting a flag
+            // For now, wall slide is triggered externally
+        }
+        if (isWallSliding) {
+            if (rb->velocity.y < -wallSlideSpeed)
+                rb->velocity.y = -wallSlideSpeed;
+        }
+
+        // State machine
+        if (isDead) {
+            currentState = State::Dead;
+        } else if (isGrounded) {
+            currentState = (std::fabs(rb->velocity.x) > 0.1f) ? State::Run : State::Idle;
+        } else if (isWallSliding) {
+            currentState = State::WallSlide;
+        } else {
+            currentState = (rb->velocity.y > 0) ? State::Jump : State::Fall;
+        }
+    }
+
+    void OnLanded() {
+        jumpsRemaining = maxJumps;
+        coyoteTimer = coyoteTime;
+    }
+};
+
+// ============================================================================
+// Camera2DFollow — smooth camera that follows a target object
+// ============================================================================
+class Camera2DFollow : public Component {
+public:
+    std::string GetTypeName() const override { return "Camera2DFollow"; }
+
+    u32  targetObjectID  = 0;          // ID of the object to follow
+    Vec2 offset          { 0, 2.0f };  // camera offset from target
+    f32  smoothSpeed     = 5.0f;       // lerp speed (higher = snappier)
+    f32  lookAheadDist   = 2.0f;       // look ahead in movement direction
+    f32  lookAheadSpeed  = 3.0f;       // how fast look-ahead catches up
+
+    // ── Bounds (optional level boundaries) ─────────────────────────────────
+    bool useBounds       = false;
+    Vec2 boundsMin       { -50, -10 };
+    Vec2 boundsMax       { 50, 30 };
+
+    // ── Dead zone — camera doesn't move if target is within this rect ──────
+    f32  deadZoneX       = 1.0f;
+    f32  deadZoneY       = 1.0f;
+
+    // Runtime
+    Vec2 currentPos      { 0, 0 };
+    Vec2 lookAheadPos    { 0, 0 };
+};
+
+// ============================================================================
+// AudioSource2D — positional or global 2D audio
+// ============================================================================
+class AudioSource2D : public Component {
+public:
+    std::string GetTypeName() const override { return "AudioSource2D"; }
+
+    std::string clipPath;            // file path to .wav/.mp3/.ogg
+    f32  volume        = 1.0f;       // 0..1
+    f32  pitch         = 1.0f;       // playback speed multiplier
+    bool loop          = false;
+    bool playOnStart   = false;
+    bool spatial       = false;      // true = volume based on distance from listener
+    f32  maxDistance    = 20.0f;      // distance at which sound is inaudible
+
+    // Runtime
+    bool isPlaying     = false;
+    bool triggerPlay   = false;      // set to true to play this frame
+    bool triggerStop   = false;      // set to true to stop this frame
+};
+
+// ============================================================================
+// AnimState2D — sprite animation state machine entry
+// ============================================================================
+struct AnimState2D {
+    std::string name;                // e.g. "Idle", "Run", "Jump"
+    i32  startFrame = 0;
+    i32  endFrame   = 0;
+    f32  frameRate  = 12.0f;
+    bool loop       = true;
+};
+
+// ============================================================================
+// AnimStateMachine2D — manages multiple animation states for a sprite
+// ============================================================================
+class AnimStateMachine2D : public Component {
+public:
+    std::string GetTypeName() const override { return "AnimStateMachine2D"; }
+
+    std::vector<AnimState2D> states;
+    std::string currentStateName = "Idle";
+    i32  currentStateIdx = 0;
+
+    void AddState(const std::string& name, i32 startFrame, i32 endFrame,
+                  f32 fps = 12.0f, bool loop = true) {
+        states.push_back({ name, startFrame, endFrame, fps, loop });
+    }
+
+    void SetState(const std::string& name) {
+        if (name == currentStateName) return;
+        for (i32 i = 0; i < static_cast<i32>(states.size()); i++) {
+            if (states[i].name == name) {
+                currentStateName = name;
+                currentStateIdx = i;
+                return;
+            }
+        }
+    }
+
+    AnimState2D* GetCurrentState() {
+        if (currentStateIdx >= 0 && currentStateIdx < static_cast<i32>(states.size()))
+            return &states[currentStateIdx];
+        return nullptr;
+    }
+};
+
+// ============================================================================
+// Collectible2D — items that can be picked up (coins, power-ups, etc.)
+// ============================================================================
+class Collectible2D : public Component {
+public:
+    std::string GetTypeName() const override { return "Collectible2D"; }
+
+    enum class Type { Coin, PowerUp, Health, Key, Star, Custom };
+    Type type           = Type::Coin;
+    i32  scoreValue     = 100;       // points awarded on pickup
+    bool destroyOnPickup = true;
+    bool collected      = false;
+    f32  bobAmplitude   = 0.2f;      // up/down bob animation
+    f32  bobSpeed       = 3.0f;
+    f32  bobTimer       = 0.0f;
+
+    void UpdateBob(f32 dt) {
+        bobTimer += dt * bobSpeed;
+    }
+
+    f32 GetBobOffset() const {
+        return std::sin(bobTimer) * bobAmplitude;
+    }
+};
+
+// ============================================================================
+// Hazard2D — objects that damage the player on contact
+// ============================================================================
+class Hazard2D : public Component {
+public:
+    std::string GetTypeName() const override { return "Hazard2D"; }
+
+    enum class Type { Spike, Lava, Enemy, Projectile, Pit, Custom };
+    Type type        = Type::Spike;
+    i32  damage      = 1;
+    f32  knockbackX  = 5.0f;
+    f32  knockbackY  = 8.0f;
+    bool destroyOnHit = false;       // e.g. projectile disappears
+    bool canBeStomp  = false;        // Mario-style: jump on top to kill
+    f32  stompBounce = 10.0f;        // bounce force when stomped
+};
+
+// ============================================================================
+// GameState2D — global game state tracker (score, lives, level)
+// ============================================================================
+class GameState2D : public Component {
+public:
+    std::string GetTypeName() const override { return "GameState2D"; }
+
+    i32  score       = 0;
+    i32  lives       = 3;
+    i32  coins       = 0;
+    i32  level       = 1;
+    f32  timer       = 0.0f;       // level timer (counts up or down)
+    bool timerCountDown = false;
+    f32  timerMax    = 300.0f;     // max time for countdown
+    bool gameOver    = false;
+    bool levelComplete = false;
+
+    void AddScore(i32 pts) { score += pts; }
+    void AddCoin()  { coins++; if (coins >= 100) { coins = 0; lives++; } }
+    void Die()      { lives--; if (lives <= 0) gameOver = true; }
+};
+
 } // namespace gv

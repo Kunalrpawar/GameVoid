@@ -698,6 +698,85 @@ void EditorUI::DrawToolbar2D() {
 
     ImGui::SameLine();
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.7f, 0.3f, 1.0f));
+    if (ImGui::Button("+ Platform")) {
+        auto* obj = vp.GetScene().CreateGameObject("Platform");
+        auto* spr = obj->AddComponent<SpriteComponent>();
+        spr->color = { 0.45f, 0.3f, 0.15f, 1.0f };
+        spr->size = { 4.0f, 0.5f };
+        spr->sortLayer = "Default";
+        auto* rb = obj->AddComponent<RigidBody2D>();
+        rb->bodyType = BodyType2D::Static;
+        auto* col = obj->AddComponent<Collider2D>();
+        col->shape = ColliderShape2D::Box;
+        col->boxSize = { 2.0f, 0.25f };
+        vp.SetSelected(obj);
+        PushLog("[2D] Added Platform (static body + collider)");
+    }
+    ImGui::PopStyleColor();
+
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.5f, 0.9f, 1.0f));
+    if (ImGui::Button("+ Player")) {
+        auto* obj = vp.GetScene().CreateGameObject("Player");
+        auto* spr = obj->AddComponent<SpriteComponent>();
+        spr->color = { 0.9f, 0.2f, 0.2f, 1.0f };
+        spr->size = { 1.0f, 1.0f };
+        auto* rb = obj->AddComponent<RigidBody2D>();
+        rb->bodyType = BodyType2D::Dynamic;
+        rb->gravityScale = 1.0f;
+        rb->linearDamping = 0.0f;
+        auto* col = obj->AddComponent<Collider2D>();
+        col->shape = ColliderShape2D::Box;
+        col->boxSize = { 0.4f, 0.5f };
+        obj->AddComponent<PlatformerController2D>();
+        vp.SetSelected(obj);
+        PushLog("[2D] Added Player (platformer controller)");
+    }
+    ImGui::PopStyleColor();
+
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.9f, 0.7f, 0.1f, 1.0f));
+    if (ImGui::Button("+ Coin")) {
+        auto* obj = vp.GetScene().CreateGameObject("Coin");
+        auto* spr = obj->AddComponent<SpriteComponent>();
+        spr->color = { 1.0f, 0.85f, 0.0f, 1.0f };
+        spr->size = { 0.6f, 0.6f };
+        auto* col = obj->AddComponent<Collider2D>();
+        col->shape = ColliderShape2D::Circle;
+        col->radius = 0.3f;
+        col->isTrigger = true;
+        auto* coll = obj->AddComponent<Collectible2D>();
+        coll->type = Collectible2D::Type::Coin;
+        coll->scoreValue = 100;
+        vp.SetSelected(obj);
+        PushLog("[2D] Added Coin (collectible trigger)");
+    }
+    ImGui::PopStyleColor();
+
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
+    if (ImGui::Button("+ Enemy")) {
+        auto* obj = vp.GetScene().CreateGameObject("Enemy");
+        auto* spr = obj->AddComponent<SpriteComponent>();
+        spr->color = { 0.6f, 0.1f, 0.6f, 1.0f };
+        spr->size = { 1.0f, 1.0f };
+        auto* rb = obj->AddComponent<RigidBody2D>();
+        rb->bodyType = BodyType2D::Dynamic;
+        rb->gravityScale = 1.0f;
+        auto* col = obj->AddComponent<Collider2D>();
+        col->shape = ColliderShape2D::Box;
+        col->boxSize = { 0.4f, 0.4f };
+        auto* haz = obj->AddComponent<Hazard2D>();
+        haz->type = Hazard2D::Type::Enemy;
+        haz->canBeStomp = true;
+        haz->stompBounce = 12.0f;
+        vp.SetSelected(obj);
+        PushLog("[2D] Added Enemy (stompable hazard)");
+    }
+    ImGui::PopStyleColor();
+
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.7f, 0.3f, 1.0f));
     if (ImGui::Button("+ TileMap")) {
         auto* obj = vp.GetScene().CreateGameObject("TileMap");
         auto* tm = obj->AddComponent<TileMapComponent>();
@@ -726,6 +805,51 @@ void EditorUI::DrawToolbar2D() {
         PushLog("[2D] Added Particle Emitter");
     }
     ImGui::PopStyleColor();
+
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.7f, 0.9f, 1.0f));
+    if (ImGui::Button("+ Camera")) {
+        auto* obj = vp.GetScene().CreateGameObject("Camera Follow");
+        auto* cam = obj->AddComponent<Camera2DFollow>();
+        // Auto-assign to first player object
+        for (auto& o : vp.GetScene().GetAllObjects()) {
+            if (o->GetComponent<PlatformerController2D>()) {
+                cam->targetObjectID = o->GetID();
+                break;
+            }
+        }
+        vp.SetSelected(obj);
+        PushLog("[2D] Added Camera Follow");
+    }
+    ImGui::PopStyleColor();
+
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.5f, 0.8f, 1.0f));
+    if (ImGui::Button("+ GameState")) {
+        auto* obj = vp.GetScene().CreateGameObject("Game State");
+        obj->AddComponent<GameState2D>();
+        vp.SetSelected(obj);
+        PushLog("[2D] Added Game State tracker");
+    }
+    ImGui::PopStyleColor();
+
+    ImGui::SameLine(); ImGui::Separator(); ImGui::SameLine();
+
+    // Import sprite texture button
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.4f, 0.1f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.55f, 0.15f, 1.0f));
+    if (ImGui::Button("Import Sprite")) {
+        std::string file = OpenFileDialog(
+            "Images (*.png;*.jpg;*.bmp;*.tga)\\0*.png;*.jpg;*.jpeg;*.bmp;*.tga\\0"
+            "All Files\\0*.*\\0",
+            "Import Sprite Texture");
+        if (!file.empty()) {
+            ImportTextureToSprite2D(file);
+        }
+    }
+    ImGui::PopStyleColor(2);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Load a PNG/JPG image as a 2D sprite");
 
     ImGui::SameLine(); ImGui::Separator(); ImGui::SameLine();
 
