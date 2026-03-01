@@ -3,6 +3,9 @@
 // ============================================================================
 // Shared types for the 2D editor subsystem: sprite data, 2D components,
 // layer ordering, and 2D-specific enums.
+//
+// Mario-ready: Includes platformer controller, camera follow, audio source,
+// animation state machine, and full collision callback system.
 // ============================================================================
 #pragma once
 
@@ -12,6 +15,7 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <cmath>
 
 namespace gv {
 
