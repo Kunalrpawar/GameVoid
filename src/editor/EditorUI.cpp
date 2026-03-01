@@ -4971,8 +4971,8 @@ void EditorUI::ImportTextureToSprite2D(const std::string& path) {
     auto dot = name.find_last_of('.');
     if (dot != std::string::npos) name = name.substr(0, dot);
 
-    auto& obj = scene.CreateObject(name);
-    auto* spr = obj.AddComponent<SpriteComponent>();
+    auto* obj = scene.CreateGameObject(name);
+    auto* spr = obj->AddComponent<SpriteComponent>();
     spr->textureID   = tex->GetID();
     spr->texturePath  = path;
 
@@ -5707,16 +5707,20 @@ void EditorUI::DrawInspector2D() {
             ImGui::DragFloat("Coyote Time##Plat",  &plat->coyoteTime,  0.01f, 0.0f, 1.0f);
             ImGui::DragFloat("Jump Buffer##Plat",  &plat->jumpBufferTime, 0.01f, 0.0f, 0.5f);
             ImGui::DragFloat("Wall Slide Spd##Plat", &plat->wallSlideSpeed, 0.1f, 0.0f, 20.0f);
-            ImGui::Checkbox("Wall Jump##Plat",     &plat->wallJumpEnabled);
+            ImGui::Checkbox("Wall Slide##Plat",    &plat->enableWallSlide);
+            if (plat->enableWallSlide) {
+                ImGui::DragFloat("Wall Jump X##Plat", &plat->wallJumpForceX, 0.1f, 0.0f, 50.0f);
+                ImGui::DragFloat("Wall Jump Y##Plat", &plat->wallJumpForceY, 0.1f, 0.0f, 50.0f);
+            }
 
             ImGui::Separator();
             const char* stateNames[] = { "Idle", "Run", "Jump", "Fall", "WallSlide", "Dead" };
-            int sIdx = static_cast<int>(plat->state);
+            int sIdx = static_cast<int>(plat->currentState);
             if (sIdx >= 0 && sIdx < 6)
                 ImGui::Text("State: %s", stateNames[sIdx]);
-            ImGui::Text("On Ground: %s", plat->onGround ? "Yes" : "No");
-            ImGui::Text("Jumps Left: %d", plat->jumpsLeft);
-            ImGui::Text("Facing Right: %s", plat->facingRight ? "Yes" : "No");
+            ImGui::Text("On Ground: %s", plat->isGrounded ? "Yes" : "No");
+            ImGui::Text("Jumps Left: %d", plat->jumpsRemaining);
+            ImGui::Text("Facing Right: %s", plat->isFacingRight ? "Yes" : "No");
         }
     }
 
@@ -5724,7 +5728,9 @@ void EditorUI::DrawInspector2D() {
     auto* camFollow = sel->GetComponent<Camera2DFollow>();
     if (camFollow) {
         if (ImGui::CollapsingHeader("Camera Follow 2D", ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::DragInt("Target Object ID##CamF", &camFollow->targetObjectID, 1, -1, 99999);
+            int tmpTargetID = static_cast<int>(camFollow->targetObjectID);
+            if (ImGui::DragInt("Target Object ID##CamF", &tmpTargetID, 1, 0, 99999))
+                camFollow->targetObjectID = static_cast<u32>(tmpTargetID);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Object ID of target to follow (-1 = none)");
 
             f32 off[2] = { camFollow->offset.x, camFollow->offset.y };
@@ -5734,9 +5740,8 @@ void EditorUI::DrawInspector2D() {
             ImGui::DragFloat("Smooth Speed##CamF",  &camFollow->smoothSpeed, 0.1f, 0.1f, 50.0f);
             ImGui::DragFloat("Look Ahead##CamF",    &camFollow->lookAheadDist, 0.1f, 0.0f, 20.0f);
 
-            f32 dz[2] = { camFollow->deadZone.x, camFollow->deadZone.y };
-            if (ImGui::DragFloat2("Dead Zone##CamF", dz, 0.1f, 0.0f, 20.0f))
-                camFollow->deadZone = { dz[0], dz[1] };
+            ImGui::DragFloat("Dead Zone X##CamF", &camFollow->deadZoneX, 0.1f, 0.0f, 20.0f);
+            ImGui::DragFloat("Dead Zone Y##CamF", &camFollow->deadZoneY, 0.1f, 0.0f, 20.0f);
 
             ImGui::Checkbox("Use Bounds##CamF", &camFollow->useBounds);
             if (camFollow->useBounds) {
@@ -5779,7 +5784,7 @@ void EditorUI::DrawInspector2D() {
     if (animSM) {
         if (ImGui::CollapsingHeader("Anim State Machine 2D", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::Text("Current State: %s",
-                animSM->currentState.empty() ? "(none)" : animSM->currentState.c_str());
+                animSM->currentStateName.empty() ? "(none)" : animSM->currentStateName.c_str());
 
             for (size_t i = 0; i < animSM->states.size(); ++i) {
                 auto& st = animSM->states[i];
@@ -5800,7 +5805,7 @@ void EditorUI::DrawInspector2D() {
                         st.name = nameBuf;
                     ImGui::DragInt("Start Frame##ASt", &st.startFrame, 1, 0, 256);
                     ImGui::DragInt("End Frame##ASt",   &st.endFrame, 1, 0, 256);
-                    ImGui::DragFloat("FPS##ASt",       &st.fps, 1.0f, 0.1f, 120.0f);
+                    ImGui::DragFloat("FPS##ASt",       &st.frameRate, 1.0f, 0.1f, 120.0f);
                     ImGui::Checkbox("Loop##ASt",       &st.loop);
                     ImGui::TreePop();
                 }
@@ -5825,7 +5830,7 @@ void EditorUI::DrawInspector2D() {
                 collectible->type = static_cast<Collectible2D::Type>(ct);
             ImGui::DragInt("Score Value##Coll2D",   &collectible->scoreValue, 1, 0, 10000);
             ImGui::Checkbox("Collected##Coll2D",    &collectible->collected);
-            ImGui::DragFloat("Bob Amount##Coll2D",  &collectible->bobAmount, 0.01f, 0.0f, 2.0f);
+            ImGui::DragFloat("Bob Amplitude##Coll2D", &collectible->bobAmplitude, 0.01f, 0.0f, 2.0f);
             ImGui::DragFloat("Bob Speed##Coll2D",   &collectible->bobSpeed, 0.1f, 0.0f, 20.0f);
         }
     }
@@ -5839,7 +5844,8 @@ void EditorUI::DrawInspector2D() {
             if (ImGui::Combo("Type##Haz2D", &ht, hzTypes, 6))
                 hazard->type = static_cast<Hazard2D::Type>(ht);
             ImGui::DragInt("Damage##Haz2D",         &hazard->damage, 1, 0, 1000);
-            ImGui::DragFloat("Knockback##Haz2D",    &hazard->knockbackForce, 0.1f, 0.0f, 100.0f);
+            ImGui::DragFloat("Knockback X##Haz2D",  &hazard->knockbackX, 0.1f, 0.0f, 100.0f);
+            ImGui::DragFloat("Knockback Y##Haz2D",  &hazard->knockbackY, 0.1f, 0.0f, 100.0f);
             ImGui::Checkbox("Can Be Stomped##Haz2D", &hazard->canBeStomp);
             if (hazard->canBeStomp) {
                 ImGui::DragFloat("Stomp Bounce##Haz2D", &hazard->stompBounce, 0.1f, 0.0f, 50.0f);
