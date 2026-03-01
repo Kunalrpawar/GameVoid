@@ -28,10 +28,13 @@ file(GLOB_RECURSE ENGINE_SOURCES
     "src/ai/*.cpp"
     "src/scripting/*.cpp"
     "src/editor/*.cpp"
+    "src/editor2d/*.cpp"
     "src/future/*.cpp"
     "src/effects/*.cpp"
     "src/terrain/*.cpp"
     "src/animation/*.cpp"
+    "src/input/*.cpp"
+    "src/camera/*.cpp"
     "src/main.cpp"
 )
 

@@ -4952,6 +4952,54 @@ void EditorUI::ImportTextureToSelected(const std::string& path) {
     PushLog("[Import] Applied texture '" + name + "' to " + m_Selected->GetName());
 }
 
+// ── Import texture for 2D sprites ──────────────────────────────────────────
+void EditorUI::ImportTextureToSprite2D(const std::string& path) {
+    if (!m_Assets) return;
+
+    auto tex = m_Assets->LoadTexture(path);
+    if (!tex) {
+        PushLog("[2D Import] Failed to load texture: " + path);
+        return;
+    }
+
+    // Create a new sprite object
+    auto& scene = m_2DViewport.GetScene();
+    std::string name = path;
+    auto lastSlash2 = path.find_last_of("/\\");
+    if (lastSlash2 != std::string::npos) name = path.substr(lastSlash2 + 1);
+    // Strip extension for object name
+    auto dot = name.find_last_of('.');
+    if (dot != std::string::npos) name = name.substr(0, dot);
+
+    auto& obj = scene.CreateObject(name);
+    auto* spr = obj.AddComponent<SpriteComponent>();
+    spr->textureID   = tex->GetID();
+    spr->texturePath  = path;
+
+    ImportAssetFile(path);
+    PushLog("[2D Import] Created sprite '" + name + "' with texture.");
+}
+
+void EditorUI::ImportTextureToSprite2D(const std::string& path, SpriteComponent* spr) {
+    if (!m_Assets || !spr) return;
+
+    auto tex = m_Assets->LoadTexture(path);
+    if (!tex) {
+        PushLog("[2D Import] Failed to load texture: " + path);
+        return;
+    }
+
+    spr->textureID   = tex->GetID();
+    spr->texturePath  = path;
+
+    ImportAssetFile(path);
+
+    std::string name = path;
+    auto lastSlash3 = path.find_last_of("/\\");
+    if (lastSlash3 != std::string::npos) name = path.substr(lastSlash3 + 1);
+    PushLog("[2D Import] Applied texture '" + name + "' to sprite.");
+}
+
 // ============================================================================
 // Game Build / Export System
 // ============================================================================
@@ -5508,6 +5556,18 @@ void EditorUI::DrawInspector2D() {
                 ImGui::Image(static_cast<ImTextureID>(spr->textureID),
                              ImVec2(64, 64), ImVec2(0, 0), ImVec2(1, 1));
             }
+            if (ImGui::Button("Load Texture##SprTex")) {
+                std::string file = OpenFileDialog(
+                    "Image Files\0*.png;*.jpg;*.jpeg;*.bmp;*.tga\0All Files\0*.*\0", ".");
+                if (!file.empty()) {
+                    ImportTextureToSprite2D(file, spr);
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Clear Texture##SprTex")) {
+                spr->textureID = 0;
+                spr->texturePath.clear();
+            }
 
             // Sprite-sheet animation
             ImGui::Separator();
@@ -5637,6 +5697,192 @@ void EditorUI::DrawInspector2D() {
         }
     }
 
+    // ── PlatformerController2D ─────────────────────────────────────────────
+    auto* plat = sel->GetComponent<PlatformerController2D>();
+    if (plat) {
+        if (ImGui::CollapsingHeader("Platformer Controller", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::DragFloat("Move Speed##Plat",   &plat->moveSpeed,   0.1f, 0.0f, 100.0f);
+            ImGui::DragFloat("Jump Force##Plat",   &plat->jumpForce,   0.1f, 0.0f, 100.0f);
+            ImGui::DragInt("Max Jumps##Plat",       &plat->maxJumps, 1, 1, 5);
+            ImGui::DragFloat("Coyote Time##Plat",  &plat->coyoteTime,  0.01f, 0.0f, 1.0f);
+            ImGui::DragFloat("Jump Buffer##Plat",  &plat->jumpBufferTime, 0.01f, 0.0f, 0.5f);
+            ImGui::DragFloat("Wall Slide Spd##Plat", &plat->wallSlideSpeed, 0.1f, 0.0f, 20.0f);
+            ImGui::Checkbox("Wall Jump##Plat",     &plat->wallJumpEnabled);
+
+            ImGui::Separator();
+            const char* stateNames[] = { "Idle", "Run", "Jump", "Fall", "WallSlide", "Dead" };
+            int sIdx = static_cast<int>(plat->state);
+            if (sIdx >= 0 && sIdx < 6)
+                ImGui::Text("State: %s", stateNames[sIdx]);
+            ImGui::Text("On Ground: %s", plat->onGround ? "Yes" : "No");
+            ImGui::Text("Jumps Left: %d", plat->jumpsLeft);
+            ImGui::Text("Facing Right: %s", plat->facingRight ? "Yes" : "No");
+        }
+    }
+
+    // ── Camera2DFollow ─────────────────────────────────────────────────────
+    auto* camFollow = sel->GetComponent<Camera2DFollow>();
+    if (camFollow) {
+        if (ImGui::CollapsingHeader("Camera Follow 2D", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::DragInt("Target Object ID##CamF", &camFollow->targetObjectID, 1, -1, 99999);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Object ID of target to follow (-1 = none)");
+
+            f32 off[2] = { camFollow->offset.x, camFollow->offset.y };
+            if (ImGui::DragFloat2("Offset##CamF", off, 0.1f))
+                camFollow->offset = { off[0], off[1] };
+
+            ImGui::DragFloat("Smooth Speed##CamF",  &camFollow->smoothSpeed, 0.1f, 0.1f, 50.0f);
+            ImGui::DragFloat("Look Ahead##CamF",    &camFollow->lookAheadDist, 0.1f, 0.0f, 20.0f);
+
+            f32 dz[2] = { camFollow->deadZone.x, camFollow->deadZone.y };
+            if (ImGui::DragFloat2("Dead Zone##CamF", dz, 0.1f, 0.0f, 20.0f))
+                camFollow->deadZone = { dz[0], dz[1] };
+
+            ImGui::Checkbox("Use Bounds##CamF", &camFollow->useBounds);
+            if (camFollow->useBounds) {
+                f32 mn[2] = { camFollow->boundsMin.x, camFollow->boundsMin.y };
+                f32 mx[2] = { camFollow->boundsMax.x, camFollow->boundsMax.y };
+                if (ImGui::DragFloat2("Bounds Min##CamF", mn, 0.5f))
+                    camFollow->boundsMin = { mn[0], mn[1] };
+                if (ImGui::DragFloat2("Bounds Max##CamF", mx, 0.5f))
+                    camFollow->boundsMax = { mx[0], mx[1] };
+            }
+        }
+    }
+
+    // ── AudioSource2D ──────────────────────────────────────────────────────
+    auto* audioSrc = sel->GetComponent<AudioSource2D>();
+    if (audioSrc) {
+        if (ImGui::CollapsingHeader("Audio Source 2D", ImGuiTreeNodeFlags_DefaultOpen)) {
+            char clipBuf[256];
+            std::strncpy(clipBuf, audioSrc->clipPath.c_str(), sizeof(clipBuf) - 1);
+            clipBuf[sizeof(clipBuf) - 1] = '\0';
+            if (ImGui::InputText("Clip Path##Aud", clipBuf, sizeof(clipBuf)))
+                audioSrc->clipPath = clipBuf;
+            ImGui::SameLine();
+            if (ImGui::SmallButton("...##AudBrowse")) {
+                std::string file = OpenFileDialog(
+                    "Audio Files\0*.wav;*.mp3;*.ogg;*.flac\0All Files\0*.*\0", ".");
+                if (!file.empty()) audioSrc->clipPath = file;
+            }
+
+            ImGui::DragFloat("Volume##Aud",  &audioSrc->volume, 0.01f, 0.0f, 1.0f);
+            ImGui::DragFloat("Pitch##Aud",   &audioSrc->pitch,  0.01f, 0.1f, 4.0f);
+            ImGui::Checkbox("Loop##Aud",     &audioSrc->loop);
+            ImGui::Checkbox("Spatial##Aud",  &audioSrc->spatial);
+            ImGui::Checkbox("Play On Start##Aud", &audioSrc->playOnStart);
+        }
+    }
+
+    // ── AnimStateMachine2D ─────────────────────────────────────────────────
+    auto* animSM = sel->GetComponent<AnimStateMachine2D>();
+    if (animSM) {
+        if (ImGui::CollapsingHeader("Anim State Machine 2D", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Text("Current State: %s",
+                animSM->currentState.empty() ? "(none)" : animSM->currentState.c_str());
+
+            for (size_t i = 0; i < animSM->states.size(); ++i) {
+                auto& st = animSM->states[i];
+                ImGui::PushID(static_cast<int>(i));
+                bool open = ImGui::TreeNode("##AnimSt", "%s", st.name.c_str());
+                ImGui::SameLine();
+                if (ImGui::SmallButton("X##DelState")) {
+                    animSM->states.erase(animSM->states.begin() + i);
+                    if (open) ImGui::TreePop();
+                    ImGui::PopID();
+                    break;
+                }
+                if (open) {
+                    char nameBuf[64];
+                    std::strncpy(nameBuf, st.name.c_str(), sizeof(nameBuf) - 1);
+                    nameBuf[sizeof(nameBuf) - 1] = '\0';
+                    if (ImGui::InputText("Name##ASt", nameBuf, sizeof(nameBuf)))
+                        st.name = nameBuf;
+                    ImGui::DragInt("Start Frame##ASt", &st.startFrame, 1, 0, 256);
+                    ImGui::DragInt("End Frame##ASt",   &st.endFrame, 1, 0, 256);
+                    ImGui::DragFloat("FPS##ASt",       &st.fps, 1.0f, 0.1f, 120.0f);
+                    ImGui::Checkbox("Loop##ASt",       &st.loop);
+                    ImGui::TreePop();
+                }
+                ImGui::PopID();
+            }
+
+            if (ImGui::Button("Add State##AnimSM")) {
+                AnimState2D newState;
+                newState.name = "State_" + std::to_string(animSM->states.size());
+                animSM->states.push_back(newState);
+            }
+        }
+    }
+
+    // ── Collectible2D ──────────────────────────────────────────────────────
+    auto* collectible = sel->GetComponent<Collectible2D>();
+    if (collectible) {
+        if (ImGui::CollapsingHeader("Collectible 2D", ImGuiTreeNodeFlags_DefaultOpen)) {
+            const char* colTypes[] = { "Coin", "PowerUp", "Health", "Key", "Star", "Custom" };
+            int ct = static_cast<int>(collectible->type);
+            if (ImGui::Combo("Type##Coll2D", &ct, colTypes, 6))
+                collectible->type = static_cast<Collectible2D::Type>(ct);
+            ImGui::DragInt("Score Value##Coll2D",   &collectible->scoreValue, 1, 0, 10000);
+            ImGui::Checkbox("Collected##Coll2D",    &collectible->collected);
+            ImGui::DragFloat("Bob Amount##Coll2D",  &collectible->bobAmount, 0.01f, 0.0f, 2.0f);
+            ImGui::DragFloat("Bob Speed##Coll2D",   &collectible->bobSpeed, 0.1f, 0.0f, 20.0f);
+        }
+    }
+
+    // ── Hazard2D ───────────────────────────────────────────────────────────
+    auto* hazard = sel->GetComponent<Hazard2D>();
+    if (hazard) {
+        if (ImGui::CollapsingHeader("Hazard 2D", ImGuiTreeNodeFlags_DefaultOpen)) {
+            const char* hzTypes[] = { "Spike", "Lava", "Enemy", "Projectile", "Pit", "Custom" };
+            int ht = static_cast<int>(hazard->type);
+            if (ImGui::Combo("Type##Haz2D", &ht, hzTypes, 6))
+                hazard->type = static_cast<Hazard2D::Type>(ht);
+            ImGui::DragInt("Damage##Haz2D",         &hazard->damage, 1, 0, 1000);
+            ImGui::DragFloat("Knockback##Haz2D",    &hazard->knockbackForce, 0.1f, 0.0f, 100.0f);
+            ImGui::Checkbox("Can Be Stomped##Haz2D", &hazard->canBeStomp);
+            if (hazard->canBeStomp) {
+                ImGui::DragFloat("Stomp Bounce##Haz2D", &hazard->stompBounce, 0.1f, 0.0f, 50.0f);
+            }
+            ImGui::Checkbox("Destroy On Hit##Haz2D", &hazard->destroyOnHit);
+        }
+    }
+
+    // ── GameState2D ────────────────────────────────────────────────────────
+    auto* gs = sel->GetComponent<GameState2D>();
+    if (gs) {
+        if (ImGui::CollapsingHeader("Game State 2D", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::DragInt("Score##GS2D",  &gs->score,  1, 0, 9999999);
+            ImGui::DragInt("Lives##GS2D",  &gs->lives,  1, 0, 99);
+            ImGui::DragInt("Coins##GS2D",  &gs->coins,  1, 0, 99999);
+            ImGui::DragInt("Level##GS2D",  &gs->level,  1, 1, 999);
+            ImGui::DragFloat("Timer##GS2D", &gs->timer, 1.0f, 0.0f, 9999.0f, "%.1f s");
+            ImGui::Checkbox("Game Over##GS2D",    &gs->gameOver);
+            ImGui::Checkbox("Level Complete##GS2D", &gs->levelComplete);
+
+            ImGui::Separator();
+            if (ImGui::Button("Reset State##GS2D")) {
+                gs->score = 0; gs->lives = 3; gs->coins = 0;
+                gs->timer = 0; gs->gameOver = false; gs->levelComplete = false;
+            }
+        }
+    }
+
+    // ── CollisionListener2D ────────────────────────────────────────────────
+    auto* colListener = sel->GetComponent<CollisionListener2D>();
+    if (colListener) {
+        if (ImGui::CollapsingHeader("Collision Listener 2D", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::TextWrapped("Collision callbacks are registered via script. "
+                               "Use onCollisionEnter / onTriggerEnter callbacks.");
+            ImGui::Text("Has Enter CB: %s", colListener->onCollisionEnter ? "Yes" : "No");
+            ImGui::Text("Has Stay CB:  %s", colListener->onCollisionStay  ? "Yes" : "No");
+            ImGui::Text("Has Exit CB:  %s", colListener->onCollisionExit  ? "Yes" : "No");
+            ImGui::Text("Has TrigEnter: %s", colListener->onTriggerEnter  ? "Yes" : "No");
+            ImGui::Text("Has TrigStay:  %s", colListener->onTriggerStay   ? "Yes" : "No");
+            ImGui::Text("Has TrigExit:  %s", colListener->onTriggerExit   ? "Yes" : "No");
+        }
+    }
+
     // ── Add Component button ───────────────────────────────────────────────
     ImGui::Separator();
     if (ImGui::Button("Add Component##2D", ImVec2(-1, 0)))
@@ -5667,6 +5913,39 @@ void EditorUI::DrawInspector2D() {
         if (!pe && ImGui::MenuItem("Particle Emitter 2D")) {
             sel->AddComponent<ParticleEmitter2D>();
             PushLog("[2D] Added ParticleEmitter2D to " + sel->GetName());
+        }
+        ImGui::Separator();
+        if (!plat && ImGui::MenuItem("Platformer Controller")) {
+            sel->AddComponent<PlatformerController2D>();
+            PushLog("[2D] Added PlatformerController2D to " + sel->GetName());
+        }
+        if (!camFollow && ImGui::MenuItem("Camera Follow 2D")) {
+            sel->AddComponent<Camera2DFollow>();
+            PushLog("[2D] Added Camera2DFollow to " + sel->GetName());
+        }
+        if (!audioSrc && ImGui::MenuItem("Audio Source 2D")) {
+            sel->AddComponent<AudioSource2D>();
+            PushLog("[2D] Added AudioSource2D to " + sel->GetName());
+        }
+        if (!animSM && ImGui::MenuItem("Anim State Machine")) {
+            sel->AddComponent<AnimStateMachine2D>();
+            PushLog("[2D] Added AnimStateMachine2D to " + sel->GetName());
+        }
+        if (!collectible && ImGui::MenuItem("Collectible 2D")) {
+            sel->AddComponent<Collectible2D>();
+            PushLog("[2D] Added Collectible2D to " + sel->GetName());
+        }
+        if (!hazard && ImGui::MenuItem("Hazard 2D")) {
+            sel->AddComponent<Hazard2D>();
+            PushLog("[2D] Added Hazard2D to " + sel->GetName());
+        }
+        if (!gs && ImGui::MenuItem("Game State 2D")) {
+            sel->AddComponent<GameState2D>();
+            PushLog("[2D] Added GameState2D to " + sel->GetName());
+        }
+        if (!colListener && ImGui::MenuItem("Collision Listener 2D")) {
+            sel->AddComponent<CollisionListener2D>();
+            PushLog("[2D] Added CollisionListener2D to " + sel->GetName());
         }
         ImGui::EndPopup();
     }
