@@ -60,7 +60,10 @@ if ($CliOnly) {
         "src/camera/EditorCamera.cpp",
         "src/input/ViewportInput.cpp",
         "src/editor2d/Editor2DCamera.cpp",
-        "src/editor2d/Editor2DViewport.cpp"
+        "src/editor2d/Editor2DViewport.cpp",
+        "src/editor2d/Pathfinding2D.cpp",
+        "src/editor2d/Lighting2D.cpp",
+        "src/editor2d/Dialogue2D.cpp"
     )
     $imguiSources = @(
         "deps/imgui/imgui.cpp",
