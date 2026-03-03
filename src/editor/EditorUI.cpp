@@ -34,6 +34,9 @@
 #include "assets/Assets.h"
 #include "editor2d/Editor2DTypes.h"
 #include "editor2d/Editor2DViewport.h"
+#include "editor2d/Pathfinding2D.h"
+#include "editor2d/Lighting2D.h"
+#include "editor2d/Dialogue2D.h"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -5889,6 +5892,133 @@ void EditorUI::DrawInspector2D() {
         }
     }
 
+    // ── PathGrid2D ─────────────────────────────────────────────────────────
+    auto* pathGrid = sel->GetComponent<PathGrid2D>();
+    if (pathGrid) {
+        if (ImGui::CollapsingHeader("Path Grid 2D", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::DragInt("Grid Width##PG2D",   &pathGrid->gridWidth,  1, 1, 256);
+            ImGui::DragInt("Grid Height##PG2D",  &pathGrid->gridHeight, 1, 1, 256);
+            ImGui::DragFloat("Cell Size##PG2D",  &pathGrid->cellSize,   0.1f, 0.1f, 10.0f, "%.2f");
+            f32 orig[2] = { pathGrid->origin.x, pathGrid->origin.y };
+            if (ImGui::DragFloat2("Origin##PG2D", orig, 0.5f, -1000, 1000, "%.1f")) {
+                pathGrid->origin = { orig[0], orig[1] };
+            }
+            ImGui::Checkbox("Allow Diagonal##PG2D", &pathGrid->allowDiag);
+            ImGui::Text("Cells: %d", static_cast<int>(pathGrid->cells.size()));
+            if (ImGui::Button("Clear Grid (all walkable)##PG2D")) {
+                pathGrid->Clear();
+                PushLog("[2D] Path grid cleared");
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Rebuild from Scene##PG2D")) {
+                pathGrid->RebuildFromScene(&m_2DViewport.GetScene());
+                PushLog("[2D] Path grid rebuilt from scene colliders");
+            }
+        }
+    }
+
+    // ── PathAgent2D ────────────────────────────────────────────────────────
+    auto* pathAgent = sel->GetComponent<PathAgent2D>();
+    if (pathAgent) {
+        if (ImGui::CollapsingHeader("Path Agent 2D", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::DragFloat("Move Speed##PA2D",      &pathAgent->moveSpeed,    0.1f, 0.0f, 50.0f);
+            ImGui::DragFloat("Stopping Dist##PA2D",   &pathAgent->stoppingDist, 0.01f, 0.01f, 5.0f);
+            ImGui::DragFloat("Repath Interval##PA2D", &pathAgent->repathInterval, 0.1f, 0.1f, 10.0f, "%.1f s");
+            ImGui::Checkbox("Auto Repath##PA2D",      &pathAgent->autoRepath);
+            f32 tgt[2] = { pathAgent->target.x, pathAgent->target.y };
+            if (ImGui::DragFloat2("Target##PA2D", tgt, 0.1f, -1000, 1000, "%.1f")) {
+                pathAgent->target = { tgt[0], tgt[1] };
+            }
+            ImGui::Text("Has Path: %s | Arrived: %s | Waypoints: %d / %d",
+                        pathAgent->hasPath ? "Yes" : "No",
+                        pathAgent->arrived ? "Yes" : "No",
+                        pathAgent->currentWaypoint,
+                        static_cast<int>(pathAgent->path.size()));
+            if (ImGui::Button("Clear Path##PA2D")) {
+                pathAgent->ClearPath();
+                PushLog("[2D] Agent path cleared");
+            }
+        }
+    }
+
+    // ── PointLight2D ───────────────────────────────────────────────────────
+    auto* pointLight = sel->GetComponent<PointLight2D>();
+    if (pointLight) {
+        if (ImGui::CollapsingHeader("Point Light 2D", ImGuiTreeNodeFlags_DefaultOpen)) {
+            f32 lc[4] = { pointLight->color.x, pointLight->color.y, pointLight->color.z, pointLight->color.w };
+            if (ImGui::ColorEdit4("Color##PL2D", lc)) {
+                pointLight->color = { lc[0], lc[1], lc[2], lc[3] };
+            }
+            ImGui::DragFloat("Intensity##PL2D",  &pointLight->intensity, 0.05f, 0.0f, 10.0f);
+            ImGui::DragFloat("Radius##PL2D",     &pointLight->radius,    0.1f,  0.1f, 100.0f);
+            ImGui::DragFloat("Falloff##PL2D",    &pointLight->falloff,   0.1f,  0.1f, 10.0f);
+            ImGui::Separator();
+            ImGui::Checkbox("Flicker##PL2D",     &pointLight->flickerEnabled);
+            if (pointLight->flickerEnabled) {
+                ImGui::DragFloat("Flicker Speed##PL2D",  &pointLight->flickerSpeed,  0.5f, 0.1f, 50.0f);
+                ImGui::DragFloat("Flicker Amount##PL2D", &pointLight->flickerAmount, 0.01f, 0.0f, 1.0f);
+            }
+        }
+    }
+
+    // ── SpotLight2D ────────────────────────────────────────────────────────
+    auto* spotLight = sel->GetComponent<SpotLight2D>();
+    if (spotLight) {
+        if (ImGui::CollapsingHeader("Spot Light 2D", ImGuiTreeNodeFlags_DefaultOpen)) {
+            f32 sc[4] = { spotLight->color.x, spotLight->color.y, spotLight->color.z, spotLight->color.w };
+            if (ImGui::ColorEdit4("Color##SL2D", sc)) {
+                spotLight->color = { sc[0], sc[1], sc[2], sc[3] };
+            }
+            ImGui::DragFloat("Intensity##SL2D",    &spotLight->intensity,  0.05f, 0.0f, 10.0f);
+            ImGui::DragFloat("Range##SL2D",        &spotLight->range,      0.1f,  0.1f, 100.0f);
+            ImGui::DragFloat("Direction##SL2D",    &spotLight->direction,  1.0f, -360.0f, 360.0f, "%.1f deg");
+            ImGui::DragFloat("Inner Angle##SL2D",  &spotLight->innerAngle, 1.0f, 0.0f, 180.0f, "%.1f deg");
+            ImGui::DragFloat("Outer Angle##SL2D",  &spotLight->outerAngle, 1.0f, 0.0f, 180.0f, "%.1f deg");
+            ImGui::DragFloat("Falloff##SL2D",      &spotLight->falloff,    0.1f, 0.1f, 10.0f);
+        }
+    }
+
+    // ── AmbientLight2D ─────────────────────────────────────────────────────
+    auto* ambLight = sel->GetComponent<AmbientLight2D>();
+    if (ambLight) {
+        if (ImGui::CollapsingHeader("Ambient Light 2D", ImGuiTreeNodeFlags_DefaultOpen)) {
+            f32 ac[4] = { ambLight->color.x, ambLight->color.y, ambLight->color.z, ambLight->color.w };
+            if (ImGui::ColorEdit4("Color##AL2D", ac)) {
+                ambLight->color = { ac[0], ac[1], ac[2], ac[3] };
+            }
+            ImGui::DragFloat("Intensity##AL2D", &ambLight->intensity, 0.01f, 0.0f, 2.0f);
+        }
+    }
+
+    // ── DialogueRunner2D ───────────────────────────────────────────────────
+    auto* dialogueRunner = sel->GetComponent<DialogueRunner2D>();
+    if (dialogueRunner) {
+        if (ImGui::CollapsingHeader("Dialogue Runner 2D", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::DragFloat("Interact Radius##DR2D", &dialogueRunner->interactRadius, 0.1f, 0.1f, 50.0f);
+            ImGui::DragFloat("Text Speed##DR2D",      &dialogueRunner->textSpeed,      1.0f, 1.0f, 200.0f, "%.0f chars/s");
+            ImGui::Checkbox("Auto Advance##DR2D",     &dialogueRunner->autoAdvance);
+            if (dialogueRunner->autoAdvance) {
+                ImGui::DragFloat("Auto Delay##DR2D",  &dialogueRunner->autoAdvanceDelay, 0.1f, 0.1f, 30.0f, "%.1f s");
+            }
+            ImGui::Separator();
+            ImGui::Text("Active: %s | Finished: %s",
+                        dialogueRunner->IsActive() ? "Yes" : "No",
+                        dialogueRunner->IsFinished() ? "Yes" : "No");
+            if (dialogueRunner->IsActive()) {
+                auto* curNode = dialogueRunner->GetCurrentNode();
+                if (curNode) {
+                    ImGui::Text("Speaker: %s", curNode->speaker.c_str());
+                    ImGui::TextWrapped("Text: %s", dialogueRunner->GetVisibleText().c_str());
+                    auto choices = dialogueRunner->GetAvailableChoices();
+                    if (!choices.empty()) {
+                        ImGui::Text("Choices: %d", static_cast<int>(choices.size()));
+                    }
+                }
+            }
+            ImGui::TextDisabled("(Dialogue trees are built via script or code)");
+        }
+    }
+
     // ── Add Component button ───────────────────────────────────────────────
     ImGui::Separator();
     if (ImGui::Button("Add Component##2D", ImVec2(-1, 0)))
@@ -5952,6 +6082,32 @@ void EditorUI::DrawInspector2D() {
         if (!colListener && ImGui::MenuItem("Collision Listener 2D")) {
             sel->AddComponent<CollisionListener2D>();
             PushLog("[2D] Added CollisionListener2D to " + sel->GetName());
+        }
+        ImGui::Separator();
+        if (!pathGrid && ImGui::MenuItem("Path Grid 2D")) {
+            auto* pg = sel->AddComponent<PathGrid2D>();
+            pg->Clear();
+            PushLog("[2D] Added PathGrid2D to " + sel->GetName());
+        }
+        if (!pathAgent && ImGui::MenuItem("Path Agent 2D")) {
+            sel->AddComponent<PathAgent2D>();
+            PushLog("[2D] Added PathAgent2D to " + sel->GetName());
+        }
+        if (!pointLight && ImGui::MenuItem("Point Light 2D")) {
+            sel->AddComponent<PointLight2D>();
+            PushLog("[2D] Added PointLight2D to " + sel->GetName());
+        }
+        if (!spotLight && ImGui::MenuItem("Spot Light 2D")) {
+            sel->AddComponent<SpotLight2D>();
+            PushLog("[2D] Added SpotLight2D to " + sel->GetName());
+        }
+        if (!ambLight && ImGui::MenuItem("Ambient Light 2D")) {
+            sel->AddComponent<AmbientLight2D>();
+            PushLog("[2D] Added AmbientLight2D to " + sel->GetName());
+        }
+        if (!dialogueRunner && ImGui::MenuItem("Dialogue Runner 2D")) {
+            sel->AddComponent<DialogueRunner2D>();
+            PushLog("[2D] Added DialogueRunner2D to " + sel->GetName());
         }
         ImGui::EndPopup();
     }
