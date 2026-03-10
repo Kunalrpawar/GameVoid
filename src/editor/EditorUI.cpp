@@ -240,6 +240,108 @@ void EditorUI::Render(f32 dt) {
         m_FPSCount = 0;
     }
 
+    // ════════════════════════════════════════════════════════════════════════
+    // Fullscreen 2D Play Mode — hide all editor panels
+    // ════════════════════════════════════════════════════════════════════════
+    if (m_Playing && m_DimMode == EditorDimMode::Mode2D) {
+        ImGuiViewport* viewport = ImGui::GetMainViewport();
+        const f32 winW = viewport->WorkSize.x;
+        const f32 winH = viewport->WorkSize.y;
+        const f32 startY = viewport->WorkPos.y;
+        const f32 startX = viewport->WorkPos.x;
+
+        // Feed keyboard input to platformer controllers
+        ImGuiIO& playIO = ImGui::GetIO();
+        auto& scene2D = m_2DViewport.GetScene();
+        for (auto& obj : scene2D.GetAllObjects()) {
+            auto* pc = obj->GetComponent<PlatformerController2D>();
+            if (!pc || pc->isDead) continue;
+            pc->inputX = 0.0f;
+            if (ImGui::IsKeyDown(ImGuiKey_A) || ImGui::IsKeyDown(ImGuiKey_LeftArrow))  pc->inputX -= 1.0f;
+            if (ImGui::IsKeyDown(ImGuiKey_D) || ImGui::IsKeyDown(ImGuiKey_RightArrow)) pc->inputX += 1.0f;
+            pc->inputJump     = ImGui::IsKeyPressed(ImGuiKey_Space) || ImGui::IsKeyPressed(ImGuiKey_W) || ImGui::IsKeyPressed(ImGuiKey_UpArrow);
+            pc->inputJumpHeld = ImGui::IsKeyDown(ImGuiKey_Space) || ImGui::IsKeyDown(ImGuiKey_W) || ImGui::IsKeyDown(ImGuiKey_UpArrow);
+        }
+
+        // Stop button overlay (top-right)
+        ImGui::SetNextWindowPos(ImVec2(startX + winW - 120, startY + 10));
+        ImGui::SetNextWindowSize(ImVec2(110, 36));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 6));
+        ImGui::Begin("##PlayStop", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+            ImGuiWindowFlags_NoCollapse);
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.15f, 0.15f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 0.25f, 0.25f, 1.0f));
+        if (ImGui::Button("Stop Game", ImVec2(94, 22))) {
+            m_Playing = false;
+            m_2DViewport.GetScene().StopPlay();
+            PushLog("[Editor] Stopped.");
+        }
+        ImGui::PopStyleColor(2);
+        ImGui::End();
+        ImGui::PopStyleVar();
+
+        // Escape key also stops
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            m_Playing = false;
+            m_2DViewport.GetScene().StopPlay();
+            PushLog("[Editor] Stopped (Esc).");
+        }
+
+        // Game state HUD overlay (top-left: score, lives, coins)
+        GameState2D* gs = nullptr;
+        for (auto& obj : scene2D.GetAllObjects()) {
+            gs = obj->GetComponent<GameState2D>();
+            if (gs) break;
+        }
+        if (gs) {
+            ImGui::SetNextWindowPos(ImVec2(startX + 10, startY + 10));
+            ImGui::SetNextWindowSize(ImVec2(220, 50));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 8));
+            ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0f, 0.0f, 0.0f, 0.6f));
+            ImGui::Begin("##HUD", nullptr,
+                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoInputs);
+            ImGui::Text("Score: %d   Lives: %d   Coins: %d", gs->score, gs->lives, gs->coins);
+            if (gs->gameOver) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.2f, 0.2f, 1));
+                ImGui::Text("GAME OVER");
+                ImGui::PopStyleColor();
+            }
+            ImGui::End();
+            ImGui::PopStyleColor();
+            ImGui::PopStyleVar();
+        }
+
+        // Fullscreen 2D viewport
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        ImGui::SetNextWindowPos(ImVec2(startX, startY));
+        ImGui::SetNextWindowSize(ImVec2(winW, winH));
+        ImGui::Begin("##PlayViewport", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
+        ImGui::PopStyleVar();
+        ImVec2 avail = ImGui::GetContentRegionAvail();
+        ImVec2 vpPos = ImGui::GetCursorScreenPos();
+        m_2DViewport.RenderViewport(dt, vpPos.x, vpPos.y, avail.x, avail.y);
+        ImGui::End();
+
+        // FPS overlay (bottom-right)
+        ImDrawList* dl = ImGui::GetForegroundDrawList();
+        char fpsBuf[32];
+        std::snprintf(fpsBuf, sizeof(fpsBuf), "%.0f FPS", m_FPS);
+        ImVec2 fpsSz = ImGui::CalcTextSize(fpsBuf);
+        dl->AddText(ImVec2(startX + winW - fpsSz.x - 12, startY + winH - fpsSz.y - 8),
+                    IM_COL32(200, 200, 200, 180), fpsBuf);
+
+        if (m_ShowDemo)
+            ImGui::ShowDemoWindow(&m_ShowDemo);
+        return;
+    }
+
     // ── Manual Godot-style panel layout ────────────────────────────────────
     // Layout:  Menu Bar (full width)
     //          Toolbar (full width, thin)
@@ -680,10 +782,18 @@ void EditorUI::DrawToolbar2D() {
     ImGui::SameLine(); ImGui::Separator(); ImGui::SameLine();
 
     if (!m_Playing) {
-        if (ImGui::Button("  Play  ##2D")) { m_Playing = true; PushLog("[Editor] Play mode (2D)."); }
+        if (ImGui::Button("  Play  ##2D")) {
+            m_Playing = true;
+            m_2DViewport.GetScene().BeginPlay();
+            PushLog("[Editor] Play mode (2D).");
+        }
     } else {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.2f, 0.2f, 1));
-        if (ImGui::Button("  Stop  ##2D")) { m_Playing = false; PushLog("[Editor] Stopped."); }
+        if (ImGui::Button("  Stop  ##2D")) {
+            m_Playing = false;
+            m_2DViewport.GetScene().StopPlay();
+            PushLog("[Editor] Stopped.");
+        }
         ImGui::PopStyleColor();
     }
 
@@ -705,13 +815,13 @@ void EditorUI::DrawToolbar2D() {
         auto* obj = vp.GetScene().CreateGameObject("Platform");
         auto* spr = obj->AddComponent<SpriteComponent>();
         spr->color = { 0.45f, 0.3f, 0.15f, 1.0f };
-        spr->size = { 4.0f, 0.5f };
+        spr->size = { 2.0f, 0.3f };
         spr->sortLayer = "Default";
         auto* rb = obj->AddComponent<RigidBody2D>();
         rb->bodyType = BodyType2D::Static;
         auto* col = obj->AddComponent<Collider2D>();
         col->shape = ColliderShape2D::Box;
-        col->boxSize = { 2.0f, 0.25f };
+        col->boxSize = { 1.0f, 0.15f };
         vp.SetSelected(obj);
         PushLog("[2D] Added Platform (static body + collider)");
     }
@@ -723,14 +833,14 @@ void EditorUI::DrawToolbar2D() {
         auto* obj = vp.GetScene().CreateGameObject("Player");
         auto* spr = obj->AddComponent<SpriteComponent>();
         spr->color = { 0.9f, 0.2f, 0.2f, 1.0f };
-        spr->size = { 1.0f, 1.0f };
+        spr->size = { 0.5f, 0.5f };
         auto* rb = obj->AddComponent<RigidBody2D>();
         rb->bodyType = BodyType2D::Dynamic;
         rb->gravityScale = 1.0f;
         rb->linearDamping = 0.0f;
         auto* col = obj->AddComponent<Collider2D>();
         col->shape = ColliderShape2D::Box;
-        col->boxSize = { 0.4f, 0.5f };
+        col->boxSize = { 0.2f, 0.25f };
         obj->AddComponent<PlatformerController2D>();
         vp.SetSelected(obj);
         PushLog("[2D] Added Player (platformer controller)");
@@ -743,10 +853,10 @@ void EditorUI::DrawToolbar2D() {
         auto* obj = vp.GetScene().CreateGameObject("Coin");
         auto* spr = obj->AddComponent<SpriteComponent>();
         spr->color = { 1.0f, 0.85f, 0.0f, 1.0f };
-        spr->size = { 0.6f, 0.6f };
+        spr->size = { 0.3f, 0.3f };
         auto* col = obj->AddComponent<Collider2D>();
         col->shape = ColliderShape2D::Circle;
-        col->radius = 0.3f;
+        col->radius = 0.15f;
         col->isTrigger = true;
         auto* coll = obj->AddComponent<Collectible2D>();
         coll->type = Collectible2D::Type::Coin;
@@ -762,13 +872,13 @@ void EditorUI::DrawToolbar2D() {
         auto* obj = vp.GetScene().CreateGameObject("Enemy");
         auto* spr = obj->AddComponent<SpriteComponent>();
         spr->color = { 0.6f, 0.1f, 0.6f, 1.0f };
-        spr->size = { 1.0f, 1.0f };
+        spr->size = { 0.5f, 0.5f };
         auto* rb = obj->AddComponent<RigidBody2D>();
         rb->bodyType = BodyType2D::Dynamic;
         rb->gravityScale = 1.0f;
         auto* col = obj->AddComponent<Collider2D>();
         col->shape = ColliderShape2D::Box;
-        col->boxSize = { 0.4f, 0.4f };
+        col->boxSize = { 0.2f, 0.2f };
         auto* haz = obj->AddComponent<Hazard2D>();
         haz->type = Hazard2D::Type::Enemy;
         haz->canBeStomp = true;
