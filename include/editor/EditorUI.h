@@ -184,6 +184,7 @@ private:
     void ImportTextureToSelected(const std::string& path);
     void ImportTextureToSprite2D(const std::string& path);        // 2D sprite texture
     void ImportTextureToSprite2D(const std::string& path, SpriteComponent* spr);  // assign to specific sprite
+    void ImportBackgroundSprite2D(const std::string& path);       // 2D background image
 
     // ── Drag-and-drop helpers ──────────────────────────────────────────────
     void ProcessDroppedFiles(const std::vector<std::string>& paths);
