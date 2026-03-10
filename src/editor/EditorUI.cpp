@@ -964,6 +964,22 @@ void EditorUI::DrawToolbar2D() {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Load a PNG/JPG image as a 2D sprite");
 
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.3f, 0.6f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.4f, 0.8f, 1.0f));
+    if (ImGui::Button("+ Background")) {
+        std::string file = OpenFileDialog(
+            "Images (*.png;*.jpg;*.bmp;*.tga)\\0*.png;*.jpg;*.jpeg;*.bmp;*.tga\\0"
+            "All Files\\0*.*\\0",
+            "Import Background Image");
+        if (!file.empty()) {
+            ImportBackgroundSprite2D(file);
+        }
+    }
+    ImGui::PopStyleColor(2);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Load an image as a 2D background (fills scene)");
+
     ImGui::SameLine(); ImGui::Separator(); ImGui::SameLine();
 
     // Snap toggle
@@ -5089,8 +5105,26 @@ void EditorUI::ImportTextureToSprite2D(const std::string& path) {
     spr->textureID   = tex->GetID();
     spr->texturePath  = path;
 
+    // Auto-size sprite from image aspect ratio
+    u32 tw = tex->GetWidth();
+    u32 th = tex->GetHeight();
+    if (tw > 0 && th > 0) {
+        f32 aspect = static_cast<f32>(tw) / static_cast<f32>(th);
+        f32 baseSize = 1.0f;
+        spr->size = { baseSize * aspect, baseSize };
+    }
+
+    // Auto-add physics so the sprite participates in collisions
+    auto* rb = obj->AddComponent<RigidBody2D>();
+    rb->bodyType = BodyType2D::Dynamic;
+    rb->gravityScale = 1.0f;
+    auto* col = obj->AddComponent<Collider2D>();
+    col->shape = ColliderShape2D::Box;
+    col->boxSize = { spr->size.x * 0.5f, spr->size.y * 0.5f };
+
+    m_2DViewport.SetSelected(obj);
     ImportAssetFile(path);
-    PushLog("[2D Import] Created sprite '" + name + "' with texture.");
+    PushLog("[2D Import] Created sprite '" + name + "' with texture (" + std::to_string(tw) + "x" + std::to_string(th) + ").");
 }
 
 void EditorUI::ImportTextureToSprite2D(const std::string& path, SpriteComponent* spr) {
@@ -5111,6 +5145,51 @@ void EditorUI::ImportTextureToSprite2D(const std::string& path, SpriteComponent*
     auto lastSlash3 = path.find_last_of("/\\");
     if (lastSlash3 != std::string::npos) name = path.substr(lastSlash3 + 1);
     PushLog("[2D Import] Applied texture '" + name + "' to sprite.");
+}
+
+void EditorUI::ImportBackgroundSprite2D(const std::string& path) {
+    if (!m_Assets) return;
+
+    auto tex = m_Assets->LoadTexture(path);
+    if (!tex) {
+        PushLog("[2D Import] Failed to load background: " + path);
+        return;
+    }
+
+    auto& scene = m_2DViewport.GetScene();
+    std::string name = path;
+    auto lastSlash = path.find_last_of("/\\");
+    if (lastSlash != std::string::npos) name = path.substr(lastSlash + 1);
+    auto dot = name.find_last_of('.');
+    if (dot != std::string::npos) name = name.substr(0, dot);
+    name = "BG_" + name;
+
+    auto* obj = scene.CreateGameObject(name);
+    auto* spr = obj->AddComponent<SpriteComponent>();
+    spr->textureID   = tex->GetID();
+    spr->texturePath  = path;
+    spr->sortLayer    = "Background";
+    spr->sortOrder    = -100;
+
+    // Size background to fill a large area, preserving aspect ratio
+    u32 tw = tex->GetWidth();
+    u32 th = tex->GetHeight();
+    f32 bgScale = 20.0f;
+    if (tw > 0 && th > 0) {
+        f32 aspect = static_cast<f32>(tw) / static_cast<f32>(th);
+        spr->size = { bgScale * aspect, bgScale };
+    } else {
+        spr->size = { bgScale, bgScale };
+    }
+
+    // Background is static, no physics
+    auto* rb = obj->AddComponent<RigidBody2D>();
+    rb->bodyType = BodyType2D::Static;
+    rb->gravityScale = 0.0f;
+
+    m_2DViewport.SetSelected(obj);
+    ImportAssetFile(path);
+    PushLog("[2D Import] Created background '" + name + "' (" + std::to_string(tw) + "x" + std::to_string(th) + ").");
 }
 
 // ============================================================================
@@ -5476,7 +5555,9 @@ void EditorUI::ProcessDroppedPath(const std::string& path) {
         ImportModelIntoScene(path);
         break;
     case AssetLoader::FileType::Texture:
-        if (m_Selected) {
+        if (m_DimMode == EditorDimMode::Mode2D) {
+            ImportTextureToSprite2D(path);
+        } else if (m_Selected) {
             ImportTextureToSelected(path);
         } else {
             ImportAssetFile(path);
