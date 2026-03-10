@@ -84,8 +84,6 @@ public:
                     i32 totalFrames = state->endFrame - state->startFrame + 1;
                     if (totalFrames < 1) totalFrames = 1;
                     spr->frameCount = totalFrames;
-                    // Offset current frame into state's range
-                    // (the sprite animation system handles 0..frameCount-1)
                 }
             }
 
@@ -98,13 +96,62 @@ public:
             o->Update(dt);
         }
 
-        // Full physics step
-        StepPhysics(dt);
-
-        // Update camera follow
-        UpdateCameraFollow(dt);
+        // Only run physics when in play mode
+        if (m_Playing) {
+            StepPhysics(dt);
+            UpdateCameraFollow(dt);
+        }
 
         FlushDestroyQueue();
+    }
+
+    // ── Play mode ──────────────────────────────────────────────────────────
+    bool IsPlaying() const { return m_Playing; }
+
+    void BeginPlay() {
+        if (m_Playing) return;
+        // Snapshot positions/velocities so we can restore on stop
+        m_Snapshot.clear();
+        for (auto& o : m_Objects) {
+            ObjectSnapshot snap;
+            snap.id = o->GetID();
+            snap.position = o->GetTransform().position;
+            snap.scale = o->GetTransform().scale;
+            snap.rotation = o->GetTransform().rotation;
+            auto* rb = o->GetComponent<RigidBody2D>();
+            if (rb) { snap.velocity = rb->velocity; snap.angularVel = rb->angularVel; }
+            auto* pc = o->GetComponent<PlatformerController2D>();
+            if (pc) { snap.isGrounded = pc->isGrounded; snap.isDead = pc->isDead; }
+            auto* coll = o->GetComponent<Collectible2D>();
+            if (coll) { snap.collected = coll->collected; }
+            auto* gs = o->GetComponent<GameState2D>();
+            if (gs) { snap.score = gs->score; snap.lives = gs->lives; snap.coins = gs->coins; snap.gameOver = gs->gameOver; }
+            m_Snapshot.push_back(snap);
+        }
+        m_Playing = true;
+    }
+
+    void StopPlay() {
+        if (!m_Playing) return;
+        m_Playing = false;
+        // Restore from snapshot
+        for (auto& snap : m_Snapshot) {
+            auto* obj = FindByID(snap.id);
+            if (!obj) continue;
+            obj->GetTransform().position = snap.position;
+            obj->GetTransform().scale = snap.scale;
+            obj->GetTransform().rotation = snap.rotation;
+            auto* rb = obj->GetComponent<RigidBody2D>();
+            if (rb) { rb->velocity = snap.velocity; rb->angularVel = snap.angularVel; }
+            auto* pc = obj->GetComponent<PlatformerController2D>();
+            if (pc) { pc->isGrounded = snap.isGrounded; pc->isDead = snap.isDead;
+                       pc->inputX = 0; pc->inputJump = false; pc->inputJumpHeld = false; }
+            auto* coll = obj->GetComponent<Collectible2D>();
+            if (coll) { coll->collected = snap.collected; }
+            auto* gs = obj->GetComponent<GameState2D>();
+            if (gs) { gs->score = snap.score; gs->lives = snap.lives; gs->coins = snap.coins; gs->gameOver = snap.gameOver; }
+        }
+        m_Snapshot.clear();
     }
 
     // ── Sorting layers ─────────────────────────────────────────────────────
@@ -608,6 +655,22 @@ private:
     std::vector<GameObject*> m_PendingDestroy;
     std::vector<SortLayer> m_SortLayers = { { "Background", -10 }, { "Default", 0 }, { "Foreground", 10 }, { "UI", 100 } };
     u32 m_NextID = 1;
+    bool m_Playing = false;
+
+    // Snapshot for restoring scene state on stop
+    struct ObjectSnapshot {
+        u32 id = 0;
+        Vec3 position, scale;
+        Quaternion rotation;
+        Vec2 velocity{0,0};
+        f32 angularVel = 0;
+        bool isGrounded = false;
+        bool isDead = false;
+        bool collected = false;
+        i32 score = 0, lives = 3, coins = 0;
+        bool gameOver = false;
+    };
+    std::vector<ObjectSnapshot> m_Snapshot;
 };
 
 } // namespace gv
