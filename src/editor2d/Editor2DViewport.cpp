@@ -625,6 +625,11 @@ void Editor2DViewport::HandlePicking(f32 vpX, f32 vpY, f32 vpW, f32 vpH) {
     f32 localMY = mousePos.y - vpY;
     Vec2 worldMouse = m_Camera.ScreenToWorld(localMX, localMY, vpW, vpH);
 
+    // Minimum pick radius in world units — scales with zoom so objects are
+    // always easy to click even when zoomed far out.
+    f32 minPickHalf = 0.4f / m_Camera.GetZoom();
+    if (minPickHalf < 0.3f) minPickHalf = 0.3f;
+
     // Build a picking list of ALL objects (not just sprites)
     // Check in reverse order so front-most objects are picked first
     auto& allObjs = m_Scene.GetAllObjects();
@@ -643,12 +648,12 @@ void Editor2DViewport::HandlePicking(f32 vpX, f32 vpY, f32 vpW, f32 vpH) {
         if (spr) {
             halfSz = { spr->size.x * t.scale.x * 0.5f, spr->size.y * t.scale.y * 0.5f };
         } else {
-            // Use a default clickable area based on scale (1x1 unit * scale)
             halfSz = { t.scale.x * 0.5f, t.scale.y * 0.5f };
-            // Minimum clickable size so tiny objects are still selectable
-            if (halfSz.x < 0.3f) halfSz.x = 0.3f;
-            if (halfSz.y < 0.3f) halfSz.y = 0.3f;
         }
+
+        // Enforce minimum clickable size so tiny/far objects are still selectable
+        if (halfSz.x < minPickHalf) halfSz.x = minPickHalf;
+        if (halfSz.y < minPickHalf) halfSz.y = minPickHalf;
 
         if (worldMouse.x >= pos.x - halfSz.x && worldMouse.x <= pos.x + halfSz.x &&
             worldMouse.y >= pos.y - halfSz.y && worldMouse.y <= pos.y + halfSz.y) {
@@ -692,8 +697,8 @@ void Editor2DViewport::HandleDrag(f32 vpX, f32 vpY, f32 vpW, f32 vpH) {
         break;
     }
     case Gizmo2DMode::Scale: {
-        f32 scaleFactor = 1.0f + delta.x * 0.02f;
-        if (scaleFactor < 0.1f) scaleFactor = 0.1f;
+        f32 scaleFactor = 1.0f + delta.x * 0.1f;
+        if (scaleFactor < 0.05f) scaleFactor = 0.05f;
         t.scale.x = m_DragScaleStart.x * scaleFactor;
         t.scale.y = m_DragScaleStart.y * scaleFactor;
         break;
