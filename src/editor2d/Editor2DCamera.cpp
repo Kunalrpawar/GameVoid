@@ -32,7 +32,7 @@ void Editor2DCamera::FocusOn(const Vec2& target) {
 
 void Editor2DCamera::Reset() {
     m_PosTgt  = { 0.0f, 0.0f };
-    m_ZoomTgt = 1.0f;
+    m_ZoomTgt = 0.15f;
 }
 
 void Editor2DCamera::Update(f32 dt) {

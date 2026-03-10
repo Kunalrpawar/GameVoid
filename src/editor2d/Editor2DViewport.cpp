@@ -549,11 +549,25 @@ void Editor2DViewport::HandleInput(f32 dt, f32 vpX, f32 vpY, f32 vpW, f32 vpH) {
     f32 localMX = mousePos.x - vpX;
     f32 localMY = mousePos.y - vpY;
 
-    // ── Pan (MMB drag or Space+LMB) ───────────────────────────────────────
+    // ── Pan (MMB drag, RMB drag, or Space+LMB) ──────────────────────────
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
         ImVec2 delta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Middle);
         ImGui::ResetMouseDragDelta(ImGuiMouseButton_Middle);
         m_Camera.Pan(delta.x, delta.y);
+    }
+    if (ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
+        ImVec2 delta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Right);
+        ImGui::ResetMouseDragDelta(ImGuiMouseButton_Right);
+        m_Camera.Pan(delta.x, delta.y);
+    }
+
+    // ── Keyboard panning (arrow keys & WASD when not typing) ──────────────
+    if (!io.WantTextInput) {
+        f32 panSpeed = 12.0f * dt / m_Camera.GetZoom();
+        if (ImGui::IsKeyDown(ImGuiKey_UpArrow))    m_Camera.FocusOn(Vec2(m_Camera.GetPosition().x, m_Camera.GetPosition().y + panSpeed));
+        if (ImGui::IsKeyDown(ImGuiKey_DownArrow))   m_Camera.FocusOn(Vec2(m_Camera.GetPosition().x, m_Camera.GetPosition().y - panSpeed));
+        if (ImGui::IsKeyDown(ImGuiKey_LeftArrow))   m_Camera.FocusOn(Vec2(m_Camera.GetPosition().x - panSpeed, m_Camera.GetPosition().y));
+        if (ImGui::IsKeyDown(ImGuiKey_RightArrow))  m_Camera.FocusOn(Vec2(m_Camera.GetPosition().x + panSpeed, m_Camera.GetPosition().y));
     }
 
     // ── Zoom (scroll) ─────────────────────────────────────────────────────

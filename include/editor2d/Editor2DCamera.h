@@ -21,11 +21,11 @@ public:
     Editor2DCamera() = default;
 
     // ── Tuning ─────────────────────────────────────────────────────────────
-    f32 panSensitivity  = 1.0f;    // pixels → world units
-    f32 zoomSpeed       = 0.15f;   // zoom factor per scroll tick
-    f32 minZoom         = 0.05f;   // minimum zoom (max zoom out)
-    f32 maxZoom         = 50.0f;   // maximum zoom (max zoom in)
-    f32 smoothFactor    = 14.0f;   // interpolation smoothness
+    f32 panSensitivity  = 2.5f;    // pixels → world units (higher = faster pan)
+    f32 zoomSpeed       = 0.25f;   // zoom factor per scroll tick
+    f32 minZoom         = 0.02f;   // minimum zoom (max zoom out)
+    f32 maxZoom         = 80.0f;   // maximum zoom (max zoom in)
+    f32 smoothFactor    = 20.0f;   // interpolation smoothness (higher = snappier)
 
     // ── Interface ──────────────────────────────────────────────────────────
 
@@ -66,11 +66,11 @@ public:
 private:
     // Current (smoothed)
     Vec2 m_PosCur  { 0, 0 };
-    f32  m_ZoomCur = 1.0f;
+    f32  m_ZoomCur = 0.15f;   // start zoomed out so objects are visible
 
     // Target
     Vec2 m_PosTgt  { 0, 0 };
-    f32  m_ZoomTgt = 1.0f;
+    f32  m_ZoomTgt = 0.15f;   // start zoomed out
 
     static f32 Lerp(f32 a, f32 b, f32 t) { return a + (b - a) * t; }
     static f32 Clamp(f32 v, f32 lo, f32 hi) { return v < lo ? lo : (v > hi ? hi : v); }
