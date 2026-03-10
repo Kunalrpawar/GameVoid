@@ -5603,8 +5603,8 @@ void EditorUI::DrawInspector2D() {
     // ── Transform (2D: X, Y, Rotation Z, Scale X/Y) ───────────────────────
     if (ImGui::CollapsingHeader("Transform 2D", ImGuiTreeNodeFlags_DefaultOpen)) {
         auto& t = sel->GetTransform();
-        ImGui::DragFloat("X##2DPos",   &t.position.x, 0.1f, -10000, 10000, "%.2f");
-        ImGui::DragFloat("Y##2DPos",   &t.position.y, 0.1f, -10000, 10000, "%.2f");
+        ImGui::DragFloat("X##2DPos",   &t.position.x, 0.5f, -10000, 10000, "%.2f");
+        ImGui::DragFloat("Y##2DPos",   &t.position.y, 0.5f, -10000, 10000, "%.2f");
 
         // Z-depth (for layering)
         ImGui::DragFloat("Z Depth##2D", &t.position.z, 0.1f, -1000, 1000, "%.2f");
