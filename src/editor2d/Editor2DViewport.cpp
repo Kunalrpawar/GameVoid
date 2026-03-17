@@ -550,7 +550,7 @@ void Editor2DViewport::HandleInput(f32 dt, f32 vpX, f32 vpY, f32 vpW, f32 vpH) {
     f32 localMY = mousePos.y - vpY;
 
     // ══════════════════════════════════════════════════════════════════════
-    // PLAY MODE: Route keyboard input to active controllers
+    // PLAY MODE: Route keyboard input to active controllers ONLY
     // ══════════════════════════════════════════════════════════════════════
     if (m_Scene.IsPlaying()) {
         const auto& allObjs = m_Scene.GetAllObjects();
@@ -579,7 +579,7 @@ void Editor2DViewport::HandleInput(f32 dt, f32 vpX, f32 vpY, f32 vpW, f32 vpH) {
                 } else if (ImGui::IsKeyDown(ImGuiKey_D) || ImGui::IsKeyDown(ImGuiKey_RightArrow)) {
                     carCtrl->inputTurn = 1.0f;
                 }
-                return;  // Consume input for car
+                return;  // Consume input for car, don't process anything else
             }
         }
 
@@ -606,15 +606,15 @@ void Editor2DViewport::HandleInput(f32 dt, f32 vpX, f32 vpY, f32 vpW, f32 vpH) {
                 if (ImGui::IsKeyPressed(ImGuiKey_Space) || ImGui::IsKeyPressed(ImGuiKey_W) || ImGui::IsKeyPressed(ImGuiKey_UpArrow)) {
                     platformerCtrl->inputJump = true;
                 }
-                return;  // Consume input for platformer
+                return;  // Consume input for platformer, don't process anything else
             }
         }
-        // If no controller found, still prevent camera panning during play
+        // Play mode with no controller found - don't process any editor input
         return;
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // EDIT MODE: Standard camera and object manipulation
+    // EDIT MODE: Standard camera and object manipulation (only when NOT playing)
     // ══════════════════════════════════════════════════════════════════════
 
     // ── Pan (MMB drag, RMB drag, or Space+LMB) ──────────────────────────
