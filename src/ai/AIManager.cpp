@@ -656,4 +656,193 @@ GameObject* AIManager::GenerateObjectFromPrompt(const std::string& prompt, Scene
     return obj;
 }
 
+// ── 2D Scene Generation ────────────────────────────────────────────────────
+
+std::string AIManager::BuildScene2DGenPrompt(const std::string& userPrompt) const {
+    return
+        "You are a 2D game designer. The user will describe a 2D game scene.\n"
+        "Generate a JSON array of 2D game objects with these properties:\n"
+        "- name (string): object name\n"
+        "- spriteType (string): 'car', 'platform', 'enemy', 'collectible', etc.\n"
+        "- position [x, y]: world position (-10..10 typical range)\n"
+        "- rotation: rotation in degrees\n"
+        "- scale [sx, sy]: scale multiplier\n"
+        "- color [r, g, b, a]: RGBA 0..1\n"
+        "- width, height: sprite dimensions in world units\n"
+        "- controllerType: 'car', 'platformer', 'static', or '' (none)\n"
+        "- physicsType: 'dynamic', 'static', or 'kinematic'\n"
+        "- hasCollider: true/false\n"
+        "- colliderShape: 'box' or 'circle'\n\n"
+        "Respond ONLY with valid JSON array, no markdown, no explanation.\n"
+        "Example:\n"
+        "[\n"
+        "  {\"name\": \"Player Car\", \"spriteType\": \"car\", \"position\": [0, 1], "
+             "\"rotation\": 0, \"scale\": [1, 1], \"color\": [1, 0, 0, 1], "
+             "\"width\": 1.5, \"height\": 1, \"controllerType\": \"car\", "
+             "\"physicsType\": \"dynamic\", \"hasCollider\": true, \"colliderShape\": \"box\"},\n"
+        "  {\"name\": \"Platform\", \"spriteType\": \"platform\", \"position\": [0, -2], "
+             "\"rotation\": 0, \"scale\": [5, 0.5], \"color\": [0.5, 0.5, 0.5, 1], "
+             "\"width\": 5, \"height\": 0.5, \"controllerType\": \"\", "
+             "\"physicsType\": \"static\", \"hasCollider\": true, \"colliderShape\": \"box\"}\n"
+        "]\n\n"
+        "User request: " + userPrompt;
+}
+
+AIManager::SceneGenResult2D AIManager::ParseScene2DGenResponse(const std::string& text) {
+    SceneGenResult2D result;
+
+    // Find JSON array in the text (in case there's extra text)
+    size_t bracketPos = text.find('[');
+    if (bracketPos == std::string::npos) {
+        result.success = false;
+        result.errorMessage = "No JSON array found in response";
+        result.rawResponse = text;
+        return result;
+    }
+
+    // Simple JSON array parsing (very basic — no error handling for malformed JSON)
+    std::string jsonPart = text.substr(bracketPos);
+    size_t endBracket = jsonPart.rfind(']');
+    if (endBracket != std::string::npos) {
+        jsonPart = jsonPart.substr(0, endBracket + 1);
+    }
+
+    // Parse each object in the array
+    size_t pos = 0;
+    while ((pos = jsonPart.find('{', pos)) != std::string::npos) {
+        size_t endPos = jsonPart.find('}', pos);
+        if (endPos == std::string::npos) break;
+
+        std::string objStr = jsonPart.substr(pos, endPos - pos + 1);
+        pos = endPos + 1;
+
+        // Parse individual fields (very naive, string-based)
+        ObjectBlueprint2D bp;
+
+        // Parse name
+        size_t namePos = objStr.find("\"name\"");
+        if (namePos != std::string::npos) {
+            size_t valStart = objStr.find(':', namePos) + 1;
+            size_t quoteStart = objStr.find('\"', valStart);
+            size_t quoteEnd = objStr.find('\"', quoteStart + 1);
+            if (quoteStart != std::string::npos && quoteEnd != std::string::npos) {
+                bp.name = objStr.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
+            }
+        }
+        if (bp.name.empty()) bp.name = "Object_" + std::to_string(result.objects.size());
+
+        // Parse spriteType
+        if (objStr.find("\"spriteType\"") != std::string::npos) {
+            size_t s = objStr.find("\"spriteType\"");
+            size_t q1 = objStr.find('\"', s + 14);
+            size_t q2 = objStr.find('\"', q1 + 1);
+            if (q1 != std::string::npos && q2 != std::string::npos) {
+                bp.spriteType = objStr.substr(q1 + 1, q2 - q1 - 1);
+            }
+        }
+
+        // Parse color [r, g, b, a]
+        if (objStr.find("\"color\"") != std::string::npos) {
+            size_t s = objStr.find("\"color\"");
+            size_t arrayStart = objStr.find('[', s);
+            size_t arrayEnd = objStr.find(']', arrayStart);
+            if (arrayStart != std::string::npos && arrayEnd != std::string::npos) {
+                std::string arrayStr = objStr.substr(arrayStart, arrayEnd - arrayStart + 1);
+                f32 vals[4] = {0.7f, 0.7f, 0.7f, 1.0f};
+                int count = std::sscanf(arrayStr.c_str(), "[%f,%f,%f,%f]", &vals[0], &vals[1], &vals[2], &vals[3]);
+                if (count >= 3) {
+                    bp.color = Vec4(vals[0], vals[1], vals[2], vals[3]);
+                }
+            }
+        }
+
+        // Parse position [x, y]
+        if (objStr.find("\"position\"") != std::string::npos) {
+            size_t s = objStr.find("\"position\"");
+            size_t arrayStart = objStr.find('[', s);
+            size_t arrayEnd = objStr.find(']', arrayStart);
+            if (arrayStart != std::string::npos && arrayEnd != std::string::npos) {
+                std::string arrayStr = objStr.substr(arrayStart, arrayEnd - arrayStart + 1);
+                f32 x = 0, y = 0;
+                std::sscanf(arrayStr.c_str(), "[%f,%f]", &x, &y);
+                bp.position = Vec2(x, y);
+            }
+        }
+
+        // Parse width & height
+        if (objStr.find("\"width\"") != std::string::npos) {
+            size_t s = objStr.find("\"width\"");
+            size_t c = objStr.find(':', s);
+            size_t e = objStr.find(',', c);
+            if (e == std::string::npos) e = objStr.find('}', c);
+            std::string numStr = objStr.substr(c + 1, e - c - 1);
+            bp.width = static_cast<f32>(std::atof(numStr.c_str()));
+        }
+        if (objStr.find("\"height\"") != std::string::npos) {
+            size_t s = objStr.find("\"height\"");
+            size_t c = objStr.find(':', s);
+            size_t e = objStr.find(',', c);
+            if (e == std::string::npos) e = objStr.find('}', c);
+            std::string numStr = objStr.substr(c + 1, e - c - 1);
+            bp.height = static_cast<f32>(std::atof(numStr.c_str()));
+        }
+
+        // Parse controllerType
+        if (objStr.find("\"controllerType\"") != std::string::npos) {
+            size_t s = objStr.find("\"controllerType\"");
+            size_t q1 = objStr.find('\"', s + 18);
+            size_t q2 = objStr.find('\"', q1 + 1);
+            if (q1 != std::string::npos && q2 != std::string::npos) {
+                bp.controllerType = objStr.substr(q1 + 1, q2 - q1 - 1);
+            }
+        }
+
+        // Parse physicsType
+        if (objStr.find("\"physicsType\"") != std::string::npos) {
+            size_t s = objStr.find("\"physicsType\"");
+            size_t q1 = objStr.find('\"', s + 15);
+            size_t q2 = objStr.find('\"', q1 + 1);
+            if (q1 != std::string::npos && q2 != std::string::npos) {
+                bp.physicsType = objStr.substr(q1 + 1, q2 - q1 - 1);
+            }
+        }
+
+        result.objects.push_back(bp);
+    }
+
+    result.success = !result.objects.empty();
+    if (result.success) {
+        result.rawResponse = text;
+    } else {
+        result.errorMessage = "Failed to parse any objects from JSON";
+        result.rawResponse = text;
+    }
+    return result;
+}
+
+AIManager::SceneGenResult2D AIManager::GenerateScene2DFromPrompt(const std::string& userPrompt) const {
+    if (m_Config.apiKey.empty()) {
+        SceneGenResult2D result;
+        result.success = false;
+        result.errorMessage = "API key not set. Call SetAPIKey() or Init() first.";
+        return result;
+    }
+
+    std::string sysPrompt = BuildScene2DGenPrompt(userPrompt);
+    AIResponse resp = SendPrompt(sysPrompt);
+
+    SceneGenResult2D result = ParseScene2DGenResponse(resp.text);
+    result.rawResponse = resp.text;
+
+    if (!result.success) {
+        result.errorMessage = resp.errorMessage;
+        GV_LOG_WARN("AIManager::GenerateScene2DFromPrompt failed: " + result.errorMessage);
+    } else {
+        GV_LOG_INFO("AIManager::GenerateScene2DFromPrompt — generated " + 
+                    std::to_string(result.objects.size()) + " objects.");
+    }
+
+    return result;
+}
+
 } // namespace gv

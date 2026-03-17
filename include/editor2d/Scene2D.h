@@ -505,6 +505,16 @@ private:
                 }
             }
         }
+
+        // 5. Update car controllers
+        for (auto& o : m_Objects) {
+            if (!o->IsActive()) continue;
+            auto* carCtrl = o->GetComponent<CarController2D>();
+            auto* rb = o->GetComponent<RigidBody2D>();
+            if (carCtrl && rb) {
+                carCtrl->UpdateController(dt, rb);
+            }
+        }
     }
 
     // ── Collectible pickup handler ─────────────────────────────────────────

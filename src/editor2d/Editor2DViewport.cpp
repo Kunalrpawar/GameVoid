@@ -549,6 +549,74 @@ void Editor2DViewport::HandleInput(f32 dt, f32 vpX, f32 vpY, f32 vpW, f32 vpH) {
     f32 localMX = mousePos.x - vpX;
     f32 localMY = mousePos.y - vpY;
 
+    // ══════════════════════════════════════════════════════════════════════
+    // PLAY MODE: Route keyboard input to active controllers
+    // ══════════════════════════════════════════════════════════════════════
+    if (m_Scene.IsPlaying()) {
+        const auto& allObjs = m_Scene.GetAllObjects();
+        
+        // FIRST PASS: Look for car controller (prioritize car over platformer)
+        for (auto& o : allObjs) {
+            if (!o || !o->IsActive()) continue;
+            auto* rb = o->GetComponent<RigidBody2D>();
+            if (!rb) continue;
+
+            auto* carCtrl = o->GetComponent<CarController2D>();
+            if (carCtrl) {
+                carCtrl->inputAccel = 0.0f;
+                carCtrl->inputTurn = 0.0f;
+
+                // Acceleration/Braking: W/Up = accel, S/Down = brake
+                if (ImGui::IsKeyDown(ImGuiKey_W) || ImGui::IsKeyDown(ImGuiKey_UpArrow)) {
+                    carCtrl->inputAccel = 1.0f;
+                } else if (ImGui::IsKeyDown(ImGuiKey_S) || ImGui::IsKeyDown(ImGuiKey_DownArrow)) {
+                    carCtrl->inputAccel = -1.0f;
+                }
+
+                // Steering: A/Left = turn left, D/Right = turn right
+                if (ImGui::IsKeyDown(ImGuiKey_A) || ImGui::IsKeyDown(ImGuiKey_LeftArrow)) {
+                    carCtrl->inputTurn = -1.0f;
+                } else if (ImGui::IsKeyDown(ImGuiKey_D) || ImGui::IsKeyDown(ImGuiKey_RightArrow)) {
+                    carCtrl->inputTurn = 1.0f;
+                }
+                return;  // Consume input for car
+            }
+        }
+
+        // SECOND PASS: Look for platformer controller (only if no car found)
+        for (auto& o : allObjs) {
+            if (!o || !o->IsActive()) continue;
+            auto* rb = o->GetComponent<RigidBody2D>();
+            if (!rb) continue;
+
+            auto* platformerCtrl = o->GetComponent<PlatformerController2D>();
+            if (platformerCtrl) {
+                platformerCtrl->inputX = 0.0f;
+                platformerCtrl->inputJump = false;
+                platformerCtrl->inputJumpHeld = ImGui::IsKeyDown(ImGuiKey_Space) || ImGui::IsKeyDown(ImGuiKey_W) || ImGui::IsKeyDown(ImGuiKey_UpArrow);
+
+                // Horizontal movement: A/Left = left, D/Right = right
+                if (ImGui::IsKeyDown(ImGuiKey_A) || ImGui::IsKeyDown(ImGuiKey_LeftArrow)) {
+                    platformerCtrl->inputX = -1.0f;
+                } else if (ImGui::IsKeyDown(ImGuiKey_D) || ImGui::IsKeyDown(ImGuiKey_RightArrow)) {
+                    platformerCtrl->inputX = 1.0f;
+                }
+
+                // Jump: Space or W or Up arrow
+                if (ImGui::IsKeyPressed(ImGuiKey_Space) || ImGui::IsKeyPressed(ImGuiKey_W) || ImGui::IsKeyPressed(ImGuiKey_UpArrow)) {
+                    platformerCtrl->inputJump = true;
+                }
+                return;  // Consume input for platformer
+            }
+        }
+        // If no controller found, still prevent camera panning during play
+        return;
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // EDIT MODE: Standard camera and object manipulation
+    // ══════════════════════════════════════════════════════════════════════
+
     // ── Pan (MMB drag, RMB drag, or Space+LMB) ──────────────────────────
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
         ImVec2 delta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Middle);

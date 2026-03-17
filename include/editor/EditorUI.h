@@ -154,6 +154,7 @@ private:
     void AISpawnBlueprints();   // instantiate parsed blueprints into scene
     void AISpawnBlueprintsFrom(const std::vector<AIManager::ObjectBlueprint>& blueprints);
     void AISpawnBlueprints2D(const std::vector<AIManager::ObjectBlueprint>& blueprints);
+    void AISpawnBlueprints2D(const std::vector<AIManager::ObjectBlueprint2D>& blueprints);
     void AIUndoLastGeneration();
 
     // ── 2D clipboard helpers ───────────────────────────────────────────────

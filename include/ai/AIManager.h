@@ -145,6 +145,40 @@ public:
     using ResponseCallback = std::function<void(const AIResponse&)>;
     void SendPromptAsync(const std::string& prompt, ResponseCallback cb) const;
 
+    // ── 2D Scene generation ────────────────────────────────────────────────
+    /// 2D object blueprint with controller type for gameplay.
+    struct ObjectBlueprint2D {
+        std::string name;
+        std::string spriteType;     // "car", "platform", "collectible", etc.
+        Vec2 position { 0, 0 };
+        f32  rotation = 0.0f;       // degrees
+        Vec2 scale    { 1, 1 };
+        Vec4 color    { 0.7f, 0.7f, 0.7f, 1.0f };
+        f32  width    = 1.0f;
+        f32  height   = 1.0f;
+        std::string controllerType; // "car", "platformer", "static", ""
+        std::string physicsType;    // "dynamic", "static", "kinematic"
+        bool hasCollider = true;
+        std::string colliderShape;  // "box", "circle"
+    };
+
+    /// Result of 2D scene generation.
+    struct SceneGenResult2D {
+        bool success = false;
+        std::string errorMessage;
+        std::string rawResponse;
+        std::vector<ObjectBlueprint2D> objects;
+    };
+
+    /// Build the system prompt for 2D generation (constrains to valid JSON).
+    std::string BuildScene2DGenPrompt(const std::string& userPrompt) const;
+
+    /// Parse the AI response text into 2D ObjectBlueprints.
+    static SceneGenResult2D ParseScene2DGenResponse(const std::string& text);
+
+    /// High-level: send prompt, parse, return 2D blueprints with controllers.
+    SceneGenResult2D GenerateScene2DFromPrompt(const std::string& userPrompt) const;
+
 private:
     /// Build the full request URL for the configured model.
     std::string BuildRequestURL() const;

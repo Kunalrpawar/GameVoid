@@ -534,4 +534,65 @@ public:
     void Die()      { lives--; if (lives <= 0) gameOver = true; }
 };
 
+// ============================================================================
+// CarController2D — 2D car/vehicle controller
+// ============================================================================
+// Attach to a car GameObject with RigidBody2D + Collider2D.
+// Handles acceleration, braking, turning, and drift physics.
+// ============================================================================
+class CarController2D : public Component {
+public:
+    std::string GetTypeName() const override { return "CarController2D"; }
+
+    // ── Movement & physics ─────────────────────────────────────────────────
+    f32  maxSpeed           = 15.0f;   // top speed
+    f32  acceleration       = 20.0f;   // acceleration force
+    f32  brakingPower       = 30.0f;   // braking deceleration
+    f32  turnSpeed          = 180.0f;  // degrees per second rotation
+    f32  driftFriction      = 0.9f;    // friction multiplier when drifting
+
+    // ── Runtime state ──────────────────────────────────────────────────────
+    f32  currentSpeed       = 0.0f;    // current forward speed (magnitude)
+    f32  inputAccel         = 0.0f;    // -1..+1 (negative = brake/reverse)
+    f32  inputTurn          = 0.0f;    // -1..+1 (negative = left, positive = right)
+    f32  carHeading         = 0.0f;    // facing direction in degrees
+    bool isDrifting         = false;
+
+    /// Call every frame with input. Updates the RigidBody2D velocity and rotation.
+    void UpdateController(f32 dt, RigidBody2D* rb) {
+        if (!rb) return;
+
+        // Clamp inputs
+        inputAccel = std::max(-1.0f, std::min(1.0f, inputAccel));
+        inputTurn  = std::max(-1.0f, std::min(1.0f, inputTurn));
+
+        // Speed changes
+        if (std::fabs(inputAccel) > 0.01f) {
+            currentSpeed += inputAccel * acceleration * dt;
+        } else {
+            // Natural friction
+            currentSpeed *= 0.95f;
+            if (std::fabs(currentSpeed) < 0.1f) currentSpeed = 0.0f;
+        }
+
+        // Heading rotation
+        if (std::fabs(inputTurn) > 0.01f) {
+            carHeading += inputTurn * turnSpeed * dt;
+        }
+
+        // Normalize heading to 0..360
+        while (carHeading < 0.0f) carHeading += 360.0f;
+        while (carHeading >= 360.0f) carHeading -= 360.0f;
+
+        // Clamp speed to max
+        f32 speedSign = currentSpeed < 0.0f ? -1.0f : 1.0f;
+        currentSpeed = speedSign * std::min(std::fabs(currentSpeed), maxSpeed);
+
+        // Convert heading to radians and compute velocity
+        f32 headingRad = carHeading * (3.14159265f / 180.0f);
+        rb->velocity.x = std::cos(headingRad) * currentSpeed;
+        rb->velocity.y = std::sin(headingRad) * currentSpeed;
+    }
+};
+
 } // namespace gv
