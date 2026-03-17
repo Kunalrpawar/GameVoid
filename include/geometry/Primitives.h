@@ -4,6 +4,7 @@
 #include <vector>
 #include <string>
 #include <cstdint>
+#include <cmath>
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Primitives.h  —  Base geometric primitive definitions
