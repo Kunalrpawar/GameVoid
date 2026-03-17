@@ -2700,6 +2700,47 @@ void EditorUI::AISpawnBlueprints() {
 void EditorUI::AISpawnBlueprintsFrom(const std::vector<AIManager::ObjectBlueprint>& blueprints) {
     if (!m_Scene) return;
 
+    // ── Detect vehicle assemblies ──────────────────────────────────────────
+    // Car sub-part keywords: these parts are VISUAL ONLY — no separate rigidbody
+    // to prevent chaotic inter-part collisions.
+    auto isCarSubPart = [](const std::string& name) -> bool {
+        static const char* kw[] = {
+            "wheel", "cabin", "windshield", "headlight", "taillight",
+            "mirror", "antenna", "bumper", "door", "roof", "hood",
+            "seat", "window", "tyre", "tire", "vent", "handle",
+            "rack", "signal", "fog", "bar_", "light_", nullptr
+        };
+        std::string lower = name;
+        for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        for (int i = 0; kw[i]; i++)
+            if (lower.find(kw[i]) != std::string::npos) return true;
+        return false;
+    };
+    auto isCarRoot = [](const std::string& name) -> bool {
+        std::string lower = name;
+        for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return lower.find("car_body") != std::string::npos ||
+               lower.find("carbody") != std::string::npos ||
+               lower.find("vehicle_body") != std::string::npos;
+    };
+    auto isGroundObj = [](const std::string& name) -> bool {
+        std::string lower = name;
+        for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return lower.find("ground") != std::string::npos ||
+               lower.find("floor") != std::string::npos ||
+               lower.find("road") != std::string::npos ||
+               lower.find("platform") != std::string::npos ||
+               lower.find("surface") != std::string::npos ||
+               lower.find("pavement") != std::string::npos;
+    };
+
+    // Check if this batch contains a vehicle assembly
+    bool hasCar = false;
+    for (const auto& bp : blueprints)
+        if (isCarRoot(bp.name)) { hasCar = true; break; }
+
+    GameObject* carRootObj = nullptr;
+
     for (size_t i = 0; i < blueprints.size(); i++) {
         const auto& bp = blueprints[i];
         auto* obj = m_Scene->CreateGameObject(bp.name);
@@ -2708,13 +2749,12 @@ void EditorUI::AISpawnBlueprintsFrom(const std::vector<AIManager::ObjectBlueprin
         obj->GetTransform().SetScale(bp.scale.x, bp.scale.y, bp.scale.z);
 
         auto* mr = obj->AddComponent<MeshRenderer>();
-        // Map meshType string to PrimitiveType
         if (bp.meshType == "triangle")
             mr->primitiveType = PrimitiveType::Triangle;
         else
             mr->primitiveType = PrimitiveType::Cube;
 
-        // Parse colour from materialName "r,g,b,a"
+        // Parse colour
         f32 r = 0.7f, g = 0.7f, b = 0.7f, a = 1.0f;
         if (!bp.materialName.empty()) {
             int parsed = std::sscanf(bp.materialName.c_str(), "%f,%f,%f,%f", &r, &g, &b, &a);
@@ -2722,8 +2762,36 @@ void EditorUI::AISpawnBlueprintsFrom(const std::vector<AIManager::ObjectBlueprin
         }
         mr->color = Vec4(r, g, b, a);
 
-        // Physics if flagged
-        if (bp.scriptSnippet == "physics") {
+        // ── Physics assignment ─────────────────────────────────────────────
+        if (hasCar && isCarSubPart(bp.name)) {
+            // Car sub-parts: NO physics — purely visual, parented to car root
+            // This prevents inter-part collisions causing spin chaos
+        } else if (hasCar && isCarRoot(bp.name)) {
+            // Car root: Dynamic RigidBody — single compound body for the whole car
+            auto* rb = obj->AddComponent<RigidBody>();
+            rb->useGravity = true;
+            rb->angularDrag = 0.95f;  // Heavy damping prevents unwanted spinning
+            rb->drag = 0.2f;
+            auto* col = obj->AddComponent<Collider>();
+            col->type = ColliderType::Box;
+            col->boxHalfExtents = Vec3(1.0f, 0.4f, 2.0f);  // Sedan-sized hitbox
+            if (m_Physics) m_Physics->RegisterBody(rb);
+            auto* carCtrl = obj->AddComponent<CarController3D>();
+            carCtrl->maxSpeed = 20.0f;
+            carCtrl->acceleration = 15.0f;
+            carCtrl->turnSpeed = 90.0f;
+            carRootObj = obj;
+            PushLog("[AI] Attached CarController3D to '" + bp.name + "'");
+        } else if (isGroundObj(bp.name)) {
+            // Ground/platform: Static collider — does not move
+            auto* rb = obj->AddComponent<RigidBody>();
+            rb->bodyType = RigidBodyType::Static;
+            rb->useGravity = false;
+            auto* col = obj->AddComponent<Collider>();
+            col->type = ColliderType::Box;
+            if (m_Physics) m_Physics->RegisterBody(rb);
+        } else if (bp.scriptSnippet == "physics") {
+            // Other physics objects (not car parts)
             auto* rb = obj->AddComponent<RigidBody>();
             rb->useGravity = true;
             obj->AddComponent<Collider>()->type = ColliderType::Box;
