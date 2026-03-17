@@ -1980,22 +1980,28 @@ void EditorUI::DrawViewport(f32 dt) {
             dl->AddLine(ImVec2(cx, cy - crossSz), ImVec2(cx, cy + crossSz), IM_COL32(255, 255, 255, 100), 1.0f);
         }
 
-        // ── 3D Play mode: CarController3D HUD ──────────────────────────
+        // ── 3D Play mode: controller HUD ───────────────────────────────
         if (m_Playing && m_DimMode == EditorDimMode::Mode3D && m_Scene) {
-            CarController3D* carCtrl = nullptr;
+            bool hasCarCtrl = false;
+            bool hasForceCtrl = false;
             for (auto& obj : m_Scene->GetAllObjects()) {
-                if (obj) { carCtrl = obj->GetComponent<CarController3D>(); if (carCtrl) break; }
+                if (!obj) continue;
+                if (obj->GetComponent<CarController3D>()) hasCarCtrl = true;
+                if (obj->GetComponent<ForceController>()) hasForceCtrl = true;
+                if (hasCarCtrl || hasForceCtrl) break;
             }
-            if (carCtrl) {
+            if (hasCarCtrl || hasForceCtrl) {
                 ImDrawList* dl3 = ImGui::GetForegroundDrawList();
-                const char* carHud = "PLAY | W/S = Throttle/Brake   A/D = Steer   Stop = Stop button";
-                ImVec2 hSz = ImGui::CalcTextSize(carHud);
+                const char* hud = hasCarCtrl
+                    ? "PLAY | Controller: car | W/S throttle, A/D steer"
+                    : "PLAY | Controller: force | W/A/S/D apply force";
+                ImVec2 hSz = ImGui::CalcTextSize(hud);
                 float bx = m_VpScreenX + 8, by = m_VpScreenY + 8;
                 dl3->AddRectFilled(ImVec2(bx, by), ImVec2(bx + hSz.x + 16, by + hSz.y + 8),
                                    IM_COL32(20, 30, 20, 210), 4.0f);
                 dl3->AddRect(ImVec2(bx, by), ImVec2(bx + hSz.x + 16, by + hSz.y + 8),
                              IM_COL32(60, 200, 80, 200), 4.0f);
-                dl3->AddText(ImVec2(bx + 8, by + 4), IM_COL32(80, 240, 100, 255), carHud);
+                dl3->AddText(ImVec2(bx + 8, by + 4), IM_COL32(80, 240, 100, 255), hud);
             }
         }
     }

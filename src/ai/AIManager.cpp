@@ -419,14 +419,17 @@ std::string AIManager::BuildSceneGenPrompt(const std::string& userPrompt) const 
         "  \"rotation\": [rx, ry, rz]  (degrees),\n"
         "  \"scale\": [sx, sy, sz],\n"
         "  \"color\": [r, g, b, a]  (0-1 floats),\n"
-        "  \"hasPhysics\": true/false\n"
+    "  \"physicsRole\": \"none\" | \"dynamic\" | \"static\" | \"kinematic\",\n"
+    "  \"controller\": \"\" | \"car\" | \"force\",\n"
+    "  \"scriptSnippet\": string (optional inline script, can be empty),\n"
+    "  \"hasPhysics\": true/false (legacy optional)\n"
         "\n"
         "RULES:\n"
         "- Output ONLY the JSON array, nothing else. No markdown, no comments.\n"
         "- Ground/floor at Y=0. Objects above Y=0.\n"
         "- Use 5-30 objects. Be creative with placement.\n"
         "- Use varied colours.\n"
-        "- Gravity objects: hasPhysics=true.\n"
+    "- If an object should move with physics, set physicsRole=dynamic.\n"
         "\n"
         "Scene description: " + userPrompt;
 }
@@ -522,6 +525,9 @@ AIManager::SceneGenResult AIManager::ParseSceneGenResponse(const std::string& ra
         bp.meshType = "cube";
         f32 color[4] = { 0.7f, 0.7f, 0.7f, 1.0f };
         bool hasPhysics = false;
+        std::string physicsRole;
+        std::string controller;
+        std::string inlineScript;
 
         // Parse key-value pairs
         while (pos < text.size() && text[pos] != '}') {
@@ -539,6 +545,9 @@ AIManager::SceneGenResult AIManager::ParseSceneGenResponse(const std::string& ra
             else if (key == "scale")    { f32 v[3]; parseNumArray(v, 3); bp.scale = Vec3(v[0], v[1], v[2]); }
             else if (key == "color")    { parseNumArray(color, 4); }
             else if (key == "hasPhysics") hasPhysics = parseBool();
+            else if (key == "physicsRole") physicsRole = parseString();
+            else if (key == "controller" || key == "controllerType") controller = parseString();
+            else if (key == "scriptSnippet") inlineScript = parseString();
             else {
                 // Skip unknown value
                 if (pos < text.size() && text[pos] == '"') parseString();
@@ -568,8 +577,29 @@ AIManager::SceneGenResult AIManager::ParseSceneGenResponse(const std::string& ra
         // Store colour in materialName as "r,g,b,a" for later parsing
         bp.materialName = std::to_string(color[0]) + "," + std::to_string(color[1]) + ","
                         + std::to_string(color[2]) + "," + std::to_string(color[3]);
-        // Store hasPhysics in scriptSnippet field as a flag
-        bp.scriptSnippet = hasPhysics ? "physics" : "";
+        // Encode gameplay metadata into scriptSnippet directives so EditorUI
+        // can apply scene-agnostic setup from AI output.
+        std::string directives;
+        if (!physicsRole.empty()) {
+            directives += "physics:" + physicsRole;
+        } else if (hasPhysics) {
+            directives += "physics:dynamic";
+        }
+        if (!controller.empty()) {
+            if (!directives.empty()) directives += ";";
+            directives += "controller:" + controller;
+        }
+
+        if (!inlineScript.empty() && directives.empty()) {
+            bp.scriptSnippet = inlineScript;
+        } else if (!inlineScript.empty()) {
+            std::replace(inlineScript.begin(), inlineScript.end(), ';', ',');
+            if (!directives.empty()) directives += ";";
+            directives += "script:" + inlineScript;
+            bp.scriptSnippet = directives;
+        } else {
+            bp.scriptSnippet = directives;
+        }
 
         result.objects.push_back(bp);
     }
