@@ -1,15 +1,16 @@
 #pragma once
 #include "core/Component.h"
 #include "core/Math.h"
+#include "core/GameObject.h"
+#include "physics/Physics.h"
+#include <imgui.h>
+#include <algorithm>
+#include <cmath>
 
-// CarController3D — attached exclusively to the car_body (the single compound RigidBody
-// representing the whole vehicle).  All other car parts are visual-only children.
-//
-// Integration: call UpdateController(dt, rb) from the physics step or editor play loop.
-// Input:  set inputForward / inputTurn from keyboard / gamepad each frame before Update.
+namespace gv {
 
-class RigidBody;
-
+// CarController3D can run on any dynamic body and can consume either
+// editor keyboard input directly or externally supplied input values.
 class CarController3D : public Component {
 public:
     // ── Tuning ────────────────────────────────────────────────────────────────
@@ -24,10 +25,28 @@ public:
     // ── Per-frame input  (set by EditorUI / keyboard handler) ─────────────────
     float inputForward = 0.0f;   // -1 = reverse,  0 = neutral,  +1 = accelerate
     float inputTurn    = 0.0f;   // -1 = left,      0 = straight, +1 = right
+    bool  useEditorKeyboardInput = true;
 
     // ── Runtime state ─────────────────────────────────────────────────────────
     float currentSpeed = 0.0f;   // signed: positive = forward
     float heading      = 0.0f;   // yaw in degrees (world Y axis)
+
+    std::string GetTypeName() const override { return "CarController3D"; }
+
+    void OnUpdate(f32 dt) override {
+        auto* owner = GetOwner();
+        if (!owner) return;
+
+        if (useEditorKeyboardInput) {
+            inputForward = (ImGui::IsKeyDown(ImGuiKey_W) ? 1.0f : 0.0f)
+                         - (ImGui::IsKeyDown(ImGuiKey_S) ? 1.0f : 0.0f);
+            inputTurn = (ImGui::IsKeyDown(ImGuiKey_D) ? 1.0f : 0.0f)
+                      - (ImGui::IsKeyDown(ImGuiKey_A) ? 1.0f : 0.0f);
+        }
+
+        auto* rb = owner->GetComponent<RigidBody>();
+        UpdateController(dt, rb);
+    }
 
     // Called every physics step with the car's single RigidBody.
     void UpdateController(float dt, RigidBody* rb) {
@@ -71,11 +90,13 @@ public:
         rb->angularVelocity = rb->angularVelocity * angularDamp;
 
         // Sync transform yaw so the mesh faces the right direction
-        if (owner) {
-            auto& t = owner->GetTransform();
+        if (GetOwner()) {
+            auto& t = GetOwner()->GetTransform();
             Vec3 euler = t.GetEulerDeg();
             euler.y = heading;
             t.SetEulerDeg(euler.x, euler.y, euler.z);
         }
     }
 };
+
+} // namespace gv

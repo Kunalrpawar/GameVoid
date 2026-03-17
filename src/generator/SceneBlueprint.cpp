@@ -3,8 +3,38 @@
 #include "core/GameObject.h"
 #include "physics/Physics.h"
 #include "renderer/MeshRenderer.h"
+#include "scripting/ScriptEngine.h"
+#include "scripting/physics/ForceController.h"
 #include "vehicle/CarController3D.h"
 #include <sstream>
+#include <algorithm>
+
+namespace {
+
+static std::string ToLowerCopy(const std::string& in) {
+    std::string out = in;
+    std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return out;
+}
+
+static PrimitiveType PrimitiveFromTypeName(const std::string& typeName) {
+    const std::string t = ToLowerCopy(typeName);
+    if (t == "triangle") return PrimitiveType::Triangle;
+    if (t == "plane" || t == "ground" || t == "floor") return PrimitiveType::Plane;
+    return PrimitiveType::Cube;
+}
+
+static std::string CanonicalPhysicsRole(const std::string& roleIn) {
+    const std::string role = ToLowerCopy(roleIn);
+    if (role == "dynamic") return "dynamic";
+    if (role == "static") return "static";
+    if (role == "kinematic") return "kinematic";
+    return "none";
+}
+
+}
 
 // ─── SceneBlueprint3D ─────────────────────────────────────────────────────────
 
@@ -65,18 +95,50 @@ GameObject* SceneGenerator3D::SpawnObject(const ObjectBlueprint3D& bp, GameObjec
     obj->GetTransform().SetScale(bp.scale.x, bp.scale.y, bp.scale.z);
 
     auto* mr = obj->AddComponent<MeshRenderer>();
-    mr->primitiveType = PrimitiveType::Cube;
+    mr->primitiveType = PrimitiveFromTypeName(bp.typeName);
     mr->color = bp.color;
 
-    if (bp.physicsRole == "dynamic") {
-        auto* rb = obj->AddComponent<RigidBody>(); rb->useGravity = true; rb->angularDrag = 0.95f;
-        obj->AddComponent<Collider>()->type = ColliderType::Box;
+    const std::string role = CanonicalPhysicsRole(bp.physicsRole);
+    if (role != "none") {
+        auto* rb = obj->AddComponent<RigidBody>();
+        auto* col = obj->AddComponent<Collider>();
+        col->type = ColliderType::Box;
+
+        if (role == "dynamic") {
+            rb->bodyType = RigidBodyType::Dynamic;
+            rb->useGravity = true;
+            rb->angularDrag = 0.95f;
+        } else if (role == "static") {
+            rb->bodyType = RigidBodyType::Static;
+            rb->useGravity = false;
+        } else if (role == "kinematic") {
+            rb->bodyType = RigidBodyType::Kinematic;
+            rb->useGravity = false;
+        }
+
         if (m_Physics) m_Physics->RegisterBody(rb);
-        if (bp.controller == "car") obj->AddComponent<CarController3D>();
-    } else if (bp.physicsRole == "static") {
-        auto* rb = obj->AddComponent<RigidBody>(); rb->bodyType = RigidBodyType::Static; rb->useGravity = false;
-        obj->AddComponent<Collider>()->type = ColliderType::Box;
-        if (m_Physics) m_Physics->RegisterBody(rb);
+    }
+
+    const std::string controller = ToLowerCopy(bp.controller);
+    if (controller == "car") {
+        obj->AddComponent<CarController3D>();
+    } else if (controller == "force") {
+        auto* fc = obj->AddComponent<ForceController>();
+        fc->BindKeyToForce("W", ForceDirection::Forward, 35.0f);
+        fc->BindKeyToForce("S", ForceDirection::Backward, 35.0f);
+        fc->BindKeyToForce("A", ForceDirection::Left, 18.0f);
+        fc->BindKeyToForce("D", ForceDirection::Right, 18.0f);
+    }
+
+    if (!bp.scriptTag.empty()) {
+        auto* sc = obj->AddComponent<ScriptComponent>();
+        std::string tag = bp.scriptTag;
+        const std::string lowered = ToLowerCopy(tag);
+        if (lowered.rfind("file:", 0) == 0) {
+            sc->SetScriptPath(tag.substr(5));
+        } else {
+            sc->SetSource(bp.scriptTag);
+        }
     }
 
     for (auto& child : bp.children) SpawnObject(child, obj);
