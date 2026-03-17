@@ -32,6 +32,7 @@
 #include "scripting/ScriptEngine.h"
 #include "editor/UndoRedo.h"
 #include "assets/Assets.h"
+#include "vehicle/CarController3D.h"
 #include "editor2d/Editor2DTypes.h"
 #include "editor2d/Editor2DViewport.h"
 #include "editor2d/Pathfinding2D.h"
