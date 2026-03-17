@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <cmath>
 
+namespace gv {
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Primitives.h  —  Base geometric primitive definitions
 //  All primitives produce indexed triangle meshes (positions + normals + UVs).
@@ -72,3 +74,5 @@ namespace Primitives {
                    float length = 1.0f, float headFraction = 0.3f);
 
 } // namespace Primitives
+
+} // namespace gv

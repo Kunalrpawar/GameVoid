@@ -6,6 +6,8 @@
 #include "renderer/MeshRenderer.h"
 #include <cmath>
 
+using namespace gv;
+
 /* ─── VehicleBlueprint pre-built templates ─────────────────────────────── */
 
 VehicleBlueprint VehicleBlueprint::MakeSedanTemplate() {

@@ -3,6 +3,9 @@
 #include "core/Math.h"
 #include <vector>
 
+using gv::Vec2;
+using gv::Vec3;
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  CSGOperations.h  —  Constructive Solid Geometry
 //

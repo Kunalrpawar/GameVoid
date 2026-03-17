@@ -1,13 +1,15 @@
 #pragma once
 #include "core/Component.h"
 #include "core/Math.h"
+#include "core/GameObject.h"
+#include "physics/Physics.h"
 #include <cmath>
 #include <string>
 
-namespace gv { class RigidBody; }
+namespace gv {
 
 // CarController3D can run on any dynamic body.
-class CarController3D : public gv::Component {
+class CarController3D : public Component {
 public:
     // Tuning
     float maxSpeed       = 20.0f;   // m/s forward top speed
@@ -29,7 +31,7 @@ public:
     std::string GetTypeName() const override { return "CarController3D"; }
 
     // Called every physics step with the car's single RigidBody.
-    void UpdateController(float dt, gv::RigidBody* rb) {
+    void UpdateController(float dt, RigidBody* rb) {
         if (!rb) return;
 
         // -- Acceleration / braking -----------------------------------------
@@ -61,8 +63,8 @@ public:
 
         // -- Drive heading direction ----------------------------------------
         float rad = heading * (3.14159265f / 180.0f);
-        gv::Vec3 fwd(std::sin(rad), 0.0f, std::cos(rad));
-        gv::Vec3 newVel = fwd * currentSpeed;
+        Vec3 fwd(std::sin(rad), 0.0f, std::cos(rad));
+        Vec3 newVel = fwd * currentSpeed;
         newVel.y = rb->velocity.y;  // preserve gravity / fall velocity
         rb->velocity = newVel;
 
@@ -72,9 +74,11 @@ public:
         // Sync transform yaw so the mesh faces the right direction
         if (GetOwner()) {
             auto& t = GetOwner()->GetTransform();
-            gv::Vec3 euler = t.GetEulerDeg();
+            Vec3 euler = t.GetEulerDeg();
             euler.y = heading;
             t.SetEulerDeg(euler.x, euler.y, euler.z);
         }
     }
 };
+
+} // namespace gv

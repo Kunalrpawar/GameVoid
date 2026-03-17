@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <stdexcept>
 
+using namespace gv;
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  HEMesh  —  Build from indexed triangle list
 // ─────────────────────────────────────────────────────────────────────────────

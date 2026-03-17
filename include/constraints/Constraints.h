@@ -3,6 +3,9 @@
 #include "core/Math.h"
 #include <vector>
 
+using gv::Component;
+using gv::Vec3;
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Physics Constraints  —  Joint types for multi-body dynamics
 //

@@ -5,6 +5,8 @@
 #include <functional>
 #include <cstdint>
 
+using Vec3 = gv::Vec3;
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  NoiseGen.h  —  2D / 3D noise functions for procedural generation
 // ─────────────────────────────────────────────────────────────────────────────

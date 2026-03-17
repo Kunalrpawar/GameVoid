@@ -4,6 +4,8 @@
 #include <vector>
 #include <functional>
 
+namespace gv {
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  MeshBuilder.h  —  Fluent API for assembling complex meshes from primitives.
 //
@@ -64,3 +66,5 @@ private:
 
     static MeshData TransformMesh(MeshData mesh, Vec3 t, Vec3 rDeg, Vec3 s);
 };
+
+} // namespace gv

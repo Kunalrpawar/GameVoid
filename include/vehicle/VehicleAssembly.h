@@ -4,6 +4,8 @@
 #include "core/Math.h"
 #include "core/Types.h"
 
+namespace gv {
+
 // VehicleAssembly — describes how a multi-mesh vehicle is constructed from sub-parts.
 // The root GameObject holds a single CarController3D + RigidBody (compound body).
 // All sub-part GameObjects are purely visual — no individual physics shapes.
@@ -51,3 +53,5 @@ public:
     // Call each frame during play to spin wheel meshes based on car speed
     static void UpdateWheelSpin(GameObject* carRoot, float speed, float dt);
 };
+
+} // namespace gv

@@ -4,6 +4,8 @@
 #include <vector>
 #include <unordered_map>
 
+namespace gv {
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Topology.h  —  Half-edge mesh representation and topological analysis.
 //
@@ -100,3 +102,5 @@ public:
     // Detect self-intersecting triangle pairs (expensive O(n²) naive check)
     static std::vector<std::pair<int,int>> FindSelfIntersections(const MeshData& mesh);
 };
+
+} // namespace gv

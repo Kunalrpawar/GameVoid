@@ -4,6 +4,10 @@
 #include <vector>
 #include <functional>
 
+using gv::Mat4;
+using gv::Vec2;
+using gv::Vec3;
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  MeshOps.h  —  Post-process operations on MeshData
 //

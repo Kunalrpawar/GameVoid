@@ -2,6 +2,8 @@
 #include "geometry/Primitives.h"
 #include <cstdio>
 
+using namespace gv;
+
 // ─── AssemblyNode ─────────────────────────────────────────────────────────────
 
 AssemblyNode& AssemblyNode::AddChild(const std::string& n, MeshData m, Vec3 t, Vec3 r, Vec3 s) {

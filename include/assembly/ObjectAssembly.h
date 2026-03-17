@@ -7,6 +7,8 @@
 #include <memory>
 #include <functional>
 
+namespace gv {
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  ObjectAssembly.h  —  Compose complex objects from primitive parts
 //
@@ -80,3 +82,5 @@ struct AssemblyBlueprint {
     static AssemblyBlueprint Tree(const std::string& name = "tree");
     static AssemblyBlueprint Table(const std::string& name = "table");
 };
+
+} // namespace gv
