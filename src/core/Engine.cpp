@@ -11,6 +11,7 @@
 #include "renderer/MaterialComponent.h"
 #include "scripting/NativeScript.h"
 #include "scripting/ScriptEngine.h"
+#include "vehicle/CarController3D.h"
 #ifdef GV_HAS_GLFW
 #include "core/GLDefs.h"
 #endif
@@ -233,6 +234,20 @@ void Engine::Run() {
 
             // Physics (when playing)
             if (m_Config.enablePhysics && m_EditorUI.IsPlaying()) {
+                // Route WASD to CarController3D components (if any in scene).
+                for (auto& obj : scene->GetAllObjects()) {
+                    if (!obj) continue;
+                    auto* carCtrl = obj->GetComponent<CarController3D>();
+                    if (!carCtrl) continue;
+                    auto* rb = obj->GetComponent<RigidBody>();
+                    carCtrl->inputForward = (m_Window.IsKeyDown(GVKey::W) ? 1.0f : 0.0f)
+                                          - (m_Window.IsKeyDown(GVKey::S) ? 1.0f : 0.0f);
+                    carCtrl->inputTurn = (m_Window.IsKeyDown(GVKey::D) ? 1.0f : 0.0f)
+                                       - (m_Window.IsKeyDown(GVKey::A) ? 1.0f : 0.0f);
+                    carCtrl->UpdateController(dt, rb);
+                    break;
+                }
+
                 m_Physics.Step(dt);
                 // Dispatch collision events
                 for (auto& col : m_Physics.GetCollisions()) {

@@ -8,6 +8,7 @@
 #include "vehicle/CarController3D.h"
 #include <sstream>
 #include <algorithm>
+#include <cctype>
 
 namespace {
 

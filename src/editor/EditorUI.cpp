@@ -47,6 +47,7 @@
 #include <cstdio>
 #include <cmath>
 #include <cfloat>
+#include <cctype>
 #include <fstream>
 #include <sstream>
 #include <cstring>
