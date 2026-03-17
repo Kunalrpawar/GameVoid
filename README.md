@@ -18,7 +18,7 @@ GameVoid is a **vibe-coding game engine** — instead of hand-placing every obje
 
 Want a cyberpunk city with neon buildings? Type it. Need a 2D platformer with ground, platforms, and coins? Just ask. GameVoid uses **Google Gemini AI** to turn your ideas into playable scenes in seconds.
 
-It's a full-featured 2D/3D game editor with a Godot-style UI, built from scratch in C++ with OpenGL. Whether you're a beginner who's never touched a game engine or an experienced dev who wants to prototype fast, GameVoid gets you from idea to game with minimal friction.
+It's a full-featured 2D/3D game editor with a  UI, built from scratch in C++ with OpenGL. Whether you're a beginner who's never touched a game engine or an experienced dev who wants to prototype fast, GameVoid gets you from idea to game with minimal friction.
 
 ---
 
@@ -50,7 +50,7 @@ Hit **Generate** and watch your scene appear. The AI creates game objects with p
 Talk directly to Gemini 3.0 inside the editor. Ask about game design, get help with gameplay logic, brainstorm level ideas — all without leaving the engine. It's like having a game dev mentor built into your tools.
 
 ### Full 2D + 3D Editor
-A Godot-style editor layout with:
+A  editor layout with:
 - **Hierarchy Panel** — see and organize all objects in your scene (tree view with drag-and-drop parenting)
 - **Viewport** — real-time 3D view with orbit camera, gizmos for translate/rotate/scale (W/E/R keys), grid, wireframe toggle, and a fully separate 2D viewport with pan/zoom
 - **Inspector** — edit transforms, tweak components, adjust materials, physics properties, and more

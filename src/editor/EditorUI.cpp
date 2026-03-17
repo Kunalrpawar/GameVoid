@@ -218,7 +218,7 @@ void EditorUI::Render(f32 dt) {
         if (ImGui::IsKeyPressed(ImGuiKey_Z) && !io.KeyCtrl) { m_ShowWireframe = !m_ShowWireframe; }
         // Jump to floor center (Home key)
         if (ImGui::IsKeyPressed(ImGuiKey_Home)) {
-            m_EditorCam.SetOrbitState(Vec3(0, 0, 0), 30.0f, -25.0f, 15.0f);
+            m_EditorCam.SetOrbitState(Vec3(0, 0, 0), 45.0f, -30.0f, 20.0f);
             PushLog("[Viewport] Jumped to floor center");
         }
     }
@@ -593,7 +593,7 @@ void EditorUI::DrawMenuBar() {
             }
             ImGui::Separator();
             if (ImGui::MenuItem("Jump to Floor Center", "Home")) {
-                m_EditorCam.SetOrbitState(Vec3(0, 0, 0), 30.0f, -25.0f, 15.0f);
+                m_EditorCam.SetOrbitState(Vec3(0, 0, 0), 45.0f, -30.0f, 20.0f);
                 PushLog("[Viewport] Jumped to floor center");
             }
             ImGui::Separator();
@@ -722,7 +722,7 @@ void EditorUI::DrawToolbar() {
     // Jump-to-center button — teleports camera to look at floor center
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.4f, 1.0f));
     if (ImGui::Button("Center")) {
-        m_EditorCam.SetOrbitState(Vec3(0, 0, 0), 30.0f, -25.0f, 15.0f);
+        m_EditorCam.SetOrbitState(Vec3(0, 0, 0), 45.0f, -30.0f, 20.0f);
         PushLog("[Viewport] Jumped to floor center");
     }
     ImGui::PopStyleColor();
@@ -1946,7 +1946,7 @@ void EditorUI::DrawViewport(f32 dt) {
                 }
                 break;
             case ViewportAction::ResetView:
-                m_EditorCam.SetOrbitState(Vec3(0,0,0), 30.0f, -25.0f, 18.0f);
+                m_EditorCam.SetOrbitState(Vec3(0,0,0), 45.0f, -30.0f, 20.0f);
                 cam->projectionType = ProjectionType::Perspective;
                 PushLog("[Viewport] Reset view");
                 break;
@@ -2666,6 +2666,25 @@ void EditorUI::AIGenerate3D() {
         AISpawnBlueprintsFrom(result.objects);
         m_AIStatusMsg = "Generated " + std::to_string(result.objects.size()) + " objects!";
         m_AIProgress  = 1.0f;
+
+        // Auto-focus camera on spawned objects (3D mode only)
+        if (m_DimMode == EditorDimMode::Mode3D && !result.objects.empty()) {
+            Vec3 centre(0, 0, 0);
+            f32  maxSpread = 0.0f;
+            for (const auto& bp : result.objects) {
+                centre = centre + bp.position;
+            }
+            centre = centre * (1.0f / static_cast<f32>(result.objects.size()));
+            for (const auto& bp : result.objects) {
+                Vec3 diff = bp.position - centre;
+                f32  d    = diff.Length();
+                if (d > maxSpread) maxSpread = d;
+            }
+            // View from a distance that fits all objects; at least 8 units
+            f32 viewDist = std::max(8.0f, maxSpread * 2.5f);
+            viewDist = std::min(viewDist, 200.0f);
+            m_EditorCam.FocusOn(centre, viewDist);
+        }
     } else {
         m_AIStatusMsg = "Error: " + result.errorMessage;
         PushLog("[AI] Generation failed: " + result.errorMessage);

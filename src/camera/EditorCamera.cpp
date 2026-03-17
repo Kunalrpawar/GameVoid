@@ -85,9 +85,10 @@ void EditorCamera::Pan(f32 dx, f32 dy) {
 }
 
 void EditorCamera::Zoom(f32 scrollDelta) {
-    // Exponential zoom for consistent feel
-    f32 factor = 1.0f - scrollDelta * 0.18f;
-    if (factor < 0.05f) factor = 0.05f;
+    // Exponential zoom — 0.25 per tick gives snappier response
+    f32 factor = 1.0f - scrollDelta * 0.25f;
+    if (factor < 0.1f) factor = 0.1f;
+    if (factor > 10.0f) factor = 10.0f;  // guard against huge negative delta
     m_DistTgt *= factor;
     m_DistTgt = Clamp(m_DistTgt, minDist, maxDist);
     m_Mode = EditorCamMode::Orbit;
@@ -95,7 +96,12 @@ void EditorCamera::Zoom(f32 scrollDelta) {
 
 void EditorCamera::FocusOn(const Vec3& target, f32 dist) {
     m_FocusTgt = target;
-    if (dist > 0.0f) m_DistTgt = dist;
+    if (dist > 0.0f) {
+        m_DistTgt = dist;
+    } else {
+        // Auto-distance: pull back to a comfortable viewing distance
+        m_DistTgt = 8.0f;
+    }
     m_Mode = EditorCamMode::Orbit;
 }
 
@@ -154,6 +160,12 @@ void EditorCamera::EndFly() {
     m_FocusCur = m_FlyPos + fwdDir * m_DistCur;
     m_FocusTgt = m_FocusCur;
 
+    // Clamp focus above the floor so orbit doesn't immediately go underground
+    if (m_FocusCur.y < 0.0f) {
+        m_FocusCur.y = 0.0f;
+        m_FocusTgt.y = 0.0f;
+    }
+
     m_Mode = EditorCamMode::Idle;
 }
 
@@ -181,6 +193,18 @@ void EditorCamera::Update(f32 dt) {
     m_PitchCur = Lerp(m_PitchCur, m_PitchTgt, t);
     m_DistCur  = Lerp(m_DistCur,  m_DistTgt,  t);
     m_DistCur  = Clamp(m_DistCur, minDist, maxDist);
+
+    // Floor guard: prevent the camera eye from going below y = 0.05
+    // (can happen when focus drifts below y=0 via panning then zooming in)
+    {
+        Vec3 eye = ComputeEyeFromOrbit(m_FocusCur, m_YawCur, m_PitchCur, m_DistCur);
+        if (eye.y < 0.05f) {
+            f32 lift = 0.05f - eye.y;
+            m_FocusCur.y += lift;
+            if (m_FocusTgt.y < m_FocusCur.y)
+                m_FocusTgt.y = m_FocusCur.y;
+        }
+    }
 }
 
 // ── Apply to transform ─────────────────────────────────────────────────────

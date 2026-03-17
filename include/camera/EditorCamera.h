@@ -52,10 +52,10 @@ public:
     EditorCamera() = default;
 
     // ── Tuning — Orbit ─────────────────────────────────────────────────────
-    f32 orbitSensitivity  = 0.35f;   // degrees per pixel of mouse drag (was 0.30)
-    f32 panSensitivity    = 0.025f;  // world-units per pixel — much easier panning (was 0.012)
-    f32 zoomSensitivity   = 1.5f;    // multiplier per scroll tick (was 1.2)
-    f32 minDist           = 0.3f;
+    f32 orbitSensitivity  = 0.35f;   // degrees per pixel of mouse drag
+    f32 panSensitivity    = 0.025f;  // world-units per pixel
+    f32 zoomSensitivity   = 1.5f;    // multiplier per scroll tick
+    f32 minDist           = 1.0f;    // prevent over-zooming / near-clip clipping
     f32 maxDist           = 800.0f;
 
     // ── Tuning — Fly ───────────────────────────────────────────────────────
@@ -128,15 +128,15 @@ public:
 private:
     // ── Current (smoothed) state ───────────────────────────────────────────
     Vec3 m_FocusCur  { 0, 0, 0 };
-    f32  m_YawCur    = 30.0f;
-    f32  m_PitchCur  = -25.0f;
-    f32  m_DistCur   = 15.0f;
+    f32  m_YawCur    = 45.0f;
+    f32  m_PitchCur  = -30.0f;
+    f32  m_DistCur   = 20.0f;
 
     // ── Target state (set by input, interpolated toward) ───────────────────
     Vec3 m_FocusTgt  { 0, 0, 0 };
-    f32  m_YawTgt    = 30.0f;
-    f32  m_PitchTgt  = -25.0f;
-    f32  m_DistTgt   = 15.0f;
+    f32  m_YawTgt    = 45.0f;
+    f32  m_PitchTgt  = -30.0f;
+    f32  m_DistTgt   = 20.0f;
 
     // ── Fly mode state ─────────────────────────────────────────────────────
     Vec3 m_FlyPos    { 0, 0, 0 };     // camera position in fly mode
