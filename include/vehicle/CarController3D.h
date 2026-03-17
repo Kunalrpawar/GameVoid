@@ -9,20 +9,20 @@ namespace gv { class RigidBody; }
 // CarController3D can run on any dynamic body.
 class CarController3D : public gv::Component {
 public:
-    // ── Tuning ────────────────────────────────────────────────────────────────
+    // Tuning
     float maxSpeed       = 20.0f;   // m/s forward top speed
     float reverseSpeed   =  8.0f;   // m/s reverse top speed
-    float acceleration   = 15.0f;   // m/s² throttle ramp
-    float brakingPower   = 25.0f;   // m/s² brake/reverse deceleration
+    float acceleration   = 15.0f;   // m/s^2 throttle ramp
+    float brakingPower   = 25.0f;   // m/s^2 brake/reverse deceleration
     float turnSpeed      = 90.0f;   // deg/s yaw rate at full steering
     float drag           =  2.5f;   // natural speed decay (no input)
     float angularDamp    =  0.95f;  // applied each frame to RB angular velocity
 
-    // ── Per-frame input  (set by EditorUI / keyboard handler) ─────────────────
+    // Per-frame input (set by editor or gameplay code)
     float inputForward = 0.0f;   // -1 = reverse,  0 = neutral,  +1 = accelerate
     float inputTurn    = 0.0f;   // -1 = left,      0 = straight, +1 = right
 
-    // ── Runtime state ─────────────────────────────────────────────────────────
+    // Runtime state
     float currentSpeed = 0.0f;   // signed: positive = forward
     float heading      = 0.0f;   // yaw in degrees (world Y axis)
 
