@@ -2,6 +2,7 @@
 #include <cmath>
 #include <algorithm>
 
+using namespace gv;
 static const float kPiMB = 3.14159265358979323846f;
 
 // Apply transform to a copy of a mesh

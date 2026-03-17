@@ -9,22 +9,15 @@
 
 namespace gv {
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  ObjectAssembly.h  —  Compose complex objects from primitive parts
-//
-//  An AssemblyNode is one primitive with a local transform in the hierarchy.
-//  Nodes can be nested (one assembly inside another), forming a tree.
-//  The root node's local transform is identity; child transforms are relative.
-//
-//  Call Flatten() to bake the whole tree into a single MeshData ready for GPU.
-// ─────────────────────────────────────────────────────────────────────────────
+// ObjectAssembly.h: compose complex objects from primitive parts.
+// Call Flatten() to bake the tree into a single MeshData.
 
 struct AssemblyNode {
     std::string             name;
-    Vec3                    translation = Vec3(0,0,0);
-    Vec3                    rotationDeg = Vec3(0,0,0);
-    Vec3                    scale       = Vec3(1,1,1);
-    Vec4                    color       = Vec4(1,1,1,1);
+    ::gv::Vec3              translation = ::gv::Vec3(0,0,0);
+    ::gv::Vec3              rotationDeg = ::gv::Vec3(0,0,0);
+    ::gv::Vec3              scale       = ::gv::Vec3(1,1,1);
+    ::gv::Vec4              color       = ::gv::Vec4(1,1,1,1);
 
     // Leaf: holds mesh data directly
     bool                    hasMesh  = false;
@@ -35,28 +28,25 @@ struct AssemblyNode {
 
     // Convenience: add a primitive child
     AssemblyNode& AddChild(const std::string& childName, MeshData m,
-                           Vec3 t = Vec3(0,0,0),
-                           Vec3 r = Vec3(0,0,0),
-                           Vec3 s = Vec3(1,1,1));
+                           ::gv::Vec3 t = ::gv::Vec3(0,0,0),
+                           ::gv::Vec3 r = ::gv::Vec3(0,0,0),
+                           ::gv::Vec3 s = ::gv::Vec3(1,1,1));
 
     // Flatten into world-space MeshData (applies all ancestor transforms)
     MeshData Flatten() const;
 
 private:
-    MeshData FlattenNode(const AssemblyNode& node, const Mat4& parentWorld) const;
+    MeshData FlattenNode(const AssemblyNode& node, const ::gv::Mat4& parentWorld) const;
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  AssemblyBlueprint  —  Serializable description of one compound object.
-//  AI systems generate these; the assembler instantiates them in the scene.
-// ─────────────────────────────────────────────────────────────────────────────
+// AssemblyBlueprint: serializable description of one compound object.
 
 struct PartEntry {
     std::string primType;   // "box", "sphere", "cylinder", "cone", "torus", "capsule"
-    Vec3        translation;
-    Vec3        rotationDeg;
-    Vec3        scale;
-    Vec4        color;
+    ::gv::Vec3  translation;
+    ::gv::Vec3  rotationDeg;
+    ::gv::Vec3  scale;
+    ::gv::Vec4  color;
     // Primitive-specific params
     float p0 = 1.0f, p1 = 1.0f, p2 = 1.0f;  // e.g. radii, heights
     int   segs = 16;
@@ -64,7 +54,7 @@ struct PartEntry {
 
 struct AssemblyBlueprint {
     std::string             objectName;
-    Vec3                    spawnPosition;
+    ::gv::Vec3              spawnPosition;
     float                   spawnHeadingDeg = 0.0f;
     std::vector<PartEntry>  parts;
 

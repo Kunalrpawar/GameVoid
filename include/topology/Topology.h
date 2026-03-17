@@ -6,12 +6,7 @@
 
 namespace gv {
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Topology.h  —  Half-edge mesh representation and topological analysis.
-//
-//  A half-edge mesh encodes adjacency explicitly, enabling O(1) neighbour
-//  traversal, genus computation, manifold checks and boundary detection.
-// ─────────────────────────────────────────────────────────────────────────────
+// Topology.h: Half-edge mesh representation and topological analysis.
 
 struct HalfEdge {
     int vertex;   // index into vertex array (tip of this half-edge)
@@ -22,11 +17,11 @@ struct HalfEdge {
 
 struct HEFace {
     int edge;     // index of any half-edge on this face
-    Vec3 normal;  // cached face normal
+    ::gv::Vec3 normal;  // cached face normal
 };
 
 struct HEMesh {
-    std::vector<Vec3>     vertices;
+    std::vector<::gv::Vec3>     vertices;
     std::vector<HalfEdge> halfEdges;
     std::vector<HEFace>   faces;
 
@@ -55,9 +50,7 @@ struct HEMesh {
     int IsolatedVertexCount() const;
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Manifold repair
-// ─────────────────────────────────────────────────────────────────────────────
+// Manifold repair
 namespace TopologyRepair {
     // Fill all boundary loops with fan-triangulation caps
     HEMesh FillHoles(const HEMesh& mesh);
@@ -72,9 +65,7 @@ namespace TopologyRepair {
     HEMesh MakeConsistentWinding(const HEMesh& mesh);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  MeshAnalyzer  —  Diagnostics / stats on a triangular mesh
-// ─────────────────────────────────────────────────────────────────────────────
+// MeshAnalyzer: diagnostics/stats on a triangular mesh
 struct MeshStats {
     int    vertexCount;
     int    triangleCount;
@@ -83,10 +74,10 @@ struct MeshStats {
     int    boundaryLoops;
     bool   isManifold;
     bool   isClosed;
-    float  surfaceArea;   // m²
-    float  volume;        // m³  (only meaningful for closed manifold)
-    Vec3   centroid;
-    Vec3   aabbMin, aabbMax;
+    float  surfaceArea;   // square units
+    float  volume;        // cubic units (meaningful for closed manifold)
+    ::gv::Vec3   centroid;
+    ::gv::Vec3   aabbMin, aabbMax;
 };
 
 class MeshAnalyzer {
@@ -94,7 +85,7 @@ public:
     static MeshStats   Analyze(const MeshData& mesh);
     static float       SurfaceArea(const MeshData& mesh);
     static float       Volume(const MeshData& mesh);        // signed, assumes closed
-    static Vec3        Centroid(const MeshData& mesh);
+    static ::gv::Vec3  Centroid(const MeshData& mesh);
 
     // Returns average dihedral angle deviation from flat (0 = flat plane)
     static float       AverageCurvature(const HEMesh& he);

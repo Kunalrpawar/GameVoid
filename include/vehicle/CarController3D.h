@@ -9,7 +9,7 @@
 namespace gv {
 
 // CarController3D can run on any dynamic body.
-class CarController3D : public Component {
+class CarController3D : public ::gv::Component {
 public:
     // Tuning
     float maxSpeed       = 20.0f;   // m/s forward top speed
@@ -31,10 +31,10 @@ public:
     std::string GetTypeName() const override { return "CarController3D"; }
 
     // Called every physics step with the car's single RigidBody.
-    void UpdateController(float dt, RigidBody* rb) {
+    void UpdateController(float dt, ::gv::RigidBody* rb) {
         if (!rb) return;
 
-        // -- Acceleration / braking -----------------------------------------
+        // Acceleration / braking
         if (inputForward > 0.01f) {
             currentSpeed += acceleration * inputForward * dt;
         } else if (inputForward < -0.01f) {
@@ -56,15 +56,15 @@ public:
         if (currentSpeed > maxFwd) currentSpeed = maxFwd;
         if (currentSpeed < maxRev) currentSpeed = maxRev;
 
-        // -- Steering (only effective when moving) --------------------------
+        // Steering (only effective when moving)
         float speedRatio = std::abs(currentSpeed) / std::max(maxSpeed, 1.0f);
         float effectiveTurn = turnSpeed * inputTurn * speedRatio;
         heading += effectiveTurn * dt;
 
-        // -- Drive heading direction ----------------------------------------
+        // Drive heading direction
         float rad = heading * (3.14159265f / 180.0f);
-        Vec3 fwd(std::sin(rad), 0.0f, std::cos(rad));
-        Vec3 newVel = fwd * currentSpeed;
+        ::gv::Vec3 fwd(std::sin(rad), 0.0f, std::cos(rad));
+        ::gv::Vec3 newVel = fwd * currentSpeed;
         newVel.y = rb->velocity.y;  // preserve gravity / fall velocity
         rb->velocity = newVel;
 
@@ -74,7 +74,7 @@ public:
         // Sync transform yaw so the mesh faces the right direction
         if (GetOwner()) {
             auto& t = GetOwner()->GetTransform();
-            Vec3 euler = t.GetEulerDeg();
+            ::gv::Vec3 euler = t.GetEulerDeg();
             euler.y = heading;
             t.SetEulerDeg(euler.x, euler.y, euler.z);
         }

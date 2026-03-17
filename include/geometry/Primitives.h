@@ -8,15 +8,13 @@
 
 namespace gv {
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Primitives.h  —  Base geometric primitive definitions
-//  All primitives produce indexed triangle meshes (positions + normals + UVs).
-// ─────────────────────────────────────────────────────────────────────────────
+// Primitives.h: Base geometric primitive definitions.
+// All primitives produce indexed triangle meshes (positions + normals + UVs).
 
 struct Vertex3D {
-    Vec3 position;
-    Vec3 normal;
-    Vec2 uv;
+    ::gv::Vec3 position;
+    ::gv::Vec3 normal;
+    ::gv::Vec2 uv;
 };
 
 struct MeshData {
@@ -31,14 +29,12 @@ struct MeshData {
     // Flip all normals
     void FlipNormals();
     // Compute axis-aligned bounding box
-    void ComputeAABB(Vec3& outMin, Vec3& outMax) const;
+    void ComputeAABB(::gv::Vec3& outMin, ::gv::Vec3& outMax) const;
     // Count triangles
     size_t TriangleCount() const { return indices.size() / 3; }
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Primitive builders
-// ─────────────────────────────────────────────────────────────────────────────
+// Primitive builders
 namespace Primitives {
 
     // Box  (hx, hy, hz = half-extents on each axis)
