@@ -144,6 +144,7 @@ bool EditorUI::Init(Window* window, OpenGLRenderer* renderer, Scene* scene,
 
 void EditorUI::Shutdown() {
     if (!m_Initialised) return;
+    Close3DPlayWindow();
     m_2DViewport.Shutdown();
     DestroyViewportFBO();
     ImGui_ImplOpenGL3_Shutdown();
@@ -172,9 +173,104 @@ bool EditorUI::WantsCaptureMouse() const {
     return ImGui::GetIO().WantCaptureMouse;
 }
 
+void EditorUI::Ensure3DPlayWindow() {
+    if (m_PlayWindow3D || !m_Window) return;
+
+    GLFWwindow* shared = m_Window->GetNativeWindow();
+    if (!shared) return;
+
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+
+    m_PlayWindow3D = glfwCreateWindow(
+        static_cast<int>(m_PlayWindow3DWidth),
+        static_cast<int>(m_PlayWindow3DHeight),
+        "Game Preview (3D)",
+        nullptr,
+        shared
+    );
+    if (!m_PlayWindow3D) {
+        PushLog("[Editor] Failed to open 3D play window.");
+        return;
+    }
+
+    GLFWwindow* prev = glfwGetCurrentContext();
+    glfwMakeContextCurrent(m_PlayWindow3D);
+    glfwSwapInterval(1);
+    glfwMakeContextCurrent(prev ? prev : shared);
+
+    PushLog("[Editor] Opened 3D play window.");
+}
+
+void EditorUI::Update3DPlayWindow(f32 /*dt*/) {
+    Ensure3DPlayWindow();
+    if (!m_PlayWindow3D) return;
+
+    if (glfwWindowShouldClose(m_PlayWindow3D)) {
+        Close3DPlayWindow();
+        m_Playing = false;
+        PushLog("[Editor] 3D play window closed.");
+        return;
+    }
+
+    m_PlayInputForward3D =
+        ((glfwGetKey(m_PlayWindow3D, GLFW_KEY_W) == GLFW_PRESS) ? 1.0f : 0.0f) -
+        ((glfwGetKey(m_PlayWindow3D, GLFW_KEY_S) == GLFW_PRESS) ? 1.0f : 0.0f);
+    m_PlayInputTurn3D =
+        ((glfwGetKey(m_PlayWindow3D, GLFW_KEY_D) == GLFW_PRESS) ? 1.0f : 0.0f) -
+        ((glfwGetKey(m_PlayWindow3D, GLFW_KEY_A) == GLFW_PRESS) ? 1.0f : 0.0f);
+
+    if (glfwGetKey(m_PlayWindow3D, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+        Close3DPlayWindow();
+        m_Playing = false;
+        PushLog("[Editor] Stopped 3D play (Esc in game window).");
+        return;
+    }
+
+    GLFWwindow* mainWin = m_Window ? m_Window->GetNativeWindow() : nullptr;
+    GLFWwindow* prev = glfwGetCurrentContext();
+    glfwMakeContextCurrent(m_PlayWindow3D);
+
+    int fbW = 0, fbH = 0;
+    glfwGetFramebufferSize(m_PlayWindow3D, &fbW, &fbH);
+    if (fbW > 0 && fbH > 0) {
+        glViewport(0, 0, fbW, fbH);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glClearColor(0.06f, 0.06f, 0.09f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        if (m_Scene && m_Renderer) {
+            Camera* cam = m_Scene->GetActiveCamera();
+            if (cam) m_Renderer->RenderScene(*m_Scene, *cam);
+        }
+
+        glfwSwapBuffers(m_PlayWindow3D);
+    }
+
+    glfwMakeContextCurrent(mainWin ? mainWin : prev);
+}
+
+void EditorUI::Close3DPlayWindow() {
+    if (!m_PlayWindow3D) return;
+    glfwDestroyWindow(m_PlayWindow3D);
+    m_PlayWindow3D = nullptr;
+    m_PlayInputForward3D = 0.0f;
+    m_PlayInputTurn3D = 0.0f;
+}
+
 // ── Main Render ────────────────────────────────────────────────────────────
 
 void EditorUI::Render(f32 dt) {
+    if (!m_Playing || m_DimMode != EditorDimMode::Mode3D) {
+        Close3DPlayWindow();
+        m_PlayInputForward3D = 0.0f;
+        m_PlayInputTurn3D = 0.0f;
+    } else {
+        Update3DPlayWindow(dt);
+    }
+
     // ── Keyboard shortcuts ─────────────────────────────────────────────────
     ImGuiIO& io = ImGui::GetIO();
     if (!io.WantTextInput) {
@@ -686,10 +782,18 @@ void EditorUI::DrawToolbar() {
     ImGui::SameLine(); ImGui::Separator(); ImGui::SameLine();
 
     if (!m_Playing) {
-        if (ImGui::Button("  Play  ")) { m_Playing = true; PushLog("[Editor] Play mode."); }
+        if (ImGui::Button("  Play  ")) {
+            m_Playing = true;
+            Ensure3DPlayWindow();
+            PushLog("[Editor] Play mode.");
+        }
     } else {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.2f, 0.2f, 1));
-        if (ImGui::Button("  Stop  ")) { m_Playing = false; PushLog("[Editor] Stopped."); }
+        if (ImGui::Button("  Stop  ")) {
+            m_Playing = false;
+            Close3DPlayWindow();
+            PushLog("[Editor] Stopped.");
+        }
         ImGui::PopStyleColor();
     }
 

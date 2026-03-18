@@ -240,10 +240,15 @@ void Engine::Run() {
                     auto* carCtrl = obj->GetComponent<CarController3D>();
                     if (!carCtrl) continue;
                     auto* rb = obj->GetComponent<RigidBody>();
-                    carCtrl->inputForward = (m_Window.IsKeyDown(GVKey::W) ? 1.0f : 0.0f)
-                                          - (m_Window.IsKeyDown(GVKey::S) ? 1.0f : 0.0f);
-                    carCtrl->inputTurn = (m_Window.IsKeyDown(GVKey::D) ? 1.0f : 0.0f)
-                                       - (m_Window.IsKeyDown(GVKey::A) ? 1.0f : 0.0f);
+                    if (m_EditorUI.HasExternal3DPlayWindow()) {
+                        carCtrl->inputForward = m_EditorUI.GetPlayInputForward3D();
+                        carCtrl->inputTurn = m_EditorUI.GetPlayInputTurn3D();
+                    } else {
+                        carCtrl->inputForward = (m_Window.IsKeyDown(GVKey::W) ? 1.0f : 0.0f)
+                                              - (m_Window.IsKeyDown(GVKey::S) ? 1.0f : 0.0f);
+                        carCtrl->inputTurn = (m_Window.IsKeyDown(GVKey::D) ? 1.0f : 0.0f)
+                                           - (m_Window.IsKeyDown(GVKey::A) ? 1.0f : 0.0f);
+                    }
                     carCtrl->UpdateController(dt, rb);
                     break;
                 }

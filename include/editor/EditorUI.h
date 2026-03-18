@@ -35,6 +35,8 @@
 #include <deque>
 #include <set>
 
+struct GLFWwindow;
+
 namespace gv {
 
 // Forward declarations
@@ -102,6 +104,9 @@ public:
     void ResizeViewport(u32 w, u32 h);
 
     bool IsPlaying() const { return m_Playing; }
+    bool HasExternal3DPlayWindow() const { return m_PlayWindow3D != nullptr; }
+    f32  GetPlayInputForward3D() const { return m_PlayInputForward3D; }
+    f32  GetPlayInputTurn3D() const { return m_PlayInputTurn3D; }
 
     /// Get all currently selected objects (multi-select).
     const std::set<GameObject*>& GetSelectedObjects() const { return m_MultiSelected; }
@@ -121,6 +126,9 @@ private:
     void DrawHierarchy2D();
     void DrawInspector2D();
     void DrawToolbar2D();
+    void Ensure3DPlayWindow();
+    void Update3DPlayWindow(f32 dt);
+    void Close3DPlayWindow();
 
     // ── New system panels ──────────────────────────────────────────────────
     void DrawTerrainPanel();
@@ -216,6 +224,11 @@ private:
     GameObject*     m_Selected = nullptr;
     GizmoMode       m_GizmoMode = GizmoMode::Translate;
     bool            m_Playing  = false;
+    f32             m_PlayInputForward3D = 0.0f;
+    f32             m_PlayInputTurn3D    = 0.0f;
+    GLFWwindow*     m_PlayWindow3D       = nullptr;
+    u32             m_PlayWindow3DWidth  = 960;
+    u32             m_PlayWindow3DHeight = 540;
 
     // ── Multi-select ───────────────────────────────────────────────────────
     std::set<GameObject*> m_MultiSelected;
