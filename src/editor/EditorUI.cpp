@@ -199,6 +199,8 @@ void EditorUI::Ensure3DPlayWindow() {
     GLFWwindow* prev = glfwGetCurrentContext();
     glfwMakeContextCurrent(m_PlayWindow3D);
     glfwSwapInterval(1);
+    glfwShowWindow(m_PlayWindow3D);
+    glfwFocusWindow(m_PlayWindow3D);
     glfwMakeContextCurrent(prev ? prev : shared);
 
     PushLog("[Editor] Opened 3D play window.");
@@ -263,7 +265,7 @@ void EditorUI::Close3DPlayWindow() {
 // ── Main Render ────────────────────────────────────────────────────────────
 
 void EditorUI::Render(f32 dt) {
-    if (!m_Playing || m_DimMode != EditorDimMode::Mode3D) {
+    if (!m_Playing) {
         Close3DPlayWindow();
         m_PlayInputForward3D = 0.0f;
         m_PlayInputTurn3D = 0.0f;
@@ -891,6 +893,7 @@ void EditorUI::DrawToolbar2D() {
     if (!m_Playing) {
         if (ImGui::Button("  Play  ##2D")) {
             m_Playing = true;
+            Ensure3DPlayWindow();
             m_2DViewport.GetScene().BeginPlay();
             PushLog("[Editor] Play mode (2D).");
         }
