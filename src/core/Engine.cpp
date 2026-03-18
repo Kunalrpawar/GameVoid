@@ -234,23 +234,46 @@ void Engine::Run() {
 
             // Physics (when playing)
             if (m_Config.enablePhysics && m_EditorUI.IsPlaying()) {
+                f32 inputForward = 0.0f;
+                f32 inputTurn = 0.0f;
+                if (m_EditorUI.HasExternal3DPlayWindow()) {
+                    inputForward = m_EditorUI.GetPlayInputForward3D();
+                    inputTurn = m_EditorUI.GetPlayInputTurn3D();
+                } else {
+                    inputForward = (m_Window.IsKeyDown(GVKey::W) ? 1.0f : 0.0f)
+                                 - (m_Window.IsKeyDown(GVKey::S) ? 1.0f : 0.0f);
+                    inputTurn = (m_Window.IsKeyDown(GVKey::D) ? 1.0f : 0.0f)
+                              - (m_Window.IsKeyDown(GVKey::A) ? 1.0f : 0.0f);
+                }
+
                 // Route WASD to CarController3D components (if any in scene).
+                bool droveWithController = false;
                 for (auto& obj : scene->GetAllObjects()) {
                     if (!obj) continue;
                     auto* carCtrl = obj->GetComponent<CarController3D>();
                     if (!carCtrl) continue;
                     auto* rb = obj->GetComponent<RigidBody>();
-                    if (m_EditorUI.HasExternal3DPlayWindow()) {
-                        carCtrl->inputForward = m_EditorUI.GetPlayInputForward3D();
-                        carCtrl->inputTurn = m_EditorUI.GetPlayInputTurn3D();
-                    } else {
-                        carCtrl->inputForward = (m_Window.IsKeyDown(GVKey::W) ? 1.0f : 0.0f)
-                                              - (m_Window.IsKeyDown(GVKey::S) ? 1.0f : 0.0f);
-                        carCtrl->inputTurn = (m_Window.IsKeyDown(GVKey::D) ? 1.0f : 0.0f)
-                                           - (m_Window.IsKeyDown(GVKey::A) ? 1.0f : 0.0f);
-                    }
+                    carCtrl->inputForward = inputForward;
+                    carCtrl->inputTurn = inputTurn;
                     carCtrl->UpdateController(dt, rb);
+                    droveWithController = true;
                     break;
+                }
+
+                // Generic fallback: if no explicit controller exists, move the first dynamic body.
+                if (!droveWithController) {
+                    for (auto& obj : scene->GetAllObjects()) {
+                        if (!obj) continue;
+                        auto* rb = obj->GetComponent<RigidBody>();
+                        if (!rb || rb->bodyType != RigidBodyType::Dynamic) continue;
+
+                        Vec3 vel = rb->velocity;
+                        const f32 moveSpeed = 6.0f;
+                        vel.x = inputTurn * moveSpeed;
+                        vel.z = inputForward * moveSpeed;
+                        rb->velocity = vel;
+                        break;
+                    }
                 }
 
                 m_Physics.Step(dt);
