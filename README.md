@@ -1,12 +1,14 @@
 <div align="center">
 
-# GameVoid Engine
+# GameVoid Engine (If you can imagine it, you can make it)
 
 ### Describe it. Generate it. Play it.
 
 *An AI-powered game engine where you build 2D and 3D games by just telling it what you want.*
 
 ![GameVoid Engine](photo/image.png)
+
+![GameVoid Engine](photo/image2.png)
 
 </div>
 
@@ -147,53 +149,9 @@ You can also configure your API key from inside the editor via the **AI** menu.
 
 ---
 
-## Project Structure
-
-```
-gamevoid/
-├── src/            # Engine source code
-│   ├── main.cpp    # Entry point
-│   ├── core/       # Engine, window, scene management
-│   ├── editor/     # Dear ImGui graphical editor
-│   ├── editor2d/   # 2D-specific editor & viewport
-│   ├── ai/         # Gemini AI integration
-│   ├── renderer/   # OpenGL renderer
-│   ├── physics/    # Physics world & collision
-│   ├── scripting/  # Lua engine & visual node graph
-│   ├── assets/     # Asset loading & caching
-│   ├── terrain/    # Terrain generation & editing
-│   ├── effects/    # Particle system
-│   └── animation/  # Skeletal & keyframe animation
-├── include/        # Header files (mirrors src/ structure)
-├── deps/           # Third-party dependencies
-└── build/          # Build output
-```
 
 ---
 
-## Dependencies
-
-| Library | What it does |
-|---------|-------------|
-| [GLFW](https://www.glfw.org) | Window & input |
-| [Dear ImGui](https://github.com/ocornut/imgui) | Editor UI |
-| [stb_image](https://github.com/nothings/stb) | Texture loading |
-| [miniaudio](https://miniaud.io) | Audio playback |
-| [libcurl](https://curl.se/libcurl) | HTTP requests for Gemini API |
-| [nlohmann/json](https://github.com/nlohmann/json) | JSON parsing |
-
----
-
-## Roadmap
-
-- [ ] Multiplayer / networking support
-- [ ] Post-processing effects (bloom, SSAO, tone mapping)
-- [ ] Shader hot-reload
-- [ ] Full audio engine with 3D spatial sound
-- [ ] Game export / standalone builds
-- [ ] Plugin system
-
----
 
 <div align="center">
 
