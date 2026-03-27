@@ -451,6 +451,9 @@ private:
     char m_ScriptPathBuf[256]  = {};   // script file path
     GameObject* m_ScriptPopupTarget = nullptr; // target object for inspector popup editor
     ScriptComponent* m_ScriptPopupComponent = nullptr; // exact script being edited
+    // ── AI Chat attach state ─────────────────────────────────────────────
+    GameObject* m_ChatAttachedObject = nullptr; // object attached to chat for script gen
+    char m_ChatLastAIScript[4096] = {}; // buffer for last AI-generated script
     // ── Behavior editor state ──────────────────────────────────────────────
     i32  m_AddComponentIdx = 0;        // "Add Component" dropdown index
     i32  m_AddBehaviorIdx  = 0;        // behavior dropdown index

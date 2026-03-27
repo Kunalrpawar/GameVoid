@@ -2637,11 +2637,27 @@ void EditorUI::DrawChatPanel() {
     bool sendEnabled = hasKey && !m_ChatWaiting && m_ChatInputBuf[0] != '\0';
 
     float availW = ImGui::GetContentRegionAvail().x;
-    ImGui::PushItemWidth(availW - 145);
+
+    // --- Attach object to chat ---
+    ImGui::PushItemWidth(availW - 210);
     bool enterPressed = ImGui::InputText("##ChatInput", m_ChatInputBuf, sizeof(m_ChatInputBuf),
-                                          ImGuiInputTextFlags_EnterReturnsTrue);
+                                         ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::PopItemWidth();
     ImGui::SameLine();
+    // + button to attach selected object
+    if (ImGui::Button("+##AttachObjToChat", ImVec2(28, 0))) {
+        m_ChatAttachedObject = m_Selected;
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Attach currently selected object to chat prompt");
+    ImGui::SameLine();
+    // Show attached object (if any) and allow clearing
+    if (m_ChatAttachedObject) {
+        ImGui::TextDisabled("%s", m_ChatAttachedObject->GetName().c_str());
+        ImGui::SameLine();
+        if (ImGui::SmallButton("x##DetachObjFromChat")) m_ChatAttachedObject = nullptr;
+        ImGui::SameLine();
+    }
 
     if (!sendEnabled) ImGui::BeginDisabled();
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.5f, 0.8f, 1.0f));
@@ -2682,7 +2698,8 @@ void EditorUI::DrawChatPanel() {
             "The user is chatting with you. Respond in a friendly, conversational way. "
             "Do NOT output JSON or object lists unless the user explicitly asks you to generate scene objects.\n";
 
-        // Add current mode context
+
+        // Add current mode context and attached object
         if (m_DimMode == EditorDimMode::Mode2D) {
             fullPrompt += "The user is currently in the 2D editor mode, working with sprites, tilemaps, "
                           "labels, and 2D particle emitters. Help them with 2D game development.\n";
@@ -2693,6 +2710,11 @@ void EditorUI::DrawChatPanel() {
             }
         } else {
             fullPrompt += "The user is in the 3D editor mode.\n";
+        }
+        if (m_ChatAttachedObject) {
+            fullPrompt += "The user has attached the object '" + std::string(m_ChatAttachedObject->GetName()) + "' to this chat. ";
+            fullPrompt += "If the user asks for a script, generate a GVScript code block for this object. ";
+            fullPrompt += "Only output the code block, nothing else, if the user asks for code.\n";
         }
         fullPrompt += "\n";
 
@@ -2707,6 +2729,7 @@ void EditorUI::DrawChatPanel() {
 
         AIResponse resp = m_AI->SendPrompt(fullPrompt);
 
+
         if (resp.success && !resp.text.empty()) {
             // Clean up the response text (trim whitespace)
             std::string reply = resp.text;
@@ -2714,6 +2737,37 @@ void EditorUI::DrawChatPanel() {
             size_t e = reply.find_last_not_of(" \t\n\r");
             if (s != std::string::npos && e != std::string::npos)
                 reply = reply.substr(s, e - s + 1);
+
+            // If an object is attached and the reply contains a code block, auto-attach as script
+            if (m_ChatAttachedObject) {
+                size_t codeStart = reply.find("```gvscript");
+                if (codeStart == std::string::npos) codeStart = reply.find("```lua");
+                if (codeStart == std::string::npos) codeStart = reply.find("```python");
+                if (codeStart == std::string::npos) codeStart = reply.find("```js");
+                if (codeStart == std::string::npos) codeStart = reply.find("```code");
+                if (codeStart == std::string::npos) codeStart = reply.find("```");
+                if (codeStart != std::string::npos) {
+                    size_t codeEnd = reply.find("```", codeStart + 3);
+                    if (codeEnd != std::string::npos) {
+                        size_t langEnd = reply.find('\n', codeStart);
+                        if (langEnd == std::string::npos) langEnd = codeStart + 3;
+                        std::string code = reply.substr(langEnd + 1, codeEnd - langEnd - 1);
+                        // Save for user
+                        size_t len = code.size();
+                        if (len >= sizeof(m_ChatLastAIScript)) len = sizeof(m_ChatLastAIScript) - 1;
+                        std::memcpy(m_ChatLastAIScript, code.c_str(), len);
+                        m_ChatLastAIScript[len] = '\0';
+                        // Attach as inline script
+                        auto* sc = m_ChatAttachedObject->GetComponent<ScriptComponent>();
+                        if (!sc) sc = m_ChatAttachedObject->AddComponent<ScriptComponent>();
+                        if (m_Script) sc->SetEngine(m_Script);
+                        sc->SetScriptPath("");
+                        sc->SetSource(std::string(m_ChatLastAIScript));
+                        PushLog("[AI Chat] Script attached to " + m_ChatAttachedObject->GetName());
+                        reply += "\n\n[Script attached to object: " + std::string(m_ChatAttachedObject->GetName()) + "]";
+                    }
+                }
+            }
             m_ChatHistory.push_back({ false, reply });
         } else {
             std::string errMsg = resp.errorMessage.empty() ? "No response from Gemini 3.0." : resp.errorMessage;
