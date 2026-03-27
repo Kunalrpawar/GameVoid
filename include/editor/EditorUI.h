@@ -448,6 +448,7 @@ private:
     // ── Code Script editor state ────────────────────────────────────────
     char m_ScriptCodeBuf[4096] = {};   // inline script source editor
     char m_ScriptPathBuf[256]  = {};   // script file path
+    GameObject* m_ScriptPopupTarget = nullptr; // target object for inspector popup editor
     // ── Behavior editor state ──────────────────────────────────────────────
     i32  m_AddComponentIdx = 0;        // "Add Component" dropdown index
     i32  m_AddBehaviorIdx  = 0;        // behavior dropdown index

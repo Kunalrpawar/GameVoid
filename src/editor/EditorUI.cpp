@@ -1591,6 +1591,20 @@ void EditorUI::DrawInspectorMaterial() {
 
 void EditorUI::DrawInspectorScripts() {
     if (ImGui::CollapsingHeader("Scripts & Behaviors", ImGuiTreeNodeFlags_DefaultOpen)) {
+        const auto loadCodeIntoPopupBuffer = [this](const std::string& src) {
+            const char* fallback =
+                "func on_start() {\n"
+                "  print(\"Script started\")\n"
+                "}\n\n"
+                "func on_update(dt) {\n"
+                "}\n";
+            const std::string& use = src.empty() ? std::string(fallback) : src;
+            size_t len = use.size();
+            if (len >= sizeof(m_ScriptCodeBuf)) len = sizeof(m_ScriptCodeBuf) - 1;
+            std::memcpy(m_ScriptCodeBuf, use.c_str(), len);
+            m_ScriptCodeBuf[len] = '\0';
+        };
+
         bool hasAny = false;
 
         // List all NativeScript behaviors
@@ -1633,10 +1647,16 @@ void EditorUI::DrawInspectorScripts() {
                 hasAny = true;
                 auto* sc = dynamic_cast<ScriptComponent*>(comp.get());
                 if (sc) {
+                    ImGui::PushID(sc);
                     ImGui::BulletText("Script: %s",
                         sc->GetScriptPath().empty() ? "(inline)" : sc->GetScriptPath().c_str());
                     ImGui::SameLine();
-                    if (ImGui::SmallButton("Edit Code")) { m_BottomTab = 7; }
+                    if (ImGui::SmallButton("Edit Code (Popup)")) {
+                        m_ScriptPopupTarget = m_Selected;
+                        loadCodeIntoPopupBuffer(sc->GetSource());
+                        ImGui::OpenPopup("Inline Script Editor");
+                    }
+                    ImGui::PopID();
                 }
             }
         }
@@ -1649,13 +1669,72 @@ void EditorUI::DrawInspectorScripts() {
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.45f, 0.65f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.55f, 0.75f, 1.0f));
-        if (ImGui::Button("+ Add Code Script", ImVec2(-1, 24))) {
-            auto* sc = m_Selected->AddComponent<ScriptComponent>();
-            if (m_Script) sc->SetEngine(m_Script);
-            PushLog("[Inspector] Added ScriptComponent to " + m_Selected->GetName());
-            m_BottomTab = 7;  // switch to the Code Script editor tab
+        if (ImGui::Button("+ Add/Edit Code Script (Popup)", ImVec2(-1, 24))) {
+            auto* sc = m_Selected->GetComponent<ScriptComponent>();
+            if (!sc) {
+                sc = m_Selected->AddComponent<ScriptComponent>();
+                if (m_Script) sc->SetEngine(m_Script);
+                PushLog("[Inspector] Added ScriptComponent to " + m_Selected->GetName());
+            }
+            m_ScriptPopupTarget = m_Selected;
+            loadCodeIntoPopupBuffer(sc->GetSource());
+            ImGui::OpenPopup("Inline Script Editor");
         }
         ImGui::PopStyleColor(2);
+
+        if (ImGui::BeginPopupModal("Inline Script Editor", nullptr,
+                                   ImGuiWindowFlags_AlwaysAutoResize)) {
+            GameObject* target = m_ScriptPopupTarget ? m_ScriptPopupTarget : m_Selected;
+            if (!target) {
+                ImGui::TextDisabled("No object selected.");
+                if (ImGui::Button("Close", ImVec2(140, 0))) {
+                    m_ScriptPopupTarget = nullptr;
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            } else {
+                ImGui::Text("Target: %s", target->GetName().c_str());
+                ImGui::TextDisabled("Write GVScript and attach it directly to this object.");
+                ImGui::Separator();
+
+                ImGui::InputTextMultiline("##InlineScriptPopup", m_ScriptCodeBuf,
+                                          sizeof(m_ScriptCodeBuf), ImVec2(700, 320),
+                                          ImGuiInputTextFlags_AllowTabInput);
+
+                if (ImGui::Button("Attach / Update Script", ImVec2(190, 0))) {
+                    auto* sc = target->GetComponent<ScriptComponent>();
+                    if (!sc) sc = target->AddComponent<ScriptComponent>();
+                    if (m_Script) sc->SetEngine(m_Script);
+                    sc->SetScriptPath(""); // force inline source mode
+                    sc->SetSource(std::string(m_ScriptCodeBuf));
+                    PushLog("[Script] Attached inline script to " + target->GetName());
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Run Once", ImVec2(110, 0))) {
+                    if (m_Script) {
+                        m_Script->SetSelfObject(target);
+                        if (m_Script->Execute(std::string(m_ScriptCodeBuf))) {
+                            PushLog("[Script] Inline script executed.");
+                        } else {
+                            PushLog("[Script] ERROR: " + m_Script->GetLastError());
+                        }
+                    } else {
+                        PushLog("[Script] Engine unavailable.");
+                    }
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Open Full Script Panel", ImVec2(180, 0))) {
+                    m_BottomTab = 7;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Close", ImVec2(90, 0))) {
+                    m_ScriptPopupTarget = nullptr;
+                    ImGui::CloseCurrentPopup();
+                }
+
+                ImGui::EndPopup();
+            }
+        }
 
         // Attach script file from disk (.gvs)
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.35f, 0.1f, 1.0f));
