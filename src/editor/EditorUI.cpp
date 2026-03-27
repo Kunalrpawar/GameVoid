@@ -1642,6 +1642,7 @@ void EditorUI::DrawInspectorScripts() {
         }
 
         // List ScriptComponents (GVScript)
+        i32 scriptRow = 0;
         for (auto& comp : m_Selected->GetComponents()) {
             if (comp->GetTypeName() == "ScriptComponent") {
                 hasAny = true;
@@ -1651,8 +1652,10 @@ void EditorUI::DrawInspectorScripts() {
                     ImGui::BulletText("Script: %s",
                         sc->GetScriptPath().empty() ? "(inline)" : sc->GetScriptPath().c_str());
                     ImGui::SameLine();
-                    if (ImGui::SmallButton("Edit Code (Popup)")) {
+                    std::string btn = "Edit Code (Popup)##EditScriptPopup_" + std::to_string(scriptRow++);
+                    if (ImGui::SmallButton(btn.c_str())) {
                         m_ScriptPopupTarget = m_Selected;
+                        m_ScriptPopupComponent = sc;
                         loadCodeIntoPopupBuffer(sc->GetSource());
                         ImGui::OpenPopup("Inline Script Editor");
                     }
@@ -1677,6 +1680,7 @@ void EditorUI::DrawInspectorScripts() {
                 PushLog("[Inspector] Added ScriptComponent to " + m_Selected->GetName());
             }
             m_ScriptPopupTarget = m_Selected;
+            m_ScriptPopupComponent = sc;
             loadCodeIntoPopupBuffer(sc->GetSource());
             ImGui::OpenPopup("Inline Script Editor");
         }
@@ -1689,6 +1693,7 @@ void EditorUI::DrawInspectorScripts() {
                 ImGui::TextDisabled("No object selected.");
                 if (ImGui::Button("Close", ImVec2(140, 0))) {
                     m_ScriptPopupTarget = nullptr;
+                    m_ScriptPopupComponent = nullptr;
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::EndPopup();
@@ -1702,11 +1707,13 @@ void EditorUI::DrawInspectorScripts() {
                                           ImGuiInputTextFlags_AllowTabInput);
 
                 if (ImGui::Button("Attach / Update Script", ImVec2(190, 0))) {
-                    auto* sc = target->GetComponent<ScriptComponent>();
+                    auto* sc = m_ScriptPopupComponent;
+                    if (!sc) sc = target->GetComponent<ScriptComponent>();
                     if (!sc) sc = target->AddComponent<ScriptComponent>();
                     if (m_Script) sc->SetEngine(m_Script);
                     sc->SetScriptPath(""); // force inline source mode
                     sc->SetSource(std::string(m_ScriptCodeBuf));
+                    m_ScriptPopupComponent = sc;
                     PushLog("[Script] Attached inline script to " + target->GetName());
                 }
                 ImGui::SameLine();
@@ -1729,6 +1736,7 @@ void EditorUI::DrawInspectorScripts() {
                 ImGui::SameLine();
                 if (ImGui::Button("Close", ImVec2(90, 0))) {
                     m_ScriptPopupTarget = nullptr;
+                    m_ScriptPopupComponent = nullptr;
                     ImGui::CloseCurrentPopup();
                 }
 
