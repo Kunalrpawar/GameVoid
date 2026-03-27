@@ -8,6 +8,7 @@
 #include "physics/Physics.h"
 #include "ai/AIManager.h"
 #include "scripting/ScriptEngine.h"
+#include "scripting/NativeScript.h"
 #include "assets/Assets.h"
 #include "renderer/MeshRenderer.h"
 #include "renderer/Lighting.h"
@@ -69,6 +70,8 @@ void CLIEditor::Init(Scene* scene, PhysicsWorld* physics, AIManager* ai,
         [this](Args a){ CmdAIGenObject(a); });
     RegisterCommand("addphysics","addphysics <name> [mass]  — add RigidBody+Collider to object",
         [this](Args a){ CmdAddPhysics(a); });
+    RegisterCommand("addscript", "addscript <name> <scriptType>  — attach C++ behavior (Rotator, Bob, Follow, AutoDestroy)",
+        [this](Args a){ CmdAddScript(a); });
     RegisterCommand("count",     "Count all objects in the scene",
         [this](Args a){ CmdCount(a); });
     RegisterCommand("rename",    "rename <old> <new>  — rename an object",
@@ -274,6 +277,43 @@ void CLIEditor::CmdAddPhysics(const std::vector<std::string>& args) {
     PhysicsWorld::AddPhysicsComponents(obj, RigidBodyType::Dynamic,
                                        ColliderType::Box, mass);
     std::cout << "Added RigidBody (mass=" << mass << ") + Collider to '" << args[0] << "'.\n";
+}
+
+void CLIEditor::CmdAddScript(const std::vector<std::string>& args) {
+    if (!m_Scene) { std::cout << "No active scene.\n"; return; }
+    if (args.size() < 2) {
+        std::cout << "Usage: addscript <name> <scriptType>\n"
+                  << "  scriptType: Rotator, Bob, Follow, AutoDestroy\n";
+        return;
+    }
+
+    auto* obj = m_Scene->FindByName(args[0]);
+    if (!obj) {
+        std::cout << "Object '" << args[0] << "' not found.\n";
+        return;
+    }
+
+    const std::string& scriptType = args[1];
+    if (scriptType == "Rotator") {
+        obj->AddComponent<RotatorBehavior>();
+    } else if (scriptType == "Bob") {
+        obj->AddComponent<BobBehavior>();
+    } else if (scriptType == "Follow") {
+        obj->AddComponent<FollowBehavior>();
+    } else if (scriptType == "AutoDestroy") {
+        obj->AddComponent<AutoDestroyBehavior>();
+    } else {
+        auto available = BehaviorRegistry::Instance().GetNames();
+        std::cout << "Unknown script type '" << scriptType << "'. Available: ";
+        for (size_t i = 0; i < available.size(); ++i) {
+            if (i > 0) std::cout << ", ";
+            std::cout << available[i];
+        }
+        std::cout << "\n";
+        return;
+    }
+
+    std::cout << "Attached script '" << scriptType << "' to '" << args[0] << "'.\n";
 }
 
 void CLIEditor::CmdCount(const std::vector<std::string>& /*args*/) {

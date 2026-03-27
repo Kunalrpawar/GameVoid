@@ -66,6 +66,7 @@ private:
     void CmdRunScript(const std::vector<std::string>& args);
     void CmdDump(const std::vector<std::string>& args);
     void CmdAddPhysics(const std::vector<std::string>& args);
+    void CmdAddScript(const std::vector<std::string>& args);
     void CmdCount(const std::vector<std::string>& args);
     void CmdRename(const std::vector<std::string>& args);
     void CmdSave(const std::vector<std::string>& args);
