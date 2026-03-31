@@ -3365,13 +3365,6 @@ void EditorUI::AIGenerate2D() {
     AISpawnBlueprints2D(result.objects);
     m_AIStatusMsg = "Generated " + std::to_string(result.objects.size()) + " 2D objects!";
     m_AIProgress  = 1.0f;
-
-    m_AIGenerating = false;
-}
-        PushLog("[AI 2D] Parse failed.");
-    }
-
-    m_AIGenerating = false;
 }
 
 void EditorUI::AISpawnBlueprints2D(const std::vector<AIManager::ObjectBlueprint>& blueprints) {
