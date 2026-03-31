@@ -35,7 +35,8 @@ $commonSources = @(
     "src/effects/ParticleSystem.cpp",
     "src/animation/Animation.cpp",
     "src/animation/SkeletalAnimation.cpp",
-    "src/future/Placeholders.cpp"
+    "src/future/Placeholders.cpp",
+    "src/scripting/physics/ForceController.cpp"
 )
 
 if ($CliOnly) {
