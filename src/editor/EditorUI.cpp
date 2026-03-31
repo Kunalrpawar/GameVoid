@@ -48,6 +48,8 @@
 #include <cmath>
 #include <cfloat>
 #include <cctype>
+
+using namespace gv;
 #include <fstream>
 #include <sstream>
 #include <cstring>

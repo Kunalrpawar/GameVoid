@@ -86,6 +86,29 @@ void ForceController::ApplyMomentVector(const Vec3& moment) {
     }
 }
 
+
+// Implementation must be inside namespace gv
+namespace gv {
+
+namespace gv {
+
+void ForceController::OnCreate() {
+    // Initialize default key bindings if desired
+    // Example: BindKeyToForce("W", ForceDirection::Up, 50.0f);
+}
+
+void ForceController::OnDestroy() {
+    m_KeyForceBindings.clear();
+    m_KeyMomentBindings.clear();
+}
+
+void ForceController::Update(f32 dt) {
+    ProcessInputBindings();
+    ApplyGravityOverride();
+    ApplyDamping(dt);
+    ClampVelocities();
+}
+
 void ForceController::BindKeyToForce(const std::string& keyName, ForceDirection dir, f32 magnitude) {
     m_KeyForceBindings.push_back({keyName, {dir, magnitude}});
 }
@@ -94,23 +117,9 @@ void ForceController::BindKeyToMoment(const std::string& keyName, MomentDirectio
     m_KeyMomentBindings.push_back({keyName, {dir, magnitude}});
 }
 
-Vec3 ForceController::GetForceDirectionVector(ForceDirection dir) const {
-    switch (dir) {
-    case ForceDirection::Forward:  return applyToLocalSpace ? Vec3(0, 0, 1) : Vec3(0, 0, 1);
-    case ForceDirection::Backward: return applyToLocalSpace ? Vec3(0, 0, -1) : Vec3(0, 0, -1);
-    case ForceDirection::Left:     return applyToLocalSpace ? Vec3(-1, 0, 0) : Vec3(-1, 0, 0);
-    case ForceDirection::Right:    return applyToLocalSpace ? Vec3(1, 0, 0) : Vec3(1, 0, 0);
-    case ForceDirection::Up:       return Vec3(0, 1, 0);
-    case ForceDirection::Down:     return Vec3(0, -1, 0);
-    case ForceDirection::Custom:   return Vec3(0, 0, 0);  // User must set manually
-    }
-    return Vec3(0, 0, 0);
-}
+// ...existing code for other ForceController methods...
 
-Vec3 ForceController::GetMomentDirectionVector(MomentDirection dir) const {
-    switch (dir) {
-    case MomentDirection::Pitch: return Vec3(1, 0, 0);
-    case MomentDirection::Yaw:   return Vec3(0, 1, 0);
+} // namespace gv
     case MomentDirection::Roll:  return Vec3(0, 0, 1);
     case MomentDirection::Custom: return Vec3(0, 0, 0);
     }
