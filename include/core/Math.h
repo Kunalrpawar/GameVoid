@@ -22,6 +22,9 @@ struct Vec2 {
     Vec2 operator+(const Vec2& o) const { return { x + o.x, y + o.y }; }
     Vec2 operator-(const Vec2& o) const { return { x - o.x, y - o.y }; }
     Vec2 operator*(f32 s) const         { return { x * s, y * s }; }
+    Vec2 operator/(f32 s) const         { return { x / s, y / s }; }
+    Vec2& operator*=(f32 s) { x *= s; y *= s; return *this; }
+    Vec2& operator/=(f32 s) { x /= s; y /= s; return *this; }
     f32  Length() const                  { return std::sqrt(x * x + y * y); }
     Vec2 Normalized() const {
         f32 l = Length();
