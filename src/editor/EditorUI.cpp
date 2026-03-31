@@ -2490,8 +2490,8 @@ void EditorUI::DrawAIGenerator() {
     // --- Autocomplete for @entity mentions in AI Generator ---
     static bool showEntityDropdown = false;
     static int entityDropdownPos = -1;
-    static std::vector<std::string> entityNames;
-    if (entityNames.empty() && m_Scene) {
+    std::vector<std::string> entityNames;
+    if (m_Scene) {
         for (const auto& obj : m_Scene->GetAllObjects()) {
             if (obj) entityNames.push_back(obj->GetName());
         }
@@ -2537,8 +2537,13 @@ void EditorUI::DrawAIGenerator() {
             std::string plusId = std::string("+##aigenent_") + entityName;
             if (ImGui::SmallButton(plusId.c_str())) {
                 m_ChatAttachedObject = m_Scene->FindByName(entityName);
+                ImGui::OpenPopup("AIGenEntityAttachedPopup");
             }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Attach '%s' to AI chat", entityName.c_str());
+            if (ImGui::BeginPopup("AIGenEntityAttachedPopup")) {
+                ImGui::Text("Attached: %s", entityName.c_str());
+                ImGui::EndPopup();
+            }
         }
     }
 
@@ -2709,8 +2714,8 @@ void EditorUI::DrawChatPanel() {
     // --- Autocomplete for @entity mentions ---
     static bool showEntityDropdown = false;
     static int entityDropdownPos = -1;
-    static std::vector<std::string> entityNames;
-    if (entityNames.empty() && m_Scene) {
+    std::vector<std::string> entityNames;
+    if (m_Scene) {
         for (const auto& obj : m_Scene->GetAllObjects()) {
             if (obj) entityNames.push_back(obj->GetName());
         }
@@ -2718,6 +2723,27 @@ void EditorUI::DrawChatPanel() {
     ImGui::PushItemWidth(availW - 210);
     bool enterPressed = ImGui::InputText("##ChatInput", m_ChatInputBuf, sizeof(m_ChatInputBuf),
                                          ImGuiInputTextFlags_EnterReturnsTrue);
+    // Highlight @mentions in input and show + button
+    std::string inputStr(m_ChatInputBuf);
+    size_t atPos = inputStr.find("@");
+    if (atPos != std::string::npos) {
+        size_t end = atPos + 1;
+        while (end < inputStr.size() && (isalnum(inputStr[end]) || inputStr[end] == '_')) ++end;
+        std::string entityName = inputStr.substr(atPos + 1, end - atPos - 1);
+        if (!entityName.empty() && m_Scene && m_Scene->FindByName(entityName)) {
+            ImGui::SameLine();
+            std::string plusId = std::string("+##inputent_") + entityName;
+            if (ImGui::SmallButton(plusId.c_str())) {
+                m_ChatAttachedObject = m_Scene->FindByName(entityName);
+                ImGui::OpenPopup("EntityAttachedPopup");
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Attach '%s' to AI chat", entityName.c_str());
+            if (ImGui::BeginPopup("EntityAttachedPopup")) {
+                ImGui::Text("Attached: %s", entityName.c_str());
+                ImGui::EndPopup();
+            }
+        }
+    }
     ImGui::PopItemWidth();
     // Detect @ for autocomplete
     int cursorPos = (int)ImGui::GetCursorPosX();
