@@ -2486,8 +2486,61 @@ void EditorUI::DrawAIGenerator() {
 
     ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f),
         m_DimMode == EditorDimMode::Mode2D ? "Describe your 2D scene:" : "Describe your scene:");
-    ImGui::InputTextMultiline("##AIPrompt", m_AIPromptBuf, sizeof(m_AIPromptBuf),
+
+    // --- Autocomplete for @entity mentions in AI Generator ---
+    static bool showEntityDropdown = false;
+    static int entityDropdownPos = -1;
+    static std::vector<std::string> entityNames;
+    if (entityNames.empty() && m_Scene) {
+        for (const auto& obj : m_Scene->GetAllObjects()) {
+            if (obj) entityNames.push_back(obj->GetName());
+        }
+    }
+    ImGui::PushItemWidth(-1);
+    bool aiPromptChanged = ImGui::InputTextMultiline("##AIPrompt", m_AIPromptBuf, sizeof(m_AIPromptBuf),
         ImVec2(-1, 60));
+    ImGui::PopItemWidth();
+    // Detect @ for autocomplete
+    int inputLen = (int)strlen(m_AIPromptBuf);
+    int atIdx = -1;
+    for (int i = inputLen - 1; i >= 0; --i) {
+        if (m_AIPromptBuf[i] == '@') { atIdx = i; break; }
+    }
+    if (atIdx != -1 && (atIdx == inputLen - 1 || isalnum(m_AIPromptBuf[atIdx + 1]) || m_AIPromptBuf[atIdx + 1] == '_')) {
+        showEntityDropdown = true;
+        entityDropdownPos = atIdx;
+    } else {
+        showEntityDropdown = false;
+    }
+    if (showEntityDropdown && !entityNames.empty()) {
+        ImGui::SetNextWindowPos(ImGui::GetCursorScreenPos());
+        if (ImGui::BeginListBox("##AIGenEntityAutocomplete", ImVec2(180, 120))) {
+            for (const auto& name : entityNames) {
+                if (ImGui::Selectable(name.c_str())) {
+                    strcpy(&m_AIPromptBuf[entityDropdownPos + 1], name.c_str());
+                    m_AIPromptBuf[entityDropdownPos + 1 + name.size()] = '\0';
+                    showEntityDropdown = false;
+                }
+            }
+            ImGui::EndListBox();
+        }
+    }
+    // + button to attach entity by name if prompt contains @entity
+    std::string promptStr(m_AIPromptBuf);
+    size_t atPos = promptStr.find("@");
+    if (atPos != std::string::npos) {
+        size_t end = atPos + 1;
+        while (end < promptStr.size() && (isalnum(promptStr[end]) || promptStr[end] == '_')) ++end;
+        std::string entityName = promptStr.substr(atPos + 1, end - atPos - 1);
+        if (!entityName.empty() && m_Scene && m_Scene->FindByName(entityName)) {
+            ImGui::SameLine();
+            std::string plusId = std::string("+##aigenent_") + entityName;
+            if (ImGui::SmallButton(plusId.c_str())) {
+                m_ChatAttachedObject = m_Scene->FindByName(entityName);
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Attach '%s' to AI chat", entityName.c_str());
+        }
+    }
 
     // Example prompts as clickable chips (mode-aware)
     ImGui::TextDisabled("Examples:");
@@ -2601,18 +2654,32 @@ void EditorUI::DrawChatPanel() {
         const auto& msg = m_ChatHistory[i];
         ImGui::PushID(static_cast<int>(i));
 
-        if (msg.isUser) {
-            // User message — right-aligned, blue tint
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.85f, 1.0f, 1.0f));
-            ImGui::TextWrapped("You: %s", msg.text.c_str());
-            ImGui::PopStyleColor();
-        } else {
-            // AI message — left-aligned, green tint
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 1.0f, 0.7f, 1.0f));
-            ImGui::TextWrapped("Gemini 3.0: %s", msg.text.c_str());
-            ImGui::PopStyleColor();
+        // Parse for @entity mentions and render with + button
+        std::string displayText = msg.text;
+        size_t atPos = 0;
+        while ((atPos = displayText.find("@", atPos)) != std::string::npos) {
+            size_t end = atPos + 1;
+            while (end < displayText.size() && (isalnum(displayText[end]) || displayText[end] == '_')) ++end;
+            std::string entityName = displayText.substr(atPos + 1, end - atPos - 1);
+            if (!entityName.empty() && m_Scene->FindByName(entityName)) {
+                // Render text before @entity
+                if (atPos > 0) ImGui::SameLine(0, 0);
+                ImGui::TextUnformatted(displayText.substr(0, atPos).c_str());
+                ImGui::SameLine(0, 0);
+                ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.2f, 1.0f), "@%s", entityName.c_str());
+                ImGui::SameLine(0, 0);
+                std::string plusId = std::string("+##chatent_") + entityName + std::to_string(i);
+                if (ImGui::SmallButton(plusId.c_str())) {
+                    m_ChatAttachedObject = m_Scene->FindByName(entityName);
+                }
+                ImGui::SameLine(0, 0);
+                displayText = displayText.substr(end);
+                atPos = 0;
+            } else {
+                ++atPos;
+            }
         }
-
+        if (!displayText.empty()) ImGui::TextUnformatted(displayText.c_str());
         ImGui::Spacing();
         ImGui::PopID();
     }
@@ -2639,10 +2706,46 @@ void EditorUI::DrawChatPanel() {
     float availW = ImGui::GetContentRegionAvail().x;
 
     // --- Attach object to chat ---
+    // --- Autocomplete for @entity mentions ---
+    static bool showEntityDropdown = false;
+    static int entityDropdownPos = -1;
+    static std::vector<std::string> entityNames;
+    if (entityNames.empty() && m_Scene) {
+        for (const auto& obj : m_Scene->GetAllObjects()) {
+            if (obj) entityNames.push_back(obj->GetName());
+        }
+    }
     ImGui::PushItemWidth(availW - 210);
     bool enterPressed = ImGui::InputText("##ChatInput", m_ChatInputBuf, sizeof(m_ChatInputBuf),
                                          ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::PopItemWidth();
+    // Detect @ for autocomplete
+    int cursorPos = (int)ImGui::GetCursorPosX();
+    int inputLen = (int)strlen(m_ChatInputBuf);
+    int atIdx = -1;
+    for (int i = inputLen - 1; i >= 0; --i) {
+        if (m_ChatInputBuf[i] == '@') { atIdx = i; break; }
+    }
+    if (atIdx != -1 && (atIdx == inputLen - 1 || isalnum(m_ChatInputBuf[atIdx + 1]) || m_ChatInputBuf[atIdx + 1] == '_')) {
+        showEntityDropdown = true;
+        entityDropdownPos = atIdx;
+    } else {
+        showEntityDropdown = false;
+    }
+    if (showEntityDropdown && !entityNames.empty()) {
+        ImGui::SetNextWindowPos(ImGui::GetCursorScreenPos());
+        if (ImGui::BeginListBox("##EntityAutocomplete", ImVec2(180, 120))) {
+            for (const auto& name : entityNames) {
+                if (ImGui::Selectable(name.c_str())) {
+                    // Replace @... with @name
+                    strcpy(&m_ChatInputBuf[entityDropdownPos + 1], name.c_str());
+                    m_ChatInputBuf[entityDropdownPos + 1 + name.size()] = '\0';
+                    showEntityDropdown = false;
+                }
+            }
+            ImGui::EndListBox();
+        }
+    }
     ImGui::SameLine();
     // + button to attach selected object
     if (ImGui::Button("+##AttachObjToChat", ImVec2(28, 0))) {
