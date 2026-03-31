@@ -1,5 +1,3 @@
-
-
 // ============================================================================
 // GameVoid Engine — Force Controller Implementation
 // ============================================================================
@@ -99,6 +97,7 @@ void ForceController::ApplyDamping(f32 dt) {
     if (rb2d) { rb2d->velocity *= (1.0f - m_LinearDamping * dt); rb2d->angularVel *= (1.0f - m_AngularDamping * dt); return; }
 }
 
+
 void ForceController::ClampVelocities() {
     auto* obj = GetOwner();
     if (!obj) return;
@@ -119,7 +118,8 @@ void ForceController::ClampVelocities() {
     }
 }
 
-void ForceController::ApplyGravityOverride() {
+// --- Out-of-namespace implementations for linkage ---
+void gv::ForceController::ApplyGravityOverride() {
     if (m_DisableGravity || !m_UseCustomGravity) return;
     auto* obj = GetOwner();
     if (!obj) return;
@@ -129,7 +129,7 @@ void ForceController::ApplyGravityOverride() {
     if (rb2d) { rb2d->velocity.y += m_CustomGravity * (1.0f / 60.0f); return; }
 }
 
-f32 ForceController::GetCurrentSpeed() const {
+f32 gv::ForceController::GetCurrentSpeed() const {
     auto* obj = GetOwner();
     if (!obj) return 0.0f;
     auto* rb = obj->GetComponent<RigidBody>();
@@ -139,7 +139,7 @@ f32 ForceController::GetCurrentSpeed() const {
     return 0.0f;
 }
 
-f32 ForceController::GetCurrentAngularSpeed() const {
+f32 gv::ForceController::GetCurrentAngularSpeed() const {
     auto* obj = GetOwner();
     if (!obj) return 0.0f;
     auto* rb = obj->GetComponent<RigidBody>();
@@ -151,49 +151,4 @@ f32 ForceController::GetCurrentAngularSpeed() const {
 
 } // namespace gv
 
-void ForceController::ApplyGravityOverride() {
-    if (m_DisableGravity || !m_UseCustomGravity) return;
 
-    auto* obj = GetGameObject();
-    if (!obj) return;
-
-    auto* rb = obj->GetComponent<RigidBody>();
-    if (rb) {
-        rb->velocity.y += m_CustomGravity * (1.0f / 60.0f);
-        return;
-    }
-
-    auto* rb2d = obj->GetComponent<RigidBody2D>();
-    if (rb2d) {
-        rb2d->velocity.y += m_CustomGravity * (1.0f / 60.0f);
-        return;
-    }
-}
-
-f32 ForceController::GetCurrentSpeed() const {
-    auto* obj = GetGameObject();
-    if (!obj) return 0.0f;
-
-    auto* rb = obj->GetComponent<RigidBody>();
-    if (rb) return rb->velocity.Length();
-
-    auto* rb2d = obj->GetComponent<RigidBody2D>();
-    if (rb2d) return rb2d->velocity.Length();
-
-    return 0.0f;
-}
-
-f32 ForceController::GetCurrentAngularSpeed() const {
-    auto* obj = GetGameObject();
-    if (!obj) return 0.0f;
-
-    auto* rb = obj->GetComponent<RigidBody>();
-    if (rb) return rb->angularVelocity.Length();
-
-    auto* rb2d = obj->GetComponent<RigidBody2D>();
-    if (rb2d) return std::fabs(rb2d->angularVel);
-
-    return 0.0f;
-}
-
-} // namespace gv
