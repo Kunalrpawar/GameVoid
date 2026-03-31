@@ -74,9 +74,9 @@ public:
         // Sync transform yaw so the mesh faces the right direction
         if (GetOwner()) {
             auto& t = GetOwner()->GetTransform();
-            ::gv::Vec3 euler = t.GetEulerDeg();
-            euler.y = heading;
-            t.SetEulerDeg(euler.x, euler.y, euler.z);
+            // ::gv::Vec3 euler = t.GetEulerDeg(); // Removed: Transform has no GetEulerDeg
+            // Instead, just set yaw directly (pitch/roll = 0)
+            t.SetEulerDeg(0.0f, heading, 0.0f);
         }
     }
 };

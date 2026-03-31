@@ -46,9 +46,9 @@ public:
     std::string GetTypeName() const override { return "ForceController"; }
 
     // ── Lifecycle ──────────────────────────────────────────────────────────
-    void OnCreate() override;
-    void OnDestroy() override;
-    void Update(f32 dt) override;
+    void OnCreate();
+    void OnDestroy();
+    void Update(f32 dt);
 
     // ── Force application ──────────────────────────────────────────────────
     /// Apply a force in a specific direction
