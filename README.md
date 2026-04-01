@@ -18,7 +18,7 @@
 
 GameVoid is a **vibe-coding game engine** — instead of hand-placing every object and writing every line of code, you describe what you want in plain English and let AI build it for you.
 
-Want a cyberpunk city with neon buildings? Type it. Need a 2D platformer with ground, platforms, and coins? Just ask. GameVoid uses **Google Gemini AI** to turn your ideas into playable scenes in seconds.
+Want a cyberpunk city with neon buildings? Type it. Need a 2D platformer with ground, platforms, and coins? Just ask.
 
 It's a full-featured 2D/3D game editor with a  UI, built from scratch in C++ with OpenGL. Whether you're a beginner who's never touched a game engine or an experienced dev who wants to prototype fast, GameVoid gets you from idea to game with minimal friction.
 
@@ -48,8 +48,7 @@ The heart of GameVoid. Open the AI panel, type something like:
 
 Hit **Generate** and watch your scene appear. The AI creates game objects with proper transforms, components, materials, and physics — ready to play. Works in both 2D and 3D modes.
 
-### Built-in Gemini Chat
-Talk directly to Gemini 3.0 inside the editor. Ask about game design, get help with gameplay logic, brainstorm level ideas — all without leaving the engine. It's like having a game dev mentor built into your tools.
+
 
 ### Full 2D + 3D Editor
 A  editor layout with:
@@ -122,7 +121,6 @@ You can also configure your API key from inside the editor via the **AI** menu.
 |------|-------------|
 | `--editor-gui` / `--gui` | Launch the graphical Dear ImGui editor |
 | `--no-editor` | Skip editors, run the real-time game loop |
-| `--api-key <KEY>` | Set your Google Gemini API key |
 | `--width <W>` | Window width (default: 1280) |
 | `--height <H>` | Window height (default: 720) |
 | `--help` / `-h` | Show help |
