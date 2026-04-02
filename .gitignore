@@ -1,6 +1,7 @@
-# GameVoid Engine
+# GameVoid Engine dependencies
 deps/
 
+# Executables & binaries
 *.exe
 *.o
 *.obj
@@ -10,7 +11,7 @@ deps/
 *.pdb
 *.ilk
 
-# Secrets — NEVER commit API keys
+# Config files
 gamevoid_config.ini
 
 # Build outputs
