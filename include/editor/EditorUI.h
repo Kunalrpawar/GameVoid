@@ -33,7 +33,6 @@
 #include "editor2d/Editor2DViewport.h"
 #include <string>
 #include <vector>
-#include <future>
 #include <deque>
 #include <set>
 
@@ -459,6 +458,10 @@ private:
     char m_ChatLastAIScript[4096] = {}; // buffer for last AI-generated script
     std::vector<std::string> m_ChatAttachedFiles;
     std::vector<std::string> m_ChatAttachedImages;
+
+#ifdef _WIN32
+    static unsigned long __stdcall Img3DGenerationThread(void* lpParam);
+#endif
     // ── Behavior editor state ──────────────────────────────────────────────
     i32  m_AddComponentIdx = 0;        // "Add Component" dropdown index
     i32  m_AddBehaviorIdx  = 0;        // behavior dropdown index
@@ -467,14 +470,15 @@ private:
     ImageTo3DManager  m_ImageTo3D;
     char m_Img3DPathBuf[512] = {};          // image file path input buffer
     bool m_Img3DServerOnline    = false;    // cached server status
-    bool m_Img3DGenerating      = false;    // generation in progress
+    volatile bool m_Img3DGenerating      = false;    // generation in progress
+    volatile bool m_Img3DDone            = false;    // generation finished
     f32  m_Img3DProgress        = 0.0f;     // 0..1 progress
     std::string m_Img3DStatusMsg;           // status message display
     std::string m_Img3DLastObjPath;         // last generated OBJ path
     std::string m_Img3DLastTexPath;         // last generated texture path
     i32  m_Img3DMethod          = 0;        // 0=Auto, 1=TripoSR, 2=MiDaS
+    ImageTo3DRequest m_Img3DReq;            // stored request
     ImageTo3DResult m_Img3DLastResult;      // last generation result
-    std::future<ImageTo3DResult> m_Img3DFuture; // Async generation task
 
     // ── Subsystem instances ────────────────────────────────────────────────
     MaterialLibrary*  m_MaterialLib = nullptr;

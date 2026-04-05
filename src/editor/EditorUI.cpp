@@ -7102,6 +7102,15 @@ void EditorUI::DrawInspector2D() {
 // Image to 3D Panel — AI-powered image-to-mesh generation
 // ============================================================================
 
+#ifdef _WIN32
+DWORD WINAPI EditorUI::Img3DGenerationThread(LPVOID lpParam) {
+    EditorUI* ui = static_cast<EditorUI*>(lpParam);
+    ui->m_Img3DLastResult = ui->m_ImageTo3D.GenerateFromImage(ui->m_Img3DReq);
+    ui->m_Img3DDone = true;
+    return 0;
+}
+#endif
+
 void EditorUI::DrawImageTo3DPanel() {
     ImGui::Columns(3, "Img3DCols", true);
     ImGui::SetColumnWidth(0, 320);
@@ -7179,30 +7188,36 @@ void EditorUI::DrawImageTo3DPanel() {
     }
     if (ImGui::Button("Generate 3D Model", ImVec2(-1, 36))) {
         m_Img3DGenerating = true;
+        m_Img3DDone = false;
         m_Img3DStatusMsg = "Generating...";
         m_Img3DProgress = 0.0f;
         PushLog("[Image3D] Starting generation from: " + std::string(m_Img3DPathBuf));
 
         // Build request
-        ImageTo3DRequest req;
-        req.imagePath = m_Img3DPathBuf;
+        m_Img3DReq.imagePath = m_Img3DPathBuf;
         switch (m_Img3DMethod) {
-            case 0: req.method = "auto";    break;
-            case 1: req.method = "triposr"; break;
-            case 2: req.method = "midas";   break;
+            case 0: m_Img3DReq.method = "auto";    break;
+            case 1: m_Img3DReq.method = "triposr"; break;
+            case 2: m_Img3DReq.method = "midas";   break;
         }
 
-        // Run generation asynchronously so we don't freeze the UI
-        m_Img3DFuture = std::async(std::launch::async, [this, req]() {
-            return m_ImageTo3D.GenerateFromImage(req);
-        });
+#ifdef _WIN32
+        // Run generation asynchronously using native Win32 thread
+        CreateThread(nullptr, 0, EditorUI::Img3DGenerationThread, this, 0, nullptr);
+#else
+        // Fallback synchronous
+        m_Img3DLastResult = m_ImageTo3D.GenerateFromImage(m_Img3DReq);
+        m_Img3DDone = true;
+#endif
+    }
+    if (!canGenerate) {
+        ImGui::EndDisabled();
     }
 
     // Check future status if generation is in progress
-    if (m_Img3DGenerating && m_Img3DFuture.valid()) {
-        if (m_Img3DFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-            ImageTo3DResult result = m_Img3DFuture.get();
-            m_Img3DLastResult = result;
+    if (m_Img3DGenerating) {
+        if (m_Img3DDone) {
+            ImageTo3DResult result = m_Img3DLastResult;
 
             if (result.success) {
                 m_Img3DStatusMsg = "Success! Loading into scene...";
