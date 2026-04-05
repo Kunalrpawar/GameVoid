@@ -85,6 +85,8 @@ public:
     /// End the ImGui frame and push draw data to the screen.
     void EndFrame();
 
+    void ApplyModernTheme();
+
     // ── Log sink ───────────────────────────────────────────────────────────
     /// Push a log message into the console panel.
     static void PushLog(const std::string& msg);

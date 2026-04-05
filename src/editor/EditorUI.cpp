@@ -123,6 +123,71 @@ void EditorUI_PushLog2D(const std::string& msg) {
     EditorUI::PushLog("[2D] " + msg);
 }
 
+// ── Theme Overhaul ──────────────────────────────────────────────────────────
+void EditorUI::ApplyModernTheme() {
+    ImGuiStyle& style = ImGui::GetStyle();
+    ImGui::StyleColorsDark();
+
+    // Paddings & Spacing
+    style.WindowPadding     = ImVec2(10.0f, 10.0f);
+    style.FramePadding      = ImVec2(8.0f, 6.0f);
+    style.ItemSpacing       = ImVec2(8.0f, 8.0f);
+    style.ItemInnerSpacing  = ImVec2(6.0f, 6.0f);
+    style.GrabMinSize       = 12.0f;
+    style.ScrollbarSize     = 14.0f;
+    
+    // Rounding
+    style.WindowRounding    = 8.0f;
+    style.ChildRounding     = 6.0f;
+    style.FrameRounding     = 6.0f;
+    style.PopupRounding     = 6.0f;
+    style.ScrollbarRounding = 6.0f;
+    style.GrabRounding      = 6.0f;
+    style.TabRounding       = 6.0f;
+
+    // Colors
+    ImVec4* colors = style.Colors;
+    colors[ImGuiCol_Text]                   = ImVec4(0.95f, 0.95f, 0.95f, 1.00f);
+    colors[ImGuiCol_TextDisabled]           = ImVec4(0.50f, 0.50f, 0.50f, 1.00f);
+    colors[ImGuiCol_WindowBg]               = ImVec4(0.11f, 0.12f, 0.13f, 1.00f);
+    colors[ImGuiCol_ChildBg]                = ImVec4(0.15f, 0.16f, 0.17f, 1.00f);
+    colors[ImGuiCol_PopupBg]                = ImVec4(0.11f, 0.12f, 0.13f, 0.94f);
+    colors[ImGuiCol_Border]                 = ImVec4(0.24f, 0.25f, 0.26f, 1.00f);
+    colors[ImGuiCol_BorderShadow]           = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+    colors[ImGuiCol_FrameBg]                = ImVec4(0.20f, 0.21f, 0.22f, 1.00f);
+    colors[ImGuiCol_FrameBgHovered]         = ImVec4(0.26f, 0.27f, 0.28f, 1.00f);
+    colors[ImGuiCol_FrameBgActive]          = ImVec4(0.32f, 0.33f, 0.34f, 1.00f);
+    colors[ImGuiCol_TitleBg]                = ImVec4(0.08f, 0.09f, 0.10f, 1.00f);
+    colors[ImGuiCol_TitleBgActive]          = ImVec4(0.08f, 0.09f, 0.10f, 1.00f);
+    colors[ImGuiCol_TitleBgCollapsed]       = ImVec4(0.08f, 0.09f, 0.10f, 0.51f);
+    colors[ImGuiCol_MenuBarBg]              = ImVec4(0.08f, 0.09f, 0.10f, 1.00f);
+    colors[ImGuiCol_ScrollbarBg]            = ImVec4(0.11f, 0.12f, 0.13f, 1.00f);
+    colors[ImGuiCol_ScrollbarGrab]          = ImVec4(0.24f, 0.25f, 0.26f, 1.00f);
+    colors[ImGuiCol_ScrollbarGrabHovered]   = ImVec4(0.31f, 0.32f, 0.33f, 1.00f);
+    colors[ImGuiCol_ScrollbarGrabActive]    = ImVec4(0.38f, 0.39f, 0.40f, 1.00f);
+    colors[ImGuiCol_CheckMark]              = ImVec4(0.35f, 0.58f, 0.81f, 1.00f);
+    colors[ImGuiCol_SliderGrab]             = ImVec4(0.35f, 0.58f, 0.81f, 1.00f);
+    colors[ImGuiCol_SliderGrabActive]       = ImVec4(0.40f, 0.65f, 0.90f, 1.00f);
+    colors[ImGuiCol_Button]                 = ImVec4(0.24f, 0.25f, 0.26f, 1.00f);
+    colors[ImGuiCol_ButtonHovered]          = ImVec4(0.35f, 0.58f, 0.81f, 1.00f);
+    colors[ImGuiCol_ButtonActive]           = ImVec4(0.40f, 0.65f, 0.90f, 1.00f);
+    colors[ImGuiCol_Header]                 = ImVec4(0.24f, 0.25f, 0.26f, 1.00f);
+    colors[ImGuiCol_HeaderHovered]          = ImVec4(0.35f, 0.58f, 0.81f, 1.00f);
+    colors[ImGuiCol_HeaderActive]           = ImVec4(0.40f, 0.65f, 0.90f, 1.00f);
+    colors[ImGuiCol_Separator]              = ImVec4(0.24f, 0.25f, 0.26f, 1.00f);
+    colors[ImGuiCol_SeparatorHovered]       = ImVec4(0.35f, 0.58f, 0.81f, 1.00f);
+    colors[ImGuiCol_SeparatorActive]        = ImVec4(0.40f, 0.65f, 0.90f, 1.00f);
+    colors[ImGuiCol_ResizeGrip]             = ImVec4(0.24f, 0.25f, 0.26f, 1.00f);
+    colors[ImGuiCol_ResizeGripHovered]      = ImVec4(0.35f, 0.58f, 0.81f, 1.00f);
+    colors[ImGuiCol_ResizeGripActive]       = ImVec4(0.40f, 0.65f, 0.90f, 1.00f);
+    colors[ImGuiCol_Tab]                    = ImVec4(0.15f, 0.16f, 0.17f, 1.00f);
+    colors[ImGuiCol_TabHovered]             = ImVec4(0.35f, 0.58f, 0.81f, 1.00f);
+    colors[ImGuiCol_TabActive]              = ImVec4(0.24f, 0.25f, 0.26f, 1.00f);
+    colors[ImGuiCol_TabUnfocused]           = ImVec4(0.11f, 0.12f, 0.13f, 1.00f);
+    colors[ImGuiCol_TabUnfocusedActive]     = ImVec4(0.15f, 0.16f, 0.17f, 1.00f);
+    colors[ImGuiCol_TextSelectedBg]         = ImVec4(0.35f, 0.58f, 0.81f, 0.43f);
+}
+
 // ── Lifecycle ──────────────────────────────────────────────────────────────
 
 bool EditorUI::Init(Window* window, OpenGLRenderer* renderer, Scene* scene,
@@ -145,18 +210,9 @@ bool EditorUI::Init(Window* window, OpenGLRenderer* renderer, Scene* scene,
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
-    // Dark theme with slight blue tint
-    ImGui::StyleColorsDark();
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding   = 4.0f;
-    style.FrameRounding    = 3.0f;
-    style.GrabRounding     = 3.0f;
-    style.TabRounding      = 4.0f;
-    style.WindowPadding    = ImVec2(8, 8);
-    style.Colors[ImGuiCol_WindowBg]      = ImVec4(0.12f, 0.12f, 0.15f, 1.0f);
-    style.Colors[ImGuiCol_TitleBg]       = ImVec4(0.08f, 0.08f, 0.10f, 1.0f);
-    style.Colors[ImGuiCol_TitleBgActive] = ImVec4(0.15f, 0.15f, 0.22f, 1.0f);
-    style.Colors[ImGuiCol_MenuBarBg]     = ImVec4(0.10f, 0.10f, 0.14f, 1.0f);
+    
+    // Apply Modern UI Style
+    ApplyModernTheme();
 
     // Platform/Renderer backends
     GLFWwindow* glfwWin = m_Window->GetNativeWindow();
@@ -2698,11 +2754,10 @@ void EditorUI::DrawChatPanel() {
 
     ImGui::Separator();
 
-    // Chat history scrollable area — fill available space minus input row
-    float inputRowH = 32.0f;
-    float footerH = inputRowH + ImGui::GetStyle().ItemSpacing.y * 2.0f;
+    // Chat history scrollable area — fill available space minus input row & attachments
+    float inputRowH = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y * 2.0f;
     bool hasAttachments = m_ChatAttachedObject || !m_ChatAttachedFiles.empty() || !m_ChatAttachedImages.empty();
-    if (hasAttachments) footerH += 24.0f; // Add room for the attachment display row
+    float footerH = inputRowH + (hasAttachments ? 60.0f : 0.0f); // 60px fixed area for attachments
     ImGui::BeginChild("ChatHistory", ImVec2(0, -footerH), true,
                        ImGuiWindowFlags_HorizontalScrollbar);
 
@@ -2877,6 +2932,7 @@ void EditorUI::DrawChatPanel() {
 
     if (hasAttachments) {
         ImGui::Spacing();
+        ImGui::BeginChild("ChatAttachmentsArea", ImVec2(0, 56.0f), true, ImGuiWindowFlags_HorizontalScrollbar);
         ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.5f, 1), "Attached:");
         ImGui::SameLine();
         if (m_ChatAttachedObject) {
@@ -2905,7 +2961,7 @@ void EditorUI::DrawChatPanel() {
             }
             ImGui::SameLine();
         }
-        ImGui::NewLine();
+        ImGui::EndChild();
     }
 
     // Send chat message
@@ -7112,9 +7168,12 @@ DWORD WINAPI EditorUI::Img3DGenerationThread(LPVOID lpParam) {
 #endif
 
 void EditorUI::DrawImageTo3DPanel() {
-    ImGui::Columns(3, "Img3DCols", true);
-    ImGui::SetColumnWidth(0, 320);
-    ImGui::SetColumnWidth(1, 350);
+    if (ImGui::BeginTable("Img3DTable", 3, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollX)) {
+        ImGui::TableSetupColumn("Controls", ImGuiTableColumnFlags_WidthFixed, 320.0f);
+        ImGui::TableSetupColumn("Result", ImGuiTableColumnFlags_WidthFixed, 350.0f);
+        ImGui::TableSetupColumn("Help", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
 
     // ═══════════════════════════════════════════════════════════════════════
     // Column 1: Input & Controls
@@ -7280,7 +7339,7 @@ void EditorUI::DrawImageTo3DPanel() {
         ImGui::TextColored(msgCol, "%s", m_Img3DStatusMsg.c_str());
     }
 
-    ImGui::NextColumn();
+    ImGui::TableSetColumnIndex(1);
 
     // ═══════════════════════════════════════════════════════════════════════
     // Column 2: Result Info
@@ -7321,8 +7380,7 @@ void EditorUI::DrawImageTo3DPanel() {
         ImGui::TextDisabled("Select an image and click Generate.");
     }
 
-    ImGui::NextColumn();
-
+    ImGui::TableSetColumnIndex(2);
     // ═══════════════════════════════════════════════════════════════════════
     // Column 3: Instructions & Help
     // ═══════════════════════════════════════════════════════════════════════
@@ -7360,7 +7418,8 @@ void EditorUI::DrawImageTo3DPanel() {
     ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1), "Supported: chair, car, tree, etc.");
     ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1), "Output: OBJ + PNG texture");
 
-    ImGui::Columns(1);
+        ImGui::EndTable();
+    }
 }
 
 } // namespace gv
