@@ -219,8 +219,8 @@ std::string ImageTo3DManager::HttpPostJson(const std::string& host, u32 port,
         return "";
     }
 
-    // Set a longer timeout for generation (can take 60+ seconds)
-    DWORD timeout = 120000; // 2 minutes
+    // Set a much longer timeout for generation (can take 3-5 minutes on CPU)
+    DWORD timeout = 600000; // 10 minutes
     InternetSetOptionA(hRequest, INTERNET_OPTION_RECEIVE_TIMEOUT, &timeout, sizeof(timeout));
     InternetSetOptionA(hRequest, INTERNET_OPTION_CONNECT_TIMEOUT, &timeout, sizeof(timeout));
     InternetSetOptionA(hRequest, INTERNET_OPTION_SEND_TIMEOUT, &timeout, sizeof(timeout));

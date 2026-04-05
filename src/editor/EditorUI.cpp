@@ -48,6 +48,9 @@
 #include <cmath>
 #include <cfloat>
 #include <cctype>
+#include <fstream>
+#include <wininet.h>
+#include <chrono>
 
 using namespace gv;
 #include <fstream>
@@ -2698,6 +2701,8 @@ void EditorUI::DrawChatPanel() {
     // Chat history scrollable area — fill available space minus input row
     float inputRowH = 32.0f;
     float footerH = inputRowH + ImGui::GetStyle().ItemSpacing.y * 2.0f;
+    bool hasAttachments = m_ChatAttachedObject || !m_ChatAttachedFiles.empty() || !m_ChatAttachedImages.empty();
+    if (hasAttachments) footerH += 24.0f; // Add room for the attachment display row
     ImGui::BeginChild("ChatHistory", ImVec2(0, -footerH), true,
                        ImGuiWindowFlags_HorizontalScrollbar);
 
@@ -2811,9 +2816,22 @@ void EditorUI::DrawChatPanel() {
     } else {
         showEntityDropdown = false;
     }
-    if (showEntityDropdown && !entityNames.empty()) {
+    if (showEntityDropdown) {
         ImGui::SetNextWindowPos(ImGui::GetCursorScreenPos());
-        if (ImGui::BeginListBox("##EntityAutocomplete", ImVec2(180, 120))) {
+        if (ImGui::BeginListBox("##EntityAutocomplete", ImVec2(200, 160))) {
+            if (ImGui::Selectable("[Attach File...]")) {
+                m_ChatInputBuf[entityDropdownPos] = '\0';
+                std::string path = OpenFileDialog("All Files\0*.*\0", "Select File to Attach");
+                if (!path.empty()) m_ChatAttachedFiles.push_back(path);
+                showEntityDropdown = false;
+            }
+            if (ImGui::Selectable("[Attach Image...]")) {
+                m_ChatInputBuf[entityDropdownPos] = '\0';
+                std::string path = OpenFileDialog("Image Files\0*.png;*.jpg;*.jpeg;*.bmp\0All Files\0*.*\0", "Select Image to Attach");
+                if (!path.empty()) m_ChatAttachedImages.push_back(path);
+                showEntityDropdown = false;
+            }
+            ImGui::Separator();
             for (const auto& name : entityNames) {
                 if (ImGui::Selectable(name.c_str())) {
                     // Replace @... with @name
@@ -2833,13 +2851,6 @@ void EditorUI::DrawChatPanel() {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Attach currently selected object to chat prompt");
     ImGui::SameLine();
-    // Show attached object (if any) and allow clearing
-    if (m_ChatAttachedObject) {
-        ImGui::TextDisabled("%s", m_ChatAttachedObject->GetName().c_str());
-        ImGui::SameLine();
-        if (ImGui::SmallButton("x##DetachObjFromChat")) m_ChatAttachedObject = nullptr;
-        ImGui::SameLine();
-    }
 
     if (!sendEnabled) ImGui::BeginDisabled();
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.5f, 0.8f, 1.0f));
@@ -2862,6 +2873,39 @@ void EditorUI::DrawChatPanel() {
             ImGui::SetTooltip("Generate 2D sprites from your prompt");
         else
             ImGui::SetTooltip("Generate 3D scene objects from your prompt");
+    }
+
+    if (hasAttachments) {
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.5f, 1), "Attached:");
+        ImGui::SameLine();
+        if (m_ChatAttachedObject) {
+            ImGui::TextDisabled("[Entity] %s", m_ChatAttachedObject->GetName().c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("x##DetachObjFromChat")) m_ChatAttachedObject = nullptr;
+            ImGui::SameLine();
+        }
+        for (size_t i = 0; i < m_ChatAttachedFiles.size(); ++i) {
+            std::string fname = m_ChatAttachedFiles[i].substr(m_ChatAttachedFiles[i].find_last_of("/\\") + 1);
+            ImGui::TextDisabled("[File] %s", fname.c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton(("x##DetachFile" + std::to_string(i)).c_str())) {
+                m_ChatAttachedFiles.erase(m_ChatAttachedFiles.begin() + i);
+                i--;
+            }
+            ImGui::SameLine();
+        }
+        for (size_t i = 0; i < m_ChatAttachedImages.size(); ++i) {
+            std::string fname = m_ChatAttachedImages[i].substr(m_ChatAttachedImages[i].find_last_of("/\\") + 1);
+            ImGui::TextDisabled("[Image] %s", fname.c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton(("x##DetachImg" + std::to_string(i)).c_str())) {
+                m_ChatAttachedImages.erase(m_ChatAttachedImages.begin() + i);
+                i--;
+            }
+            ImGui::SameLine();
+        }
+        ImGui::NewLine();
     }
 
     // Send chat message
@@ -2910,6 +2954,59 @@ void EditorUI::DrawChatPanel() {
             fullPrompt += "Do not generate scene JSON or new objects when the user asks for code on an attached object. ";
             fullPrompt += "Only output one code block and nothing else for script/code requests.\n";
         }
+
+        // Process attached files
+        for (const auto& fpath : m_ChatAttachedFiles) {
+            std::ifstream ifs(fpath);
+            if (ifs.is_open()) {
+                std::string contents((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+                std::string fname = fpath.substr(fpath.find_last_of("/\\") + 1);
+                fullPrompt += "\nThe user attached a file named '" + fname + "' with contents:\n```\n" + contents + "\n```\n";
+            }
+        }
+
+        // Process attached images via Python server
+        for (const auto& ipath : m_ChatAttachedImages) {
+            std::string fname = ipath.substr(ipath.find_last_of("/\\") + 1);
+            if (m_Img3DServerOnline) {
+                // Call the analyze endpoint
+                std::string url = "http://localhost:5000/analyze_from_path";
+                
+                // Replace single backslashes with forward slashes for JSON safety
+                std::string safePath = ipath;
+                std::replace(safePath.begin(), safePath.end(), '\\', '/');
+                std::string jsonBody = "{\"image_path\": \"" + safePath + "\"}";
+                
+                HINTERNET hInternet = InternetOpenA("GameVoid/1.0", INTERNET_OPEN_TYPE_DIRECT, nullptr, nullptr, 0);
+                if (hInternet) {
+                    HINTERNET hConnect = InternetConnectA(hInternet, "localhost", 5000, nullptr, nullptr, INTERNET_SERVICE_HTTP, 0, 0);
+                    if (hConnect) {
+                        HINTERNET hRequest = HttpOpenRequestA(hConnect, "POST", "/analyze_from_path", nullptr, nullptr, nullptr, 0, 0);
+                        if (hRequest) {
+                            const char* headers = "Content-Type: application/json\r\n";
+                            if (HttpSendRequestA(hRequest, headers, (DWORD)strlen(headers), (LPVOID)jsonBody.c_str(), (DWORD)jsonBody.size())) {
+                                std::string respBody;
+                                char buf[4096];
+                                DWORD bytesRead = 0;
+                                while (InternetReadFile(hRequest, buf, sizeof(buf) - 1, &bytesRead) && bytesRead > 0) {
+                                    buf[bytesRead] = '\0';
+                                    respBody.append(buf, bytesRead);
+                                    bytesRead = 0;
+                                }
+                                fullPrompt += "\nThe user attached an image named '" + fname + "'. "
+                                              "The Python vision server analyzed it and returned: " + respBody + "\n";
+                            }
+                            InternetCloseHandle(hRequest);
+                        }
+                        InternetCloseHandle(hConnect);
+                    }
+                    InternetCloseHandle(hInternet);
+                }
+            } else {
+                fullPrompt += "\nThe user attached an image named '" + fname + "' but the vision server is offline, so its contents cannot be seen.\n";
+            }
+        }
+        
         fullPrompt += "\n";
 
         // Include last few messages for context (up to 6 messages)
@@ -7095,36 +7192,49 @@ void EditorUI::DrawImageTo3DPanel() {
             case 2: req.method = "midas";   break;
         }
 
-        // Run generation (synchronous for now — production would use async)
-        ImageTo3DResult result = m_ImageTo3D.GenerateFromImage(req);
-        m_Img3DLastResult = result;
+        // Run generation asynchronously so we don't freeze the UI
+        m_Img3DFuture = std::async(std::launch::async, [this, req]() {
+            return m_ImageTo3D.GenerateFromImage(req);
+        });
+    }
 
-        if (result.success) {
-            m_Img3DStatusMsg = "Success! Loading into scene...";
-            m_Img3DLastObjPath = result.objFilePath;
-            m_Img3DLastTexPath = result.textureFilePath;
-            PushLog("[Image3D] Model generated: " + result.objFilePath);
+    // Check future status if generation is in progress
+    if (m_Img3DGenerating && m_Img3DFuture.valid()) {
+        if (m_Img3DFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            ImageTo3DResult result = m_Img3DFuture.get();
+            m_Img3DLastResult = result;
 
-            // Auto-load into scene
-            if (m_Scene && m_Assets) {
-                GameObject* obj = m_ImageTo3D.LoadIntoScene(result, *m_Scene, *m_Assets);
-                if (obj) {
-                    m_Selected = obj;
-                    m_Img3DStatusMsg = "Done! Created: " + obj->GetName();
-                    PushLog("[Image3D] Created object: " + obj->GetName() +
-                            " (" + std::to_string(result.vertexCount) + " verts, " +
-                            std::to_string(result.faceCount) + " faces)");
-                } else {
-                    m_Img3DStatusMsg = "Generated but failed to load into scene.";
-                    PushLog("[Image3D] Warning: mesh load failed.");
+            if (result.success) {
+                m_Img3DStatusMsg = "Success! Loading into scene...";
+                m_Img3DLastObjPath = result.objFilePath;
+                m_Img3DLastTexPath = result.textureFilePath;
+                PushLog("[Image3D] Model generated: " + result.objFilePath);
+
+                // Auto-load into scene
+                if (m_Scene && m_Assets) {
+                    GameObject* obj = m_ImageTo3D.LoadIntoScene(result, *m_Scene, *m_Assets);
+                    if (obj) {
+                        m_Selected = obj;
+                        m_Img3DStatusMsg = "Done! Created: " + obj->GetName();
+                        PushLog("[Image3D] Created object: " + obj->GetName() +
+                                " (" + std::to_string(result.vertexCount) + " verts, " +
+                                std::to_string(result.faceCount) + " faces)");
+                    } else {
+                        m_Img3DStatusMsg = "Generated but failed to load into scene.";
+                        PushLog("[Image3D] Warning: mesh load failed.");
+                    }
                 }
+            } else {
+                m_Img3DStatusMsg = "Failed: " + result.errorMessage;
+                PushLog("[Image3D] Error: " + result.errorMessage);
             }
+            m_Img3DGenerating = false;
+            m_Img3DProgress = 1.0f;
         } else {
-            m_Img3DStatusMsg = "Failed: " + result.errorMessage;
-            PushLog("[Image3D] Error: " + result.errorMessage);
+            // Fake animation progress
+            m_Img3DProgress += ImGui::GetIO().DeltaTime * 0.05f;
+            if (m_Img3DProgress > 0.95f) m_Img3DProgress = 0.95f;
         }
-        m_Img3DGenerating = false;
-        m_Img3DProgress = 1.0f;
     }
     if (!canGenerate) {
         ImGui::EndDisabled();

@@ -33,6 +33,7 @@
 #include "editor2d/Editor2DViewport.h"
 #include <string>
 #include <vector>
+#include <future>
 #include <deque>
 #include <set>
 
@@ -456,6 +457,8 @@ private:
     // ── AI Chat attach state ─────────────────────────────────────────────
     GameObject* m_ChatAttachedObject = nullptr; // object attached to chat for script gen
     char m_ChatLastAIScript[4096] = {}; // buffer for last AI-generated script
+    std::vector<std::string> m_ChatAttachedFiles;
+    std::vector<std::string> m_ChatAttachedImages;
     // ── Behavior editor state ──────────────────────────────────────────────
     i32  m_AddComponentIdx = 0;        // "Add Component" dropdown index
     i32  m_AddBehaviorIdx  = 0;        // behavior dropdown index
@@ -471,6 +474,7 @@ private:
     std::string m_Img3DLastTexPath;         // last generated texture path
     i32  m_Img3DMethod          = 0;        // 0=Auto, 1=TripoSR, 2=MiDaS
     ImageTo3DResult m_Img3DLastResult;      // last generation result
+    std::future<ImageTo3DResult> m_Img3DFuture; // Async generation task
 
     // ── Subsystem instances ────────────────────────────────────────────────
     MaterialLibrary*  m_MaterialLib = nullptr;

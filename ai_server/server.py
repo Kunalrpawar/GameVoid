@@ -130,6 +130,41 @@ def analyze_image():
                 pass
 
 
+@app.route("/analyze_from_path", methods=["POST"])
+def analyze_from_path():
+    """
+    Analyze a local image path using Gemini Vision API.
+    Expects JSON: {"image_path": "C:/path/to/image.png"}
+    """
+    data = request.get_json(silent=True)
+    if not data or "image_path" not in data:
+        return jsonify({"success": False, "error": "No image_path provided"}), 400
+        
+    image_path = data["image_path"]
+    if not os.path.exists(image_path):
+        return jsonify({"success": False, "error": f"Image not found: {image_path}"}), 400
+        
+    api_key = _load_api_key()
+    if not api_key:
+        return jsonify({"success": False, "error": "No Gemini API key configured"}), 400
+
+    try:
+        analyzer = ImageAnalyzer(api_key)
+        result = analyzer.analyze(image_path)
+        
+        if "error" in result and result.get("object") is None:
+            return jsonify({"success": False, "error": result["error"]}), 500
+
+        return jsonify({
+            "success": True,
+            "object": result.get("object", "unknown_object"),
+            "category": result.get("category", "unknown"),
+            "description": result.get("description", "")
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/generate", methods=["POST"])
 def generate_model():
     """
