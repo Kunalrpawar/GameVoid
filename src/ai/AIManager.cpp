@@ -18,8 +18,32 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <cctype>
 
 namespace gv {
+
+namespace {
+
+std::string ToLowerCopy(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return s;
+}
+
+bool ContainsMentionAndScriptIntent(const std::string& prompt) {
+    if (prompt.find('@') == std::string::npos) return false;
+    const std::string lower = ToLowerCopy(prompt);
+    return (lower.find("script") != std::string::npos) ||
+           (lower.find("code") != std::string::npos) ||
+           (lower.find("c++") != std::string::npos) ||
+           (lower.find("cpp") != std::string::npos) ||
+           (lower.find("gvscript") != std::string::npos) ||
+           (lower.find("attach") != std::string::npos) ||
+           (lower.find("behavior") != std::string::npos);
+}
+
+} // namespace
 
 // ── Init / Config Persistence ──────────────────────────────────────────────
 
@@ -612,6 +636,15 @@ AIManager::SceneGenResult AIManager::ParseSceneGenResponse(const std::string& ra
 }
 
 AIManager::SceneGenResult AIManager::GenerateSceneFromPrompt(const std::string& userPrompt) const {
+    if (ContainsMentionAndScriptIntent(userPrompt)) {
+        SceneGenResult r;
+        r.success = false;
+        r.errorMessage = "Blocked scene generation: prompt looks like object-script intent (@mention + script/code). Use chat script attach flow.";
+        r.rawResponse = userPrompt;
+        GV_LOG_WARN("AIManager::GenerateSceneFromPrompt blocked script-intent prompt: " + userPrompt);
+        return r;
+    }
+
     std::string fullPrompt = BuildSceneGenPrompt(userPrompt);
     AIResponse resp = SendPrompt(fullPrompt);
 
@@ -627,6 +660,7 @@ AIManager::SceneGenResult AIManager::GenerateSceneFromPrompt(const std::string& 
 
 // == generateObjectFromPrompt ================================================
 // The primary AI->game-world entry-point.
+
 
 GameObject* AIManager::GenerateObjectFromPrompt(const std::string& prompt, Scene& scene) const {
     GV_LOG_INFO("AIManager::GenerateObjectFromPrompt -- \"" + prompt + "\"");
@@ -851,6 +885,15 @@ AIManager::SceneGenResult2D AIManager::ParseScene2DGenResponse(const std::string
 }
 
 AIManager::SceneGenResult2D AIManager::GenerateScene2DFromPrompt(const std::string& userPrompt) const {
+    if (ContainsMentionAndScriptIntent(userPrompt)) {
+        SceneGenResult2D result;
+        result.success = false;
+        result.errorMessage = "Blocked 2D scene generation: prompt looks like object-script intent (@mention + script/code).";
+        result.rawResponse = userPrompt;
+        GV_LOG_WARN("AIManager::GenerateScene2DFromPrompt blocked script-intent prompt: " + userPrompt);
+        return result;
+    }
+
     if (m_Config.apiKey.empty()) {
         SceneGenResult2D result;
         result.success = false;

@@ -11,6 +11,7 @@
 #include "physics/Physics.h"
 #include "assets/Assets.h"
 #include "ai/AIManager.h"
+#include "ai/ImageTo3DManager.h"
 #include "scripting/ScriptEngine.h"
 #include "editor/CLIEditor.h"
 #ifdef GV_HAS_GLFW
@@ -65,6 +66,7 @@ public:
     PhysicsWorld&  GetPhysics()      { return m_Physics; }
     AssetManager&  GetAssets()       { return m_Assets; }
     AIManager&     GetAI()           { return m_AI; }
+    ImageTo3DManager& GetImageTo3D()  { return m_ImageTo3D; }
     ScriptEngine&  GetScripting()    { return m_Scripting; }
     CLIEditor&     GetEditor()       { return m_Editor; }
     Window&        GetWindow()       { return m_Window; }
@@ -84,6 +86,7 @@ private:
     PhysicsWorld      m_Physics;
     AssetManager      m_Assets;
     AIManager         m_AI;
+    ImageTo3DManager  m_ImageTo3D;
     ScriptEngine      m_Scripting;
     CLIEditor         m_Editor;
 #ifdef GV_HAS_GLFW

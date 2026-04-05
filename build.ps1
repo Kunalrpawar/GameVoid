@@ -26,6 +26,7 @@ $commonSources = @(
     "src/physics/Physics.cpp",
     "src/assets/Assets.cpp",
     "src/ai/AIManager.cpp",
+    "src/ai/ImageTo3DManager.cpp",
     "src/scripting/ScriptEngine.cpp",
     "src/scripting/NodeGraph.cpp",
     "src/scripting/NativeScript.cpp",

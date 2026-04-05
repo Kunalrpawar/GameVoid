@@ -62,6 +62,51 @@ using namespace gv;
 
 namespace gv {
 
+namespace {
+
+std::string ToLowerCopy(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return s;
+}
+
+std::string ExtractMentionedEntityName(const std::string& text) {
+    size_t atPos = text.find('@');
+    if (atPos == std::string::npos || atPos + 1 >= text.size()) return "";
+
+    size_t end = atPos + 1;
+    while (end < text.size()) {
+        unsigned char c = static_cast<unsigned char>(text[end]);
+        if (!std::isalnum(c) && c != '_') break;
+        ++end;
+    }
+    if (end <= atPos + 1) return "";
+    return text.substr(atPos + 1, end - atPos - 1);
+}
+
+bool LooksLikeScriptAttachPrompt(const std::string& text) {
+    const std::string lower = ToLowerCopy(text);
+    const bool asksCode = (lower.find("script") != std::string::npos) ||
+                          (lower.find("code") != std::string::npos) ||
+                          (lower.find("c++") != std::string::npos) ||
+                          (lower.find("cpp") != std::string::npos) ||
+                          (lower.find("gvscript") != std::string::npos) ||
+                          (lower.find("behavior") != std::string::npos) ||
+                          (lower.find("attach") != std::string::npos);
+    return asksCode;
+}
+
+bool ContainsUnsafeGlobalScriptOps(const std::string& script) {
+    const std::string lower = ToLowerCopy(script);
+    return (lower.find("spawn(") != std::string::npos) ||
+           (lower.find("destroy(") != std::string::npos) ||
+           (lower.find("find(") != std::string::npos) ||
+           (lower.find("get_object_count(") != std::string::npos);
+}
+
+} // namespace
+
 // ── Static log buffer ──────────────────────────────────────────────────────
 std::deque<std::string> EditorUI::s_Logs;
 
@@ -247,6 +292,12 @@ void EditorUI::Update3DPlayWindow(f32 /*dt*/) {
 
         if (m_Scene && m_Renderer) {
             Camera* cam = m_Scene->GetActiveCamera();
+            if (!cam) {
+                if (auto* mainCamObj = m_Scene->FindByName("MainCamera")) {
+                    cam = mainCamObj->GetComponent<Camera>();
+                    if (cam) m_Scene->SetActiveCamera(cam);
+                }
+            }
             if (cam) m_Renderer->RenderScene(*m_Scene, *cam);
         }
 
@@ -2816,6 +2867,17 @@ void EditorUI::DrawChatPanel() {
     // Send chat message
     if ((enterPressed || sendClicked) && sendEnabled) {
         std::string userMsg(m_ChatInputBuf);
+
+        // Auto-attach mentioned object for prompts like "@Cube_1 add script"
+        if (!m_ChatAttachedObject && m_Scene) {
+            const std::string mentioned = ExtractMentionedEntityName(userMsg);
+            if (!mentioned.empty()) {
+                if (auto* obj = m_Scene->FindByName(mentioned)) {
+                    m_ChatAttachedObject = obj;
+                }
+            }
+        }
+
         m_ChatHistory.push_back({ true, userMsg });
         m_ChatInputBuf[0] = '\0';
         m_ChatScrollToBottom = true;
@@ -2845,7 +2907,8 @@ void EditorUI::DrawChatPanel() {
         if (m_ChatAttachedObject) {
             fullPrompt += "The user has attached the object '" + std::string(m_ChatAttachedObject->GetName()) + "' to this chat. ";
             fullPrompt += "If the user asks for a script, generate a GVScript code block for this object. ";
-            fullPrompt += "Only output the code block, nothing else, if the user asks for code.\n";
+            fullPrompt += "Do not generate scene JSON or new objects when the user asks for code on an attached object. ";
+            fullPrompt += "Only output one code block and nothing else for script/code requests.\n";
         }
         fullPrompt += "\n";
 
@@ -2883,6 +2946,16 @@ void EditorUI::DrawChatPanel() {
                         size_t langEnd = reply.find('\n', codeStart);
                         if (langEnd == std::string::npos) langEnd = codeStart + 3;
                         std::string code = reply.substr(langEnd + 1, codeEnd - langEnd - 1);
+
+                        if (ContainsUnsafeGlobalScriptOps(code)) {
+                            PushLog("[AI Chat] Script rejected (unsafe global scene ops) for " + m_ChatAttachedObject->GetName());
+                            reply += "\n\n[Script rejected: contains scene-global operations like spawn/find/destroy. Please request self-only behavior.]";
+                            m_ChatHistory.push_back({ false, reply });
+                            m_ChatWaiting = false;
+                            m_ChatScrollToBottom = true;
+                            return;
+                        }
+
                         // Save for user
                         size_t len = code.size();
                         if (len >= sizeof(m_ChatLastAIScript)) len = sizeof(m_ChatLastAIScript) - 1;
@@ -2913,6 +2986,84 @@ void EditorUI::DrawChatPanel() {
     // Generate scene objects from prompt
     if (genClicked && genEnabled) {
         std::string userMsg(m_ChatInputBuf);
+
+        const std::string mentioned = ExtractMentionedEntityName(userMsg);
+        const bool scriptIntent = LooksLikeScriptAttachPrompt(userMsg);
+        if (scriptIntent) {
+            GameObject* target = m_ChatAttachedObject;
+            if (!target && !mentioned.empty() && m_Scene) {
+                target = m_Scene->FindByName(mentioned);
+            }
+
+            m_ChatHistory.push_back({ true, "[Generate] " + userMsg });
+            m_ChatInputBuf[0] = '\0';
+            m_ChatScrollToBottom = true;
+
+            if (!target) {
+                m_ChatHistory.push_back({ false, "[Error] Script prompt detected, but no target object was attached/found. Mention an object like @Cube_1 or attach with +." });
+                m_ChatScrollToBottom = true;
+                PushLog("[AI Chat] Generate blocked (script intent without target): " + userMsg);
+                return;
+            }
+
+            m_ChatAttachedObject = target;
+            std::string prompt =
+                "You are a GameVoid scripting assistant. "
+                "Generate code for object '" + std::string(target->GetName()) + "'. "
+                "Return exactly one code block (```gvscript ... ```). "
+                "Do not return JSON, explanations, or scene/object creation output.\n"
+                "User request: " + userMsg;
+
+            AIResponse resp = m_AI->SendPrompt(prompt);
+            if (resp.success && !resp.text.empty()) {
+                std::string reply = resp.text;
+                size_t codeStart = reply.find("```gvscript");
+                if (codeStart == std::string::npos) codeStart = reply.find("```lua");
+                if (codeStart == std::string::npos) codeStart = reply.find("```python");
+                if (codeStart == std::string::npos) codeStart = reply.find("```js");
+                if (codeStart == std::string::npos) codeStart = reply.find("```");
+
+                if (codeStart != std::string::npos) {
+                    size_t codeEnd = reply.find("```", codeStart + 3);
+                    if (codeEnd != std::string::npos) {
+                        size_t langEnd = reply.find('\n', codeStart);
+                        if (langEnd == std::string::npos) langEnd = codeStart + 3;
+                        std::string code = reply.substr(langEnd + 1, codeEnd - langEnd - 1);
+
+                        if (ContainsUnsafeGlobalScriptOps(code)) {
+                            m_ChatHistory.push_back({ false, "[Error] Script rejected: contains scene-global operations (spawn/find/destroy)." });
+                            m_ChatScrollToBottom = true;
+                            return;
+                        }
+
+                        size_t len = code.size();
+                        if (len >= sizeof(m_ChatLastAIScript)) len = sizeof(m_ChatLastAIScript) - 1;
+                        std::memcpy(m_ChatLastAIScript, code.c_str(), len);
+                        m_ChatLastAIScript[len] = '\0';
+
+                        auto* sc = target->GetComponent<ScriptComponent>();
+                        if (!sc) sc = target->AddComponent<ScriptComponent>();
+                        if (m_Script) sc->SetEngine(m_Script);
+                        sc->SetScriptPath("");
+                        sc->SetSource(std::string(m_ChatLastAIScript));
+
+                        m_ChatHistory.push_back({ false, "Script attached to @" + std::string(target->GetName()) + " (Generate handled as script intent)." });
+                        PushLog("[AI Chat] Script attached via Generate to " + target->GetName());
+                    } else {
+                        m_ChatHistory.push_back({ false, "[Error] AI reply did not include a complete code block." });
+                    }
+                } else {
+                    m_ChatHistory.push_back({ false, "[Error] AI reply did not include a code block." });
+                }
+            } else {
+                const std::string err = resp.errorMessage.empty() ? "No response from Gemini 3.0." : resp.errorMessage;
+                m_ChatHistory.push_back({ false, "[Error] " + err });
+            }
+
+            m_ChatScrollToBottom = true;
+            return;
+        }
+
         m_ChatHistory.push_back({ true, "[Generate] " + userMsg });
         m_ChatInputBuf[0] = '\0';
         m_ChatScrollToBottom = true;
@@ -2951,6 +3102,81 @@ void EditorUI::AIGenerate3D() {
 
     std::string prompt(m_AIPromptBuf);
     if (prompt.empty()) return;
+
+    // If prompt is targeting an entity script, do not run scene generation.
+    const std::string mentioned = ExtractMentionedEntityName(prompt);
+    const bool scriptIntent = LooksLikeScriptAttachPrompt(prompt);
+    if (scriptIntent && !mentioned.empty()) {
+        GameObject* target = nullptr;
+        if (m_Scene) target = m_Scene->FindByName(mentioned);
+        if (!target) {
+            m_AIStatusMsg = "Error: Mentioned object '@" + mentioned + "' was not found.";
+            PushLog("[AI] " + m_AIStatusMsg);
+            return;
+        }
+
+        m_ChatAttachedObject = target;
+        m_AIGenerating = true;
+        m_AIProgress = 0.3f;
+        m_AIStatusMsg = "Generating script for @" + std::string(target->GetName()) + "...";
+
+        std::string scriptPrompt =
+            "You are a GameVoid scripting assistant. "
+            "Generate code for object '" + std::string(target->GetName()) + "'. "
+            "Return exactly one code block (```gvscript ... ```). "
+            "Do not return JSON, explanations, or scene/object creation output.\n"
+            "User request: " + prompt;
+
+        AIResponse resp = m_AI->SendPrompt(scriptPrompt);
+        m_AIProgress = 0.8f;
+        if (resp.success && !resp.text.empty()) {
+            std::string reply = resp.text;
+            size_t codeStart = reply.find("```gvscript");
+            if (codeStart == std::string::npos) codeStart = reply.find("```lua");
+            if (codeStart == std::string::npos) codeStart = reply.find("```python");
+            if (codeStart == std::string::npos) codeStart = reply.find("```js");
+            if (codeStart == std::string::npos) codeStart = reply.find("```");
+
+            if (codeStart != std::string::npos) {
+                size_t codeEnd = reply.find("```", codeStart + 3);
+                if (codeEnd != std::string::npos) {
+                    size_t langEnd = reply.find('\n', codeStart);
+                    if (langEnd == std::string::npos) langEnd = codeStart + 3;
+                    std::string code = reply.substr(langEnd + 1, codeEnd - langEnd - 1);
+
+                    if (ContainsUnsafeGlobalScriptOps(code)) {
+                        m_AIStatusMsg = "Error: Script rejected (contains scene-global operations like spawn/find/destroy).";
+                        m_AIGenerating = false;
+                        return;
+                    }
+
+                    size_t len = code.size();
+                    if (len >= sizeof(m_ChatLastAIScript)) len = sizeof(m_ChatLastAIScript) - 1;
+                    std::memcpy(m_ChatLastAIScript, code.c_str(), len);
+                    m_ChatLastAIScript[len] = '\0';
+
+                    auto* sc = target->GetComponent<ScriptComponent>();
+                    if (!sc) sc = target->AddComponent<ScriptComponent>();
+                    if (m_Script) sc->SetEngine(m_Script);
+                    sc->SetScriptPath("");
+                    sc->SetSource(std::string(m_ChatLastAIScript));
+
+                    m_AIStatusMsg = "Script attached to @" + std::string(target->GetName()) + ".";
+                    PushLog("[AI] Script attached via AI Generator to " + target->GetName());
+                    m_AIProgress = 1.0f;
+                } else {
+                    m_AIStatusMsg = "Error: AI reply did not include a complete code block.";
+                }
+            } else {
+                m_AIStatusMsg = "Error: AI reply did not include a code block.";
+            }
+        } else {
+            m_AIStatusMsg = "Error: " + (resp.errorMessage.empty() ? std::string("No response from Gemini 3.0.") : resp.errorMessage);
+        }
+
+        m_AIGenerating = false;
+        return;
+    }
 
     // Reject prompts that are too short / vague for scene generation (< 8 chars)
     {
@@ -4268,6 +4494,12 @@ void EditorUI::DrawBottomTabs() {
         if (ImGui::BeginTabItem("AI Chat")) {
             m_BottomTab = 9;
             DrawChatPanel();
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Image to 3D")) {
+            m_BottomTab = 10;
+            DrawImageTo3DPanel();
             ImGui::EndTabItem();
         }
 
@@ -6767,6 +6999,243 @@ void EditorUI::DrawInspector2D() {
     }
 
     ImGui::End();
+}
+
+// ============================================================================
+// Image to 3D Panel — AI-powered image-to-mesh generation
+// ============================================================================
+
+void EditorUI::DrawImageTo3DPanel() {
+    ImGui::Columns(3, "Img3DCols", true);
+    ImGui::SetColumnWidth(0, 320);
+    ImGui::SetColumnWidth(1, 350);
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Column 1: Input & Controls
+    // ═══════════════════════════════════════════════════════════════════════
+    ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.0f, 1), "Image to 3D Model");
+    ImGui::Separator();
+
+    // Server status indicator
+    {
+        const char* statusLabel = m_Img3DServerOnline ? "Server: ONLINE" : "Server: OFFLINE";
+        ImVec4 statusColor = m_Img3DServerOnline
+            ? ImVec4(0.2f, 1.0f, 0.3f, 1.0f)
+            : ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
+        ImGui::TextColored(statusColor, "%s", statusLabel);
+
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Check")) {
+            m_Img3DServerOnline = m_ImageTo3D.IsServerRunning();
+            PushLog(m_Img3DServerOnline
+                ? "[Image3D] Server is online."
+                : "[Image3D] Server is offline.");
+        }
+        ImGui::SameLine();
+        if (!m_Img3DServerOnline) {
+            if (ImGui::SmallButton("Start Server")) {
+                PushLog("[Image3D] Starting AI server...");
+                m_Img3DServerOnline = m_ImageTo3D.StartServer();
+                if (m_Img3DServerOnline) {
+                    PushLog("[Image3D] Server started successfully!");
+                } else {
+                    PushLog("[Image3D] Failed to start server. Run: .\\ai_server\\setup_ai_server.ps1");
+                }
+            }
+        }
+    }
+
+    ImGui::Spacing();
+
+    // Image file path input
+    ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.4f, 1), "Source Image");
+    ImGui::SetNextItemWidth(-70);
+    ImGui::InputText("##Img3DPath", m_Img3DPathBuf, sizeof(m_Img3DPathBuf));
+    ImGui::SameLine();
+    if (ImGui::Button("Browse##Img3D", ImVec2(60, 0))) {
+        std::string path = OpenFileDialog(
+            "Image Files (*.png;*.jpg;*.jpeg;*.bmp;*.webp)\0*.png;*.jpg;*.jpeg;*.bmp;*.webp\0"
+            "All Files (*.*)\0*.*\0",
+            "Select Image for 3D Generation"
+        );
+        if (!path.empty()) {
+            std::snprintf(m_Img3DPathBuf, sizeof(m_Img3DPathBuf), "%s", path.c_str());
+            PushLog("[Image3D] Selected: " + path);
+        }
+    }
+
+    ImGui::Spacing();
+
+    // Generation method
+    ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.4f, 1), "Method");
+    const char* methods[] = { "Auto (Best Available)", "TripoSR (Full 3D)", "MiDaS (Depth-based)" };
+    ImGui::Combo("##Img3DMethod", &m_Img3DMethod, methods, 3);
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Generate button
+    bool canGenerate = (m_Img3DPathBuf[0] != '\0') && !m_Img3DGenerating && m_Img3DServerOnline;
+    if (!canGenerate) {
+        ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("Generate 3D Model", ImVec2(-1, 36))) {
+        m_Img3DGenerating = true;
+        m_Img3DStatusMsg = "Generating...";
+        m_Img3DProgress = 0.0f;
+        PushLog("[Image3D] Starting generation from: " + std::string(m_Img3DPathBuf));
+
+        // Build request
+        ImageTo3DRequest req;
+        req.imagePath = m_Img3DPathBuf;
+        switch (m_Img3DMethod) {
+            case 0: req.method = "auto";    break;
+            case 1: req.method = "triposr"; break;
+            case 2: req.method = "midas";   break;
+        }
+
+        // Run generation (synchronous for now — production would use async)
+        ImageTo3DResult result = m_ImageTo3D.GenerateFromImage(req);
+        m_Img3DLastResult = result;
+
+        if (result.success) {
+            m_Img3DStatusMsg = "Success! Loading into scene...";
+            m_Img3DLastObjPath = result.objFilePath;
+            m_Img3DLastTexPath = result.textureFilePath;
+            PushLog("[Image3D] Model generated: " + result.objFilePath);
+
+            // Auto-load into scene
+            if (m_Scene && m_Assets) {
+                GameObject* obj = m_ImageTo3D.LoadIntoScene(result, *m_Scene, *m_Assets);
+                if (obj) {
+                    m_Selected = obj;
+                    m_Img3DStatusMsg = "Done! Created: " + obj->GetName();
+                    PushLog("[Image3D] Created object: " + obj->GetName() +
+                            " (" + std::to_string(result.vertexCount) + " verts, " +
+                            std::to_string(result.faceCount) + " faces)");
+                } else {
+                    m_Img3DStatusMsg = "Generated but failed to load into scene.";
+                    PushLog("[Image3D] Warning: mesh load failed.");
+                }
+            }
+        } else {
+            m_Img3DStatusMsg = "Failed: " + result.errorMessage;
+            PushLog("[Image3D] Error: " + result.errorMessage);
+        }
+        m_Img3DGenerating = false;
+        m_Img3DProgress = 1.0f;
+    }
+    if (!canGenerate) {
+        ImGui::EndDisabled();
+    }
+
+    // Status hints
+    if (!m_Img3DServerOnline) {
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1), "Start the AI server first!");
+    } else if (m_Img3DPathBuf[0] == '\0') {
+        ImGui::TextDisabled("Select an image to begin.");
+    }
+
+    // Progress bar
+    if (m_Img3DGenerating) {
+        ImGui::ProgressBar(m_Img3DProgress, ImVec2(-1, 0), "Generating...");
+    }
+
+    // Status message
+    if (!m_Img3DStatusMsg.empty()) {
+        ImGui::Spacing();
+        bool isError = m_Img3DStatusMsg.find("Failed") != std::string::npos ||
+                       m_Img3DStatusMsg.find("Error") != std::string::npos;
+        bool isSuccess = m_Img3DStatusMsg.find("Done") != std::string::npos ||
+                         m_Img3DStatusMsg.find("Success") != std::string::npos;
+        ImVec4 msgCol = isError   ? ImVec4(1, 0.3f, 0.3f, 1)
+                      : isSuccess ? ImVec4(0.3f, 1, 0.3f, 1)
+                                  : ImVec4(0.8f, 0.8f, 0.4f, 1);
+        ImGui::TextColored(msgCol, "%s", m_Img3DStatusMsg.c_str());
+    }
+
+    ImGui::NextColumn();
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Column 2: Result Info
+    // ═══════════════════════════════════════════════════════════════════════
+    ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1), "Generation Result");
+    ImGui::Separator();
+
+    if (m_Img3DLastResult.success) {
+        ImGui::Text("Object:  %s", m_Img3DLastResult.objectName.c_str());
+        ImGui::Text("Method:  %s", m_Img3DLastResult.generationMethod.c_str());
+        ImGui::Text("Vertices: %u", m_Img3DLastResult.vertexCount);
+        ImGui::Text("Faces:    %u", m_Img3DLastResult.faceCount);
+        ImGui::Text("Time:     %.1f s", m_Img3DLastResult.generationTime);
+
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.8f, 1), "Output Files:");
+        ImGui::TextWrapped("OBJ: %s", m_Img3DLastResult.objFilePath.c_str());
+        ImGui::TextWrapped("Tex: %s", m_Img3DLastResult.textureFilePath.c_str());
+
+        ImGui::Spacing();
+        ImGui::Separator();
+
+        // Re-load button
+        if (ImGui::Button("Re-load into Scene", ImVec2(-1, 24))) {
+            if (m_Scene && m_Assets) {
+                GameObject* obj = m_ImageTo3D.LoadIntoScene(m_Img3DLastResult, *m_Scene, *m_Assets);
+                if (obj) {
+                    m_Selected = obj;
+                    PushLog("[Image3D] Re-loaded: " + obj->GetName());
+                }
+            }
+        }
+    } else if (!m_Img3DLastResult.errorMessage.empty()) {
+        ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "Last Error:");
+        ImGui::TextWrapped("%s", m_Img3DLastResult.errorMessage.c_str());
+    } else {
+        ImGui::TextDisabled("No generation results yet.");
+        ImGui::TextDisabled("Select an image and click Generate.");
+    }
+
+    ImGui::NextColumn();
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Column 3: Instructions & Help
+    // ═══════════════════════════════════════════════════════════════════════
+    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.4f, 1), "How It Works");
+    ImGui::Separator();
+
+    ImGui::TextWrapped(
+        "1. Start the AI server (first time only)\n"
+        "2. Browse and select an image (PNG/JPG)\n"
+        "3. Choose a generation method\n"
+        "4. Click 'Generate 3D Model'\n"
+        "5. Model auto-loads into the scene!"
+    );
+
+    ImGui::Spacing();
+    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1), "Methods:");
+    ImGui::BulletText("Auto: tries TripoSR, falls back to MiDaS");
+    ImGui::BulletText("TripoSR: full 360 deg 3D (slower, better)");
+    ImGui::BulletText("MiDaS: depth-based relief (faster)");
+
+    ImGui::Spacing();
+    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1), "Setup:");
+    ImGui::TextWrapped(
+        "Run this command once to install:\n"
+        ".\\ai_server\\setup_ai_server.ps1"
+    );
+    ImGui::Spacing();
+    ImGui::TextWrapped(
+        "To start server only:\n"
+        ".\\ai_server\\setup_ai_server.ps1 -StartOnly"
+    );
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1), "Supported: chair, car, tree, etc.");
+    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1), "Output: OBJ + PNG texture");
+
+    ImGui::Columns(1);
 }
 
 } // namespace gv

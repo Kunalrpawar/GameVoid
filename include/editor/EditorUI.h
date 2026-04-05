@@ -24,6 +24,7 @@
 #include "core/Math.h"
 #include "renderer/Renderer.h"
 #include "ai/AIManager.h"
+#include "ai/ImageTo3DManager.h"
 #include "scripting/NativeScript.h"
 #include "camera/EditorCamera.h"
 #include "input/ViewportInput.h"
@@ -140,6 +141,7 @@ private:
     void DrawCodeScriptPanel();        // inline script code editor
     void DrawBehaviorPanel();          // new: behavior editor panel
     void DrawChatPanel();              // AI chat panel
+    void DrawImageTo3DPanel();         // Image → 3D model generation panel
 
     // ── High-priority feature panels ───────────────────────────────────────
     void DrawAssetBrowser();           // file-tree asset browser
@@ -402,7 +404,7 @@ private:
     bool   m_ChatScrollToBottom = false; // auto-scroll flag
 
     // ── Bottom tab state ───────────────────────────────────────────────────
-    i32 m_BottomTab = 0;   // 0=Console, 1=Terrain, 2=Material, 3=Particle, 4=Animation, 5=NodeScript, 6=Behavior, 7=CodeScript, 8=AssetBrowser
+    i32 m_BottomTab = 0;   // 0=Console, 1=Terrain, 2=Material, 3=Particle, 4=Animation, 5=NodeScript, 6=Behavior, 7=CodeScript, 8=AssetBrowser, 9=ImageTo3D
 
     // ── Terrain editor state ───────────────────────────────────────────────
     i32  m_TerrainRes       = 64;
@@ -457,6 +459,18 @@ private:
     // ── Behavior editor state ──────────────────────────────────────────────
     i32  m_AddComponentIdx = 0;        // "Add Component" dropdown index
     i32  m_AddBehaviorIdx  = 0;        // behavior dropdown index
+
+    // ── Image to 3D pipeline state ─────────────────────────────────────────
+    ImageTo3DManager  m_ImageTo3D;
+    char m_Img3DPathBuf[512] = {};          // image file path input buffer
+    bool m_Img3DServerOnline    = false;    // cached server status
+    bool m_Img3DGenerating      = false;    // generation in progress
+    f32  m_Img3DProgress        = 0.0f;     // 0..1 progress
+    std::string m_Img3DStatusMsg;           // status message display
+    std::string m_Img3DLastObjPath;         // last generated OBJ path
+    std::string m_Img3DLastTexPath;         // last generated texture path
+    i32  m_Img3DMethod          = 0;        // 0=Auto, 1=TripoSR, 2=MiDaS
+    ImageTo3DResult m_Img3DLastResult;      // last generation result
 
     // ── Subsystem instances ────────────────────────────────────────────────
     MaterialLibrary*  m_MaterialLib = nullptr;

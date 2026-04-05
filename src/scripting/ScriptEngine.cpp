@@ -6,6 +6,7 @@
 #include "core/GameObject.h"
 #include "core/EventSystem.h"
 #include "renderer/MeshRenderer.h"
+#include "core/Engine.h"
 #include <fstream>
 #include <sstream>
 #include <cmath>
@@ -240,6 +241,41 @@ ScriptValue ScriptEngine::GetVariable(const std::string& name) const {
 
 void ScriptEngine::BindSceneAPI(Scene& scene) {
     m_BoundScene = &scene;
+
+    auto keyFromArg = [](const ScriptValue& v) -> i32 {
+        const std::string s = v.AsString();
+        if (s.empty()) return -1;
+        if (s.size() == 1) {
+            char c = static_cast<char>(std::toupper(static_cast<unsigned char>(s[0])));
+            if (c >= 'A' && c <= 'Z') return GVKey::A + (c - 'A');
+            if (c >= '0' && c <= '9') return GVKey::Key0 + (c - '0');
+        }
+        std::string lower = s;
+        std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        if (lower == "space") return GVKey::Space;
+        if (lower == "up") return GVKey::Up;
+        if (lower == "down") return GVKey::Down;
+        if (lower == "left") return GVKey::Left;
+        if (lower == "right") return GVKey::Right;
+        if (lower == "escape" || lower == "esc") return GVKey::Escape;
+        return -1;
+    };
+
+    RegisterFunction("is_key_down", [keyFromArg](const std::vector<ScriptValue>& args) -> ScriptValue {
+        if (args.empty()) return ScriptValue(false);
+        const i32 key = keyFromArg(args[0]);
+        if (key < 0) return ScriptValue(false);
+        return ScriptValue(Engine::Instance().GetWindow().IsKeyDown(key));
+    });
+
+    RegisterFunction("is_key_pressed", [keyFromArg](const std::vector<ScriptValue>& args) -> ScriptValue {
+        if (args.empty()) return ScriptValue(false);
+        const i32 key = keyFromArg(args[0]);
+        if (key < 0) return ScriptValue(false);
+        return ScriptValue(Engine::Instance().GetWindow().IsKeyPressed(key));
+    });
 
     RegisterFunction("spawn", [this](const std::vector<ScriptValue>& args) -> ScriptValue {
         if (!m_BoundScene || args.empty()) return {};
