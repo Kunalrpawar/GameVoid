@@ -620,7 +620,7 @@ AIManager::SceneGenResult AIManager::ParseSceneGenResponse(const std::string& ra
             std::replace(inlineScript.begin(), inlineScript.end(), ';', ',');
             if (!directives.empty()) directives += ";";
             directives += "script:" + inlineScript;
-            bp.scriptSnippet = directives;
+            bp.scriptSnippet = directives;q
         } else {
             bp.scriptSnippet = directives;
         }
