@@ -18,5 +18,13 @@ gamevoid_config.ini
 build/
 build_err*.txt
 
+# AI model artifacts (keep local only)
+ai_server/model_cache/
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.onnx
+
 # Editor state
 imgui.ini
