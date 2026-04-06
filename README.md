@@ -10,6 +10,8 @@
 
 ![GameVoid Engine](photo/image2.png)
 
+![GameVoid 2D Editor](photo/image2d.png)
+
 </div>
 
 ---
