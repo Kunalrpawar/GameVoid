@@ -62,6 +62,7 @@ class AnimationClip;
 class Animator;
 class AnimationLibrary;
 class NodeGraph;
+class Texture;
 struct TerrainBrush;
 
 /// Godot-style dockable editor overlay driven by Dear ImGui.
@@ -144,6 +145,7 @@ private:
     void DrawBehaviorPanel();          // new: behavior editor panel
     void DrawChatPanel();              // AI chat panel
     void DrawImageTo3DPanel();         // Image → 3D model generation panel
+    void DrawImageTo3DWorkspace();     // Dedicated full-screen Image → 3D workspace
 
     // ── High-priority feature panels ───────────────────────────────────────
     void DrawAssetBrowser();           // file-tree asset browser
@@ -169,6 +171,12 @@ private:
     void AISpawnBlueprints2D(const std::vector<AIManager::ObjectBlueprint>& blueprints);
     void AISpawnBlueprints2D(const std::vector<AIManager::ObjectBlueprint2D>& blueprints);
     void AIUndoLastGeneration();
+
+    // ── Image to 3D helpers ───────────────────────────────────────────────
+    void StartImageTo3DGeneration();
+    void UpdateImageTo3DGenerationState();
+    void RefreshImageTo3DSourceTexture();
+    void ExportImageTo3DOutputs();
 
     // ── 2D clipboard helpers ───────────────────────────────────────────────
     void CopySelected2D();
@@ -326,6 +334,7 @@ private:
     bool m_ShowAssetBrowser      = false; // Asset browser panel
     bool m_ShowImportDialog     = false; // Import asset dialog
     bool m_ShowBuildPanel       = false; // Build/export panel
+    bool m_ShowImageTo3DWorkspace = false; // Dedicated Image -> 3D workspace window
 
     // ── Viewport overlay toggles ───────────────────────────────────────────
     bool m_ShowWireframe      = false;
@@ -481,6 +490,10 @@ private:
     i32  m_Img3DMethod          = 0;        // 0=Auto, 1=TripoSR, 2=MiDaS
     ImageTo3DRequest m_Img3DReq;            // stored request
     ImageTo3DResult m_Img3DLastResult;      // last generation result
+    Shared<Texture> m_Img3DSourceTexture;   // preview texture for selected source image
+    std::string m_Img3DSourceTexturePath;   // cache key for preview image
+    i32  m_Img3DMaskTool = 0;               // 0=Add, 1=Remove (UI scaffold)
+    f32  m_Img3DMaskBrushSize = 32.0f;      // brush size for future mask painting
 
     // ── Subsystem instances ────────────────────────────────────────────────
     MaterialLibrary*  m_MaterialLib = nullptr;

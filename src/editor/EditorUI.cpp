@@ -637,6 +637,9 @@ void EditorUI::Render(f32 dt) {
     ImGui::SetNextWindowSize(ImVec2(winW, consoleH));
     DrawBottomTabs();
 
+    // Dedicated Image -> 3D studio workspace (optional full-screen experience)
+    DrawImageTo3DWorkspace();
+
     if (m_ShowDemo)
         ImGui::ShowDemoWindow(&m_ShowDemo);
 }
@@ -829,6 +832,7 @@ void EditorUI::DrawMenuBar() {
         }
         if (ImGui::BeginMenu("AI")) {
             if (ImGui::MenuItem("Open AI Generator")) { m_ShowAIPanel = true; }
+            if (ImGui::MenuItem("Image to 3D Studio")) { m_ShowImageTo3DWorkspace = true; }
             if (ImGui::MenuItem("Generate Level"))     { AIGenerate(); }
             if (ImGui::MenuItem("Undo AI Generation")) { AIUndoLastGeneration(); }
             ImGui::EndMenu();
@@ -7167,7 +7171,295 @@ DWORD WINAPI EditorUI::Img3DGenerationThread(LPVOID lpParam) {
 }
 #endif
 
+void EditorUI::StartImageTo3DGeneration() {
+    bool canGenerate = (m_Img3DPathBuf[0] != '\0') && !m_Img3DGenerating && m_Img3DServerOnline;
+    if (!canGenerate) {
+        if (!m_Img3DServerOnline) m_Img3DStatusMsg = "Start the AI server first.";
+        else if (m_Img3DPathBuf[0] == '\0') m_Img3DStatusMsg = "Select an image first.";
+        return;
+    }
+
+    m_Img3DGenerating = true;
+    m_Img3DDone = false;
+    m_Img3DStatusMsg = "Generating...";
+    m_Img3DProgress = 0.0f;
+    PushLog("[Image3D] Starting generation from: " + std::string(m_Img3DPathBuf));
+
+    m_Img3DReq.imagePath = m_Img3DPathBuf;
+    switch (m_Img3DMethod) {
+        case 0: m_Img3DReq.method = "auto";    break;
+        case 1: m_Img3DReq.method = "triposr"; break;
+        case 2: m_Img3DReq.method = "midas";   break;
+    }
+
+#ifdef _WIN32
+    CreateThread(nullptr, 0, EditorUI::Img3DGenerationThread, this, 0, nullptr);
+#else
+    m_Img3DLastResult = m_ImageTo3D.GenerateFromImage(m_Img3DReq);
+    m_Img3DDone = true;
+#endif
+}
+
+void EditorUI::UpdateImageTo3DGenerationState() {
+    if (!m_Img3DGenerating) return;
+
+    if (m_Img3DDone) {
+        ImageTo3DResult result = m_Img3DLastResult;
+
+        if (result.success) {
+            m_Img3DStatusMsg = "Success! Loading into scene...";
+            m_Img3DLastObjPath = result.objFilePath;
+            m_Img3DLastTexPath = result.textureFilePath;
+            PushLog("[Image3D] Model generated: " + result.objFilePath);
+
+            if (m_Scene && m_Assets) {
+                GameObject* obj = m_ImageTo3D.LoadIntoScene(result, *m_Scene, *m_Assets);
+                if (obj) {
+                    m_Selected = obj;
+                    m_Img3DStatusMsg = "Done! Created: " + obj->GetName();
+                    PushLog("[Image3D] Created object: " + obj->GetName() +
+                            " (" + std::to_string(result.vertexCount) + " verts, " +
+                            std::to_string(result.faceCount) + " faces)");
+                } else {
+                    m_Img3DStatusMsg = "Generated but failed to load into scene.";
+                    PushLog("[Image3D] Warning: mesh load failed.");
+                }
+            }
+        } else {
+            m_Img3DStatusMsg = "Failed: " + result.errorMessage;
+            PushLog("[Image3D] Error: " + result.errorMessage);
+        }
+        m_Img3DGenerating = false;
+        m_Img3DProgress = 1.0f;
+    } else {
+        m_Img3DProgress += ImGui::GetIO().DeltaTime * 0.05f;
+        if (m_Img3DProgress > 0.95f) m_Img3DProgress = 0.95f;
+    }
+}
+
+void EditorUI::RefreshImageTo3DSourceTexture() {
+    const std::string path = m_Img3DPathBuf;
+    if (path.empty()) {
+        m_Img3DSourceTexture.reset();
+        m_Img3DSourceTexturePath.clear();
+        return;
+    }
+    if (path == m_Img3DSourceTexturePath) return;
+
+    m_Img3DSourceTexturePath = path;
+    m_Img3DSourceTexture.reset();
+    if (m_Assets) {
+        auto tex = m_Assets->LoadTexture(path);
+        if (tex && tex->GetID() != 0) {
+            m_Img3DSourceTexture = tex;
+        }
+    }
+}
+
+void EditorUI::ExportImageTo3DOutputs() {
+    if (!m_Img3DLastResult.success) {
+        m_Img3DStatusMsg = "Generate a model first before exporting.";
+        return;
+    }
+
+    const std::string exportRoot = "exports\\image_to_3d";
+#ifdef _WIN32
+    CreateDirectoryA("exports", nullptr);
+    CreateDirectoryA(exportRoot.c_str(), nullptr);
+#endif
+
+    auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    char stamp[32] = {};
+    std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", std::localtime(&now));
+    const std::string outDir = exportRoot + "\\run_" + std::string(stamp);
+#ifdef _WIN32
+    if (!CreateDirectoryA(outDir.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) {
+        m_Img3DStatusMsg = "Export failed: cannot create destination folder.";
+        PushLog("[Image3D] Export failed creating destination folder.");
+        return;
+    }
+#endif
+
+    auto fileNameFromPath = [](const std::string& p) -> std::string {
+        size_t slash = p.find_last_of("/\\");
+        return (slash == std::string::npos) ? p : p.substr(slash + 1);
+    };
+
+    auto copyIfExists = [&](const std::string& srcPath) -> bool {
+        if (srcPath.empty()) return false;
+        std::ifstream in(srcPath.c_str(), std::ios::binary);
+        if (!in.good()) return false;
+        in.close();
+
+        std::string dstPath = outDir + "\\" + fileNameFromPath(srcPath);
+#ifdef _WIN32
+        return CopyFileA(srcPath.c_str(), dstPath.c_str(), FALSE) != 0;
+#else
+        std::ifstream src(srcPath.c_str(), std::ios::binary);
+        std::ofstream dst(dstPath.c_str(), std::ios::binary);
+        dst << src.rdbuf();
+        return src.good() && dst.good();
+#endif
+    };
+
+    int copied = 0;
+    if (copyIfExists(m_Img3DLastResult.objFilePath)) copied++;
+    if (copyIfExists(m_Img3DLastResult.textureFilePath)) copied++;
+
+    if (copied > 0) {
+        m_Img3DStatusMsg = "Exported to: " + outDir;
+        PushLog("[Image3D] Exported generated assets to " + outDir);
+    } else {
+        m_Img3DStatusMsg = "Export failed: output files not found.";
+        PushLog("[Image3D] Export failed: source outputs were not found on disk.");
+    }
+}
+
+void EditorUI::DrawImageTo3DWorkspace() {
+    if (!m_ShowImageTo3DWorkspace) return;
+
+    UpdateImageTo3DGenerationState();
+    RefreshImageTo3DSourceTexture();
+
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + 8.0f, vp->WorkPos.y + 8.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(vp->WorkSize.x - 16.0f, vp->WorkSize.y - 16.0f), ImGuiCond_Always);
+    if (!ImGui::Begin("Image to 3D Studio", &m_ShowImageTo3DWorkspace,
+                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::End();
+        return;
+    }
+
+    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Meta-style workflow: source image + generation + export");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Open Bottom Tab")) {
+        m_BottomTab = 10;
+    }
+    ImGui::Separator();
+
+    if (ImGui::BeginTable("Img3DStudioSplit", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("Source", ImGuiTableColumnFlags_WidthStretch, 0.56f);
+        ImGui::TableSetupColumn("Result", ImGuiTableColumnFlags_WidthStretch, 0.44f);
+        ImGui::TableNextRow();
+
+        ImGui::TableSetColumnIndex(0);
+        ImGui::Text("Source Image");
+        ImGui::SetNextItemWidth(-82.0f);
+        ImGui::InputText("##Img3DStudioPath", m_Img3DPathBuf, sizeof(m_Img3DPathBuf));
+        ImGui::SameLine();
+        if (ImGui::Button("Browse##Img3DStudio", ImVec2(72, 0))) {
+            std::string path = OpenFileDialog(
+                "Image Files (*.png;*.jpg;*.jpeg;*.bmp;*.webp)\0*.png;*.jpg;*.jpeg;*.bmp;*.webp\0"
+                "All Files (*.*)\0*.*\0",
+                "Select Image for 3D Generation");
+            if (!path.empty()) {
+                std::snprintf(m_Img3DPathBuf, sizeof(m_Img3DPathBuf), "%s", path.c_str());
+                RefreshImageTo3DSourceTexture();
+                PushLog("[Image3D] Selected in studio: " + path);
+            }
+        }
+
+        ImVec2 previewSize = ImVec2(-1, ImGui::GetContentRegionAvail().y - 120.0f);
+        if (previewSize.y < 180.0f) previewSize.y = 180.0f;
+        ImGui::BeginChild("Img3DStudioSourcePreview", previewSize, true);
+        if (m_Img3DSourceTexture && m_Img3DSourceTexture->GetID() != 0) {
+            f32 availW = ImGui::GetContentRegionAvail().x;
+            f32 availH = ImGui::GetContentRegionAvail().y;
+            f32 texW = static_cast<f32>(std::max(1u, m_Img3DSourceTexture->GetWidth()));
+            f32 texH = static_cast<f32>(std::max(1u, m_Img3DSourceTexture->GetHeight()));
+            f32 scale = std::min(availW / texW, availH / texH);
+            f32 drawW = texW * scale;
+            f32 drawH = texH * scale;
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (availW - drawW) * 0.5f);
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (availH - drawH) * 0.5f);
+            ImGui::Image(static_cast<ImTextureID>(m_Img3DSourceTexture->GetID()), ImVec2(drawW, drawH), ImVec2(0, 1), ImVec2(1, 0));
+        } else {
+            ImGui::TextDisabled("No preview available yet.");
+            ImGui::TextDisabled("Pick an image to start editing and generation.");
+        }
+        ImGui::EndChild();
+
+        ImGui::Text("Mask Tool");
+        ImGui::SameLine();
+        ImGui::RadioButton("Add##MaskTool", &m_Img3DMaskTool, 0);
+        ImGui::SameLine();
+        ImGui::RadioButton("Remove##MaskTool", &m_Img3DMaskTool, 1);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(160.0f);
+        ImGui::SliderFloat("Brush##MaskBrush", &m_Img3DMaskBrushSize, 4.0f, 128.0f, "%.0f px");
+
+        ImGui::TableSetColumnIndex(1);
+        ImGui::Text("Generation & Export");
+        bool serverOnlineNow = m_Img3DServerOnline;
+        ImVec4 sCol = serverOnlineNow ? ImVec4(0.2f, 1.0f, 0.3f, 1.0f) : ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
+        ImGui::TextColored(sCol, "%s", serverOnlineNow ? "Server online" : "Server offline");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Check##Img3DStudio")) {
+            m_Img3DServerOnline = m_ImageTo3D.IsServerRunning();
+        }
+        ImGui::SameLine();
+        if (!m_Img3DServerOnline && ImGui::SmallButton("Start##Img3DStudio")) {
+            m_Img3DServerOnline = m_ImageTo3D.StartServer();
+            PushLog(m_Img3DServerOnline ? "[Image3D] Server started (studio)." : "[Image3D] Failed to start server (studio).");
+        }
+
+        const char* methods[] = { "Auto (Best Available)", "TripoSR (Full 3D)", "MiDaS (Depth-based)" };
+        ImGui::SetNextItemWidth(-1);
+        ImGui::Combo("Method##Img3DStudioMethod", &m_Img3DMethod, methods, 3);
+
+        bool canGenerate = (m_Img3DPathBuf[0] != '\0') && !m_Img3DGenerating && m_Img3DServerOnline;
+        if (!canGenerate) ImGui::BeginDisabled();
+        if (ImGui::Button(m_Img3DGenerating ? "Generating..." : "Generate 3D", ImVec2(-1, 40))) {
+            StartImageTo3DGeneration();
+        }
+        if (!canGenerate) ImGui::EndDisabled();
+
+        if (m_Img3DGenerating) {
+            ImGui::ProgressBar(m_Img3DProgress, ImVec2(-1, 0), "Generating...");
+        }
+
+        if (!m_Img3DStatusMsg.empty()) {
+            bool isErr = m_Img3DStatusMsg.find("Failed") != std::string::npos ||
+                         m_Img3DStatusMsg.find("Error") != std::string::npos;
+            ImVec4 col = isErr ? ImVec4(1.0f, 0.35f, 0.35f, 1.0f) : ImVec4(0.8f, 0.85f, 1.0f, 1.0f);
+            ImGui::TextColored(col, "%s", m_Img3DStatusMsg.c_str());
+        }
+
+        ImGui::Separator();
+        if (m_Img3DLastResult.success) {
+            ImGui::Text("Object: %s", m_Img3DLastResult.objectName.c_str());
+            ImGui::Text("Verts: %u", m_Img3DLastResult.vertexCount);
+            ImGui::Text("Faces: %u", m_Img3DLastResult.faceCount);
+            ImGui::Text("Time: %.1f s", m_Img3DLastResult.generationTime);
+
+            if (ImGui::Button("Load Into Scene", ImVec2(-1, 28))) {
+                if (m_Scene && m_Assets) {
+                    GameObject* obj = m_ImageTo3D.LoadIntoScene(m_Img3DLastResult, *m_Scene, *m_Assets);
+                    if (obj) {
+                        m_Selected = obj;
+                        PushLog("[Image3D] Loaded into scene from studio: " + obj->GetName());
+                    }
+                }
+            }
+            if (ImGui::Button("Export Outputs", ImVec2(-1, 28))) {
+                ExportImageTo3DOutputs();
+            }
+
+            ImGui::TextWrapped("OBJ: %s", m_Img3DLastResult.objFilePath.c_str());
+            ImGui::TextWrapped("Texture: %s", m_Img3DLastResult.textureFilePath.c_str());
+        } else {
+            ImGui::TextDisabled("No model generated yet.");
+            ImGui::TextDisabled("Generate a model to enable export controls.");
+        }
+
+        ImGui::EndTable();
+    }
+
+    ImGui::End();
+}
+
 void EditorUI::DrawImageTo3DPanel() {
+    UpdateImageTo3DGenerationState();
     if (ImGui::BeginTable("Img3DTable", 3, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollX)) {
         ImGui::TableSetupColumn("Controls", ImGuiTableColumnFlags_WidthFixed, 320.0f);
         ImGui::TableSetupColumn("Result", ImGuiTableColumnFlags_WidthFixed, 350.0f);
@@ -7240,75 +7532,22 @@ void EditorUI::DrawImageTo3DPanel() {
     ImGui::Separator();
     ImGui::Spacing();
 
+    if (ImGui::Button("Open Full Screen Studio", ImVec2(-1, 24))) {
+        m_ShowImageTo3DWorkspace = true;
+    }
+
+    ImGui::Spacing();
+
     // Generate button
     bool canGenerate = (m_Img3DPathBuf[0] != '\0') && !m_Img3DGenerating && m_Img3DServerOnline;
     if (!canGenerate) {
         ImGui::BeginDisabled();
     }
     if (ImGui::Button("Generate 3D Model", ImVec2(-1, 36))) {
-        m_Img3DGenerating = true;
-        m_Img3DDone = false;
-        m_Img3DStatusMsg = "Generating...";
-        m_Img3DProgress = 0.0f;
-        PushLog("[Image3D] Starting generation from: " + std::string(m_Img3DPathBuf));
-
-        // Build request
-        m_Img3DReq.imagePath = m_Img3DPathBuf;
-        switch (m_Img3DMethod) {
-            case 0: m_Img3DReq.method = "auto";    break;
-            case 1: m_Img3DReq.method = "triposr"; break;
-            case 2: m_Img3DReq.method = "midas";   break;
-        }
-
-#ifdef _WIN32
-        // Run generation asynchronously using native Win32 thread
-        CreateThread(nullptr, 0, EditorUI::Img3DGenerationThread, this, 0, nullptr);
-#else
-        // Fallback synchronous
-        m_Img3DLastResult = m_ImageTo3D.GenerateFromImage(m_Img3DReq);
-        m_Img3DDone = true;
-#endif
+        StartImageTo3DGeneration();
     }
     if (!canGenerate) {
         ImGui::EndDisabled();
-    }
-
-    // Check future status if generation is in progress
-    if (m_Img3DGenerating) {
-        if (m_Img3DDone) {
-            ImageTo3DResult result = m_Img3DLastResult;
-
-            if (result.success) {
-                m_Img3DStatusMsg = "Success! Loading into scene...";
-                m_Img3DLastObjPath = result.objFilePath;
-                m_Img3DLastTexPath = result.textureFilePath;
-                PushLog("[Image3D] Model generated: " + result.objFilePath);
-
-                // Auto-load into scene
-                if (m_Scene && m_Assets) {
-                    GameObject* obj = m_ImageTo3D.LoadIntoScene(result, *m_Scene, *m_Assets);
-                    if (obj) {
-                        m_Selected = obj;
-                        m_Img3DStatusMsg = "Done! Created: " + obj->GetName();
-                        PushLog("[Image3D] Created object: " + obj->GetName() +
-                                " (" + std::to_string(result.vertexCount) + " verts, " +
-                                std::to_string(result.faceCount) + " faces)");
-                    } else {
-                        m_Img3DStatusMsg = "Generated but failed to load into scene.";
-                        PushLog("[Image3D] Warning: mesh load failed.");
-                    }
-                }
-            } else {
-                m_Img3DStatusMsg = "Failed: " + result.errorMessage;
-                PushLog("[Image3D] Error: " + result.errorMessage);
-            }
-            m_Img3DGenerating = false;
-            m_Img3DProgress = 1.0f;
-        } else {
-            // Fake animation progress
-            m_Img3DProgress += ImGui::GetIO().DeltaTime * 0.05f;
-            if (m_Img3DProgress > 0.95f) m_Img3DProgress = 0.95f;
-        }
     }
 
     // Status hints
