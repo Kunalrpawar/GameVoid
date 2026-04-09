@@ -7310,9 +7310,6 @@ void EditorUI::DrawImageTo3DPanel() {
             if (m_Img3DProgress > 0.95f) m_Img3DProgress = 0.95f;
         }
     }
-    if (!canGenerate) {
-        ImGui::EndDisabled();
-    }
 
     // Status hints
     if (!m_Img3DServerOnline) {

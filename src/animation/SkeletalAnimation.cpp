@@ -31,6 +31,7 @@ i32 Skeleton::AddBone(const std::string& name, i32 parentIndex, const Mat4& offs
     return index;
 }
 
+
 Bone* Skeleton::FindBone(const std::string& name) {
     auto it = m_BoneNameMap.find(name);
     if (it != m_BoneNameMap.end()) return &m_Bones[it->second];
