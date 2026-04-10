@@ -7181,6 +7181,7 @@ void EditorUI::StartImageTo3DGeneration() {
 
     m_Img3DGenerating = true;
     m_Img3DDone = false;
+    m_Img3DAutoLoadedCurrentGen = false;  // Reset auto-load flag for new generation
     m_Img3DStatusMsg = "Generating...";
     m_Img3DProgress = 0.0f;
     PushLog("[Image3D] Starting generation from: " + std::string(m_Img3DPathBuf));
@@ -7207,23 +7208,27 @@ void EditorUI::UpdateImageTo3DGenerationState() {
         ImageTo3DResult result = m_Img3DLastResult;
 
         if (result.success) {
-            m_Img3DStatusMsg = "Success! Loading into scene...";
-            m_Img3DLastObjPath = result.objFilePath;
-            m_Img3DLastTexPath = result.textureFilePath;
-            PushLog("[Image3D] Model generated: " + result.objFilePath);
+            // Only auto-load once per generation
+            if (!m_Img3DAutoLoadedCurrentGen) {
+                m_Img3DStatusMsg = "Success! Loading into scene...";
+                m_Img3DLastObjPath = result.objFilePath;
+                m_Img3DLastTexPath = result.textureFilePath;
+                PushLog("[Image3D] Model generated: " + result.objFilePath);
 
-            if (m_Scene && m_Assets) {
-                GameObject* obj = m_ImageTo3D.LoadIntoScene(result, *m_Scene, *m_Assets);
-                if (obj) {
-                    m_Selected = obj;
-                    m_Img3DStatusMsg = "Done! Created: " + obj->GetName();
-                    PushLog("[Image3D] Created object: " + obj->GetName() +
-                            " (" + std::to_string(result.vertexCount) + " verts, " +
-                            std::to_string(result.faceCount) + " faces)");
-                } else {
-                    m_Img3DStatusMsg = "Generated but failed to load into scene.";
-                    PushLog("[Image3D] Warning: mesh load failed.");
+                if (m_Scene && m_Assets) {
+                    GameObject* obj = m_ImageTo3D.LoadIntoScene(result, *m_Scene, *m_Assets);
+                    if (obj) {
+                        m_Selected = obj;
+                        m_Img3DStatusMsg = "Done! Created: " + obj->GetName();
+                        PushLog("[Image3D] Created object: " + obj->GetName() +
+                                " (" + std::to_string(result.vertexCount) + " verts, " +
+                                std::to_string(result.faceCount) + " faces)");
+                    } else {
+                        m_Img3DStatusMsg = "Generated but failed to load into scene.";
+                        PushLog("[Image3D] Warning: mesh load failed.");
+                    }
                 }
+                m_Img3DAutoLoadedCurrentGen = true;
             }
         } else {
             m_Img3DStatusMsg = "Failed: " + result.errorMessage;

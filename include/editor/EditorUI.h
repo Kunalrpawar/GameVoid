@@ -483,6 +483,7 @@ private:
     bool m_Img3DServerOnline    = false;    // cached server status
     volatile bool m_Img3DGenerating      = false;    // generation in progress
     volatile bool m_Img3DDone            = false;    // generation finished
+    bool m_Img3DAutoLoadedCurrentGen     = false;    // guard: only auto-load once per generation
     f32  m_Img3DProgress        = 0.0f;     // 0..1 progress
     std::string m_Img3DStatusMsg;           // status message display
     std::string m_Img3DLastObjPath;         // last generated OBJ path

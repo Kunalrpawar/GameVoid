@@ -489,10 +489,31 @@ GameObject* ImageTo3DManager::LoadIntoScene(const ImageTo3DResult& result,
     std::string objName = result.objectName.empty() ? "AI_Model" : ("AI_" + result.objectName);
     GameObject* obj = scene.CreateGameObject(objName);
 
-    // Position slightly above ground
+    // 5. Compute mesh bounds and auto-scale to reasonable size
+    Vec3 boundsMin, boundsMax;
+    mesh->GetBounds(boundsMin, boundsMax);
+    
+    Vec3 boundsCenter = (boundsMin + boundsMax) * 0.5f;
+    Vec3 boundsExtents = boundsMax - boundsMin;
+    f32 maxExtent = std::max({boundsExtents.x, boundsExtents.y, boundsExtents.z});
+    
+    f32 targetSize = 2.0f;  // Scale to fit in 2x2x2 cube
+    f32 scale = 1.0f;
+    if (maxExtent > 0.001f) {
+        scale = targetSize / maxExtent;
+    }
+    
+    // Apply computed transform
+    obj->GetTransform().SetScale(scale, scale, scale);
     obj->GetTransform().SetPosition(0.0f, 1.0f, 0.0f);
+    
+    GV_LOG_INFO("ImageTo3D: Bounds: min(" + std::to_string(boundsMin.x) + "," + std::to_string(boundsMin.y) + "," + 
+                std::to_string(boundsMin.z) + ") max(" + std::to_string(boundsMax.x) + "," + 
+                std::to_string(boundsMax.y) + "," + std::to_string(boundsMax.z) + ") extents: " + 
+                std::to_string(boundsExtents.x) + "," + std::to_string(boundsExtents.y) + "," + 
+                std::to_string(boundsExtents.z) + " — applied scale: " + std::to_string(scale));
 
-    // 5. Attach MeshRenderer with loaded mesh and material
+    // 6. Attach MeshRenderer with loaded mesh and material
     auto* mr = obj->AddComponent<MeshRenderer>();
     mr->SetMesh(mesh);
     if (material) {
