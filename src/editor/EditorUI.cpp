@@ -7181,7 +7181,10 @@ void EditorUI::StartImageTo3DGeneration() {
 
     m_Img3DGenerating = true;
     m_Img3DDone = false;
-    m_Img3DAutoLoadedCurrentGen = false;  // Reset auto-load flag for new generation
+    m_Img3DPreviewReady = false;
+    m_Img3DPreviewVerts.clear();
+    m_Img3DPreviewIndices.clear();
+    m_Img3DLastResult = ImageTo3DResult{};
     m_Img3DStatusMsg = "Generating...";
     m_Img3DProgress = 0.0f;
     PushLog("[Image3D] Starting generation from: " + std::string(m_Img3DPathBuf));
@@ -7191,6 +7194,18 @@ void EditorUI::StartImageTo3DGeneration() {
         case 0: m_Img3DReq.method = "auto";    break;
         case 1: m_Img3DReq.method = "triposr"; break;
         case 2: m_Img3DReq.method = "midas";   break;
+    }
+
+    m_Img3DReq.useSelection = m_Img3DHasSelection;
+    if (m_Img3DHasSelection) {
+        f32 minX = std::min(m_Img3DSelectionMinUV.x, m_Img3DSelectionMaxUV.x);
+        f32 minY = std::min(m_Img3DSelectionMinUV.y, m_Img3DSelectionMaxUV.y);
+        f32 maxX = std::max(m_Img3DSelectionMinUV.x, m_Img3DSelectionMaxUV.x);
+        f32 maxY = std::max(m_Img3DSelectionMinUV.y, m_Img3DSelectionMaxUV.y);
+        m_Img3DReq.selectionMinX = std::max(0.0f, std::min(1.0f, minX));
+        m_Img3DReq.selectionMinY = std::max(0.0f, std::min(1.0f, minY));
+        m_Img3DReq.selectionMaxX = std::max(0.0f, std::min(1.0f, maxX));
+        m_Img3DReq.selectionMaxY = std::max(0.0f, std::min(1.0f, maxY));
     }
 
 #ifdef _WIN32
@@ -7208,27 +7223,15 @@ void EditorUI::UpdateImageTo3DGenerationState() {
         ImageTo3DResult result = m_Img3DLastResult;
 
         if (result.success) {
-            // Only auto-load once per generation
-            if (!m_Img3DAutoLoadedCurrentGen) {
-                m_Img3DStatusMsg = "Success! Loading into scene...";
-                m_Img3DLastObjPath = result.objFilePath;
-                m_Img3DLastTexPath = result.textureFilePath;
-                PushLog("[Image3D] Model generated: " + result.objFilePath);
+            m_Img3DLastObjPath = result.objFilePath;
+            m_Img3DLastTexPath = result.textureFilePath;
+            m_Img3DStatusMsg = "Generated! Preview is ready. Import when you decide.";
+            PushLog("[Image3D] Model generated: " + result.objFilePath);
 
-                if (m_Scene && m_Assets) {
-                    GameObject* obj = m_ImageTo3D.LoadIntoScene(result, *m_Scene, *m_Assets);
-                    if (obj) {
-                        m_Selected = obj;
-                        m_Img3DStatusMsg = "Done! Created: " + obj->GetName();
-                        PushLog("[Image3D] Created object: " + obj->GetName() +
-                                " (" + std::to_string(result.vertexCount) + " verts, " +
-                                std::to_string(result.faceCount) + " faces)");
-                    } else {
-                        m_Img3DStatusMsg = "Generated but failed to load into scene.";
-                        PushLog("[Image3D] Warning: mesh load failed.");
-                    }
-                }
-                m_Img3DAutoLoadedCurrentGen = true;
+            if (LoadImageTo3DPreviewMesh(result.objFilePath)) {
+                PushLog("[Image3D] Preview mesh loaded in studio.");
+            } else {
+                PushLog("[Image3D] Preview mesh load failed; you can still import to scene.");
             }
         } else {
             m_Img3DStatusMsg = "Failed: " + result.errorMessage;
@@ -7253,12 +7256,175 @@ void EditorUI::RefreshImageTo3DSourceTexture() {
 
     m_Img3DSourceTexturePath = path;
     m_Img3DSourceTexture.reset();
+    m_Img3DHasSelection = false;
+    m_Img3DSelectionDragging = false;
+    m_Img3DSelectionMinUV = Vec2(0.0f, 0.0f);
+    m_Img3DSelectionMaxUV = Vec2(1.0f, 1.0f);
     if (m_Assets) {
         auto tex = m_Assets->LoadTexture(path);
         if (tex && tex->GetID() != 0) {
             m_Img3DSourceTexture = tex;
         }
     }
+}
+
+bool EditorUI::LoadImageTo3DPreviewMesh(const std::string& objPath) {
+    std::ifstream in(objPath.c_str());
+    if (!in.is_open()) {
+        m_Img3DPreviewReady = false;
+        return false;
+    }
+
+    std::vector<Vec3> srcVerts;
+    std::vector<u32> indices;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.size() < 2) continue;
+
+        if (line[0] == 'v' && line[1] == ' ') {
+            std::istringstream ss(line.substr(2));
+            Vec3 v;
+            ss >> v.x >> v.y >> v.z;
+            srcVerts.push_back(v);
+            continue;
+        }
+
+        if (line[0] == 'f' && line[1] == ' ') {
+            std::istringstream ss(line.substr(2));
+            std::vector<i32> face;
+            std::string tok;
+            while (ss >> tok) {
+                size_t slash = tok.find('/');
+                std::string idxStr = (slash == std::string::npos) ? tok : tok.substr(0, slash);
+                if (idxStr.empty()) continue;
+                i32 idx = std::atoi(idxStr.c_str());
+                if (idx > 0) face.push_back(idx - 1);
+                else if (idx < 0) face.push_back(static_cast<i32>(srcVerts.size()) + idx);
+            }
+            if (face.size() >= 3) {
+                for (size_t i = 1; i + 1 < face.size(); ++i) {
+                    i32 a = face[0], b = face[i], c = face[i + 1];
+                    if (a >= 0 && b >= 0 && c >= 0 &&
+                        a < static_cast<i32>(srcVerts.size()) &&
+                        b < static_cast<i32>(srcVerts.size()) &&
+                        c < static_cast<i32>(srcVerts.size())) {
+                        indices.push_back(static_cast<u32>(a));
+                        indices.push_back(static_cast<u32>(b));
+                        indices.push_back(static_cast<u32>(c));
+                    }
+                }
+            }
+        }
+    }
+
+    if (srcVerts.empty() || indices.empty()) {
+        m_Img3DPreviewReady = false;
+        return false;
+    }
+
+    Vec3 bmin = srcVerts[0], bmax = srcVerts[0];
+    for (const Vec3& v : srcVerts) {
+        bmin.x = std::min(bmin.x, v.x); bmin.y = std::min(bmin.y, v.y); bmin.z = std::min(bmin.z, v.z);
+        bmax.x = std::max(bmax.x, v.x); bmax.y = std::max(bmax.y, v.y); bmax.z = std::max(bmax.z, v.z);
+    }
+    Vec3 center = (bmin + bmax) * 0.5f;
+    Vec3 ext = bmax - bmin;
+    f32 maxExt = std::max(ext.x, std::max(ext.y, ext.z));
+    if (maxExt < 1e-4f) maxExt = 1.0f;
+
+    m_Img3DPreviewVerts = srcVerts;
+    for (Vec3& v : m_Img3DPreviewVerts) {
+        v = (v - center) * (1.8f / maxExt);
+    }
+    m_Img3DPreviewIndices = std::move(indices);
+    m_Img3DPreviewReady = true;
+    m_Img3DPreviewYaw = 20.0f;
+    m_Img3DPreviewPitch = -12.0f;
+    m_Img3DPreviewZoom = 2.4f;
+    return true;
+}
+
+void EditorUI::DrawImageTo3DPreviewCanvas(const ImVec2& size) {
+    ImGui::BeginChild("Img3DStudioModelPreview", size, true);
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    if (avail.x < 40.0f || avail.y < 40.0f) {
+        ImGui::EndChild();
+        return;
+    }
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    const ImVec2 p1 = ImVec2(p0.x + avail.x, p0.y + avail.y);
+    dl->AddRectFilled(p0, p1, IM_COL32(20, 24, 30, 255), 6.0f);
+    dl->AddRect(p0, p1, IM_COL32(70, 76, 90, 255), 6.0f, 0, 1.0f);
+
+    if (!m_Img3DPreviewReady || m_Img3DPreviewVerts.empty() || m_Img3DPreviewIndices.empty()) {
+        ImGui::SetCursorScreenPos(ImVec2(p0.x + 12.0f, p0.y + 12.0f));
+        ImGui::TextDisabled("No 3D preview yet.");
+        ImGui::SetCursorScreenPos(ImVec2(p0.x + 12.0f, p0.y + 30.0f));
+        ImGui::TextDisabled("Generate from selected area, then preview here.");
+        ImGui::Dummy(avail);
+        ImGui::EndChild();
+        return;
+    }
+
+    ImGui::InvisibleButton("##Img3DPreviewInteract", avail, ImGuiButtonFlags_MouseButtonLeft);
+    const bool hovered = ImGui::IsItemHovered();
+    ImVec2 md = ImGui::GetIO().MouseDelta;
+    if (hovered && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        m_Img3DPreviewYaw += md.x * 0.4f;
+        m_Img3DPreviewPitch += md.y * 0.35f;
+        m_Img3DPreviewPitch = std::max(-85.0f, std::min(85.0f, m_Img3DPreviewPitch));
+    }
+    if (hovered) {
+        f32 wheel = ImGui::GetIO().MouseWheel;
+        if (wheel != 0.0f) {
+            m_Img3DPreviewZoom -= wheel * 0.15f;
+            m_Img3DPreviewZoom = std::max(1.2f, std::min(5.0f, m_Img3DPreviewZoom));
+        }
+    }
+
+    const f32 cy = std::cos(m_Img3DPreviewYaw * 3.14159265f / 180.0f);
+    const f32 sy = std::sin(m_Img3DPreviewYaw * 3.14159265f / 180.0f);
+    const f32 cx = std::cos(m_Img3DPreviewPitch * 3.14159265f / 180.0f);
+    const f32 sx = std::sin(m_Img3DPreviewPitch * 3.14159265f / 180.0f);
+
+    std::vector<ImVec2> projected(m_Img3DPreviewVerts.size());
+    std::vector<f32> depth(m_Img3DPreviewVerts.size(), 0.0f);
+    const f32 scrScale = std::min(avail.x, avail.y) * 0.42f;
+    const ImVec2 center = ImVec2((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f);
+
+    for (size_t i = 0; i < m_Img3DPreviewVerts.size(); ++i) {
+        Vec3 v = m_Img3DPreviewVerts[i];
+        f32 xzX = v.x * cy - v.z * sy;
+        f32 xzZ = v.x * sy + v.z * cy;
+        f32 yzY = v.y * cx - xzZ * sx;
+        f32 yzZ = v.y * sx + xzZ * cx;
+        f32 z = yzZ + m_Img3DPreviewZoom;
+        if (z < 0.1f) z = 0.1f;
+        f32 inv = 1.0f / z;
+        projected[i] = ImVec2(center.x + (xzX * inv) * scrScale,
+                              center.y - (yzY * inv) * scrScale);
+        depth[i] = z;
+    }
+
+    for (size_t i = 0; i + 2 < m_Img3DPreviewIndices.size(); i += 3) {
+        u32 ia = m_Img3DPreviewIndices[i];
+        u32 ib = m_Img3DPreviewIndices[i + 1];
+        u32 ic = m_Img3DPreviewIndices[i + 2];
+        if (ia >= projected.size() || ib >= projected.size() || ic >= projected.size()) continue;
+
+        f32 zAvg = (depth[ia] + depth[ib] + depth[ic]) / 3.0f;
+        f32 shade = std::max(0.25f, std::min(1.0f, 2.2f / zAvg));
+        ImU32 edgeCol = IM_COL32(static_cast<int>(110 * shade), static_cast<int>(210 * shade), 255, 210);
+        dl->AddLine(projected[ia], projected[ib], edgeCol, 1.0f);
+        dl->AddLine(projected[ib], projected[ic], edgeCol, 1.0f);
+        dl->AddLine(projected[ic], projected[ia], edgeCol, 1.0f);
+    }
+
+    dl->AddText(ImVec2(p0.x + 10.0f, p0.y + 10.0f), IM_COL32(200, 210, 230, 255), "3D Preview (drag to orbit, wheel to zoom)");
+    ImGui::Dummy(avail);
+    ImGui::EndChild();
 }
 
 void EditorUI::ExportImageTo3DOutputs() {
@@ -7378,6 +7544,54 @@ void EditorUI::DrawImageTo3DWorkspace() {
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (availW - drawW) * 0.5f);
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (availH - drawH) * 0.5f);
             ImGui::Image(static_cast<ImTextureID>(m_Img3DSourceTexture->GetID()), ImVec2(drawW, drawH), ImVec2(0, 1), ImVec2(1, 0));
+
+            // Selection rectangle (Meta-style region select)
+            const ImVec2 imgMin = ImGui::GetItemRectMin();
+            const ImVec2 imgMax = ImGui::GetItemRectMax();
+            const bool imgHovered = ImGui::IsItemHovered();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+
+            auto toUV = [&](const ImVec2& p) -> Vec2 {
+                f32 u = (p.x - imgMin.x) / std::max(1.0f, imgMax.x - imgMin.x);
+                f32 v = (p.y - imgMin.y) / std::max(1.0f, imgMax.y - imgMin.y);
+                u = std::max(0.0f, std::min(1.0f, u));
+                v = std::max(0.0f, std::min(1.0f, v));
+                return Vec2(u, v);
+            };
+
+            if (m_Img3DMaskTool == 0) {
+                if (imgHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    m_Img3DSelectionDragging = true;
+                    m_Img3DSelectionStartUV = toUV(ImGui::GetIO().MousePos);
+                    m_Img3DSelectionMinUV = m_Img3DSelectionStartUV;
+                    m_Img3DSelectionMaxUV = m_Img3DSelectionStartUV;
+                }
+                if (m_Img3DSelectionDragging && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                    m_Img3DSelectionMaxUV = toUV(ImGui::GetIO().MousePos);
+                }
+                if (m_Img3DSelectionDragging && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+                    m_Img3DSelectionDragging = false;
+                    f32 wSel = std::fabs(m_Img3DSelectionMaxUV.x - m_Img3DSelectionMinUV.x);
+                    f32 hSel = std::fabs(m_Img3DSelectionMaxUV.y - m_Img3DSelectionMinUV.y);
+                    m_Img3DHasSelection = (wSel > 0.01f && hSel > 0.01f);
+                }
+            } else if (imgHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                m_Img3DHasSelection = false;
+                m_Img3DSelectionDragging = false;
+                m_Img3DSelectionMinUV = Vec2(0.0f, 0.0f);
+                m_Img3DSelectionMaxUV = Vec2(1.0f, 1.0f);
+            }
+
+            if (m_Img3DHasSelection || m_Img3DSelectionDragging) {
+                f32 minU = std::min(m_Img3DSelectionMinUV.x, m_Img3DSelectionMaxUV.x);
+                f32 minV = std::min(m_Img3DSelectionMinUV.y, m_Img3DSelectionMaxUV.y);
+                f32 maxU = std::max(m_Img3DSelectionMinUV.x, m_Img3DSelectionMaxUV.x);
+                f32 maxV = std::max(m_Img3DSelectionMinUV.y, m_Img3DSelectionMaxUV.y);
+                ImVec2 s0(imgMin.x + minU * (imgMax.x - imgMin.x), imgMin.y + minV * (imgMax.y - imgMin.y));
+                ImVec2 s1(imgMin.x + maxU * (imgMax.x - imgMin.x), imgMin.y + maxV * (imgMax.y - imgMin.y));
+                dl->AddRectFilled(s0, s1, IM_COL32(255, 64, 160, 35));
+                dl->AddRect(s0, s1, IM_COL32(255, 64, 160, 240), 0.0f, 0, 2.0f);
+            }
         } else {
             ImGui::TextDisabled("No preview available yet.");
             ImGui::TextDisabled("Pick an image to start editing and generation.");
@@ -7392,9 +7606,21 @@ void EditorUI::DrawImageTo3DWorkspace() {
         ImGui::SameLine();
         ImGui::SetNextItemWidth(160.0f);
         ImGui::SliderFloat("Brush##MaskBrush", &m_Img3DMaskBrushSize, 4.0f, 128.0f, "%.0f px");
+        if (m_Img3DHasSelection) {
+            f32 minU = std::min(m_Img3DSelectionMinUV.x, m_Img3DSelectionMaxUV.x);
+            f32 minV = std::min(m_Img3DSelectionMinUV.y, m_Img3DSelectionMaxUV.y);
+            f32 maxU = std::max(m_Img3DSelectionMinUV.x, m_Img3DSelectionMaxUV.x);
+            f32 maxV = std::max(m_Img3DSelectionMinUV.y, m_Img3DSelectionMaxUV.y);
+            ImGui::Text("Selected region: %.0f%% x %.0f%%", (maxU - minU) * 100.0f, (maxV - minV) * 100.0f);
+        } else {
+            ImGui::TextDisabled("No selected region (generation uses full image).");
+        }
 
         ImGui::TableSetColumnIndex(1);
-        ImGui::Text("Generation & Export");
+        ImGui::Text("3D Result Preview");
+        DrawImageTo3DPreviewCanvas(ImVec2(-1.0f, 280.0f));
+
+        ImGui::Text("Generation & Import");
         bool serverOnlineNow = m_Img3DServerOnline;
         ImVec4 sCol = serverOnlineNow ? ImVec4(0.2f, 1.0f, 0.3f, 1.0f) : ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
         ImGui::TextColored(sCol, "%s", serverOnlineNow ? "Server online" : "Server offline");
@@ -7437,12 +7663,13 @@ void EditorUI::DrawImageTo3DWorkspace() {
             ImGui::Text("Faces: %u", m_Img3DLastResult.faceCount);
             ImGui::Text("Time: %.1f s", m_Img3DLastResult.generationTime);
 
-            if (ImGui::Button("Load Into Scene", ImVec2(-1, 28))) {
+            if (ImGui::Button("Import To Main Scene", ImVec2(-1, 28))) {
                 if (m_Scene && m_Assets) {
                     GameObject* obj = m_ImageTo3D.LoadIntoScene(m_Img3DLastResult, *m_Scene, *m_Assets);
                     if (obj) {
                         m_Selected = obj;
-                        PushLog("[Image3D] Loaded into scene from studio: " + obj->GetName());
+                        m_Img3DStatusMsg = "Imported to scene: " + obj->GetName();
+                        PushLog("[Image3D] Imported into scene from studio: " + obj->GetName());
                     }
                 }
             }

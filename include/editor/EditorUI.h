@@ -37,6 +37,7 @@
 #include <set>
 
 struct GLFWwindow;
+struct ImVec2;
 
 namespace gv {
 
@@ -176,6 +177,8 @@ private:
     void StartImageTo3DGeneration();
     void UpdateImageTo3DGenerationState();
     void RefreshImageTo3DSourceTexture();
+    bool LoadImageTo3DPreviewMesh(const std::string& objPath);
+    void DrawImageTo3DPreviewCanvas(const ImVec2& size);
     void ExportImageTo3DOutputs();
 
     // ── 2D clipboard helpers ───────────────────────────────────────────────
@@ -483,7 +486,6 @@ private:
     bool m_Img3DServerOnline    = false;    // cached server status
     volatile bool m_Img3DGenerating      = false;    // generation in progress
     volatile bool m_Img3DDone            = false;    // generation finished
-    bool m_Img3DAutoLoadedCurrentGen     = false;    // guard: only auto-load once per generation
     f32  m_Img3DProgress        = 0.0f;     // 0..1 progress
     std::string m_Img3DStatusMsg;           // status message display
     std::string m_Img3DLastObjPath;         // last generated OBJ path
@@ -493,8 +495,20 @@ private:
     ImageTo3DResult m_Img3DLastResult;      // last generation result
     Shared<Texture> m_Img3DSourceTexture;   // preview texture for selected source image
     std::string m_Img3DSourceTexturePath;   // cache key for preview image
-    i32  m_Img3DMaskTool = 0;               // 0=Add, 1=Remove (UI scaffold)
-    f32  m_Img3DMaskBrushSize = 32.0f;      // brush size for future mask painting
+    i32  m_Img3DMaskTool = 0;               // 0=Add selection, 1=Remove selection
+    f32  m_Img3DMaskBrushSize = 32.0f;      // reserved for future freehand mask paint
+    bool m_Img3DHasSelection = false;       // selected source region is active
+    bool m_Img3DSelectionDragging = false;  // dragging rectangle in source preview
+    Vec2 m_Img3DSelectionMinUV{0.0f, 0.0f}; // normalized [0..1]
+    Vec2 m_Img3DSelectionMaxUV{1.0f, 1.0f}; // normalized [0..1]
+    Vec2 m_Img3DSelectionStartUV{0.0f, 0.0f};
+
+    std::vector<Vec3> m_Img3DPreviewVerts;  // normalized preview mesh vertices
+    std::vector<u32>  m_Img3DPreviewIndices;
+    bool m_Img3DPreviewReady = false;
+    f32  m_Img3DPreviewYaw = 20.0f;
+    f32  m_Img3DPreviewPitch = -12.0f;
+    f32  m_Img3DPreviewZoom = 2.4f;
 
     // ── Subsystem instances ────────────────────────────────────────────────
     MaterialLibrary*  m_MaterialLib = nullptr;

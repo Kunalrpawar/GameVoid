@@ -20,6 +20,7 @@ import argparse
 from pathlib import Path
 
 from flask import Flask, request, jsonify
+from PIL import Image
 
 # Add the ai_server directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -54,6 +55,55 @@ def _load_api_key() -> str:
             if line.startswith("apiKey="):
                 return line.split("=", 1)[1].strip()
     return os.environ.get("GEMINI_API_KEY", "")
+
+
+def _clamp01(v: float) -> float:
+    return max(0.0, min(1.0, float(v)))
+
+
+def _crop_from_normalized_selection(image_path: str, data: dict) -> str:
+    """Crop selected normalized region and return cropped temp image path.
+    Falls back to original path if selection is invalid.
+    """
+    if not data.get("use_selection", False):
+        return image_path
+
+    try:
+        min_x = _clamp01(data.get("selection_min_x", 0.0))
+        min_y = _clamp01(data.get("selection_min_y", 0.0))
+        max_x = _clamp01(data.get("selection_max_x", 1.0))
+        max_y = _clamp01(data.get("selection_max_y", 1.0))
+
+        if max_x < min_x:
+            min_x, max_x = max_x, min_x
+        if max_y < min_y:
+            min_y, max_y = max_y, min_y
+
+        with Image.open(image_path) as img:
+            w, h = img.size
+            x0 = int(min_x * w)
+            y0 = int(min_y * h)
+            x1 = int(max_x * w)
+            y1 = int(max_y * h)
+
+            # Ensure non-empty crop and valid bounds
+            x0 = max(0, min(x0, w - 1))
+            y0 = max(0, min(y0, h - 1))
+            x1 = max(x0 + 1, min(x1, w))
+            y1 = max(y0 + 1, min(y1, h))
+
+            if (x1 - x0) < 8 or (y1 - y0) < 8:
+                print("[Server] Selection too small, using original image")
+                return image_path
+
+            cropped = img.crop((x0, y0, x1, y1))
+            temp_crop = os.path.join(UPLOAD_DIR, f"crop_{uuid.uuid4().hex[:8]}.png")
+            cropped.save(temp_crop)
+            print(f"[Server] Using selected crop region: ({x0},{y0})-({x1},{y1}) -> {temp_crop}")
+            return temp_crop
+    except Exception as e:
+        print(f"[Server] Crop selection failed ({e}); using original image")
+        return image_path
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -312,18 +362,26 @@ def generate_from_path():
     model_output_dir = os.path.join(OUTPUT_DIR, unique_name)
     os.makedirs(model_output_dir, exist_ok=True)
 
-    print(f"[Server] Generating from path: {image_path} -> {model_output_dir}")
+    work_image_path = _crop_from_normalized_selection(image_path, data)
+    print(f"[Server] Generating from path: {work_image_path} -> {model_output_dir}")
 
-    if method == "midas":
-        result = mesh_generator_midas.generate_mesh_midas(image_path, model_output_dir, unique_name)
-    elif method == "triposr":
-        result = mesh_generator.generate_mesh(image_path, model_output_dir, unique_name)
-    else:
-        result = mesh_generator.generate_mesh(image_path, model_output_dir, unique_name)
-        if not result["success"]:
-            result = mesh_generator_midas.generate_mesh_midas(
-                image_path, model_output_dir, unique_name
-            )
+    try:
+        if method == "midas":
+            result = mesh_generator_midas.generate_mesh_midas(work_image_path, model_output_dir, unique_name)
+        elif method == "triposr":
+            result = mesh_generator.generate_mesh(work_image_path, model_output_dir, unique_name)
+        else:
+            result = mesh_generator.generate_mesh(work_image_path, model_output_dir, unique_name)
+            if not result["success"]:
+                result = mesh_generator_midas.generate_mesh_midas(
+                    work_image_path, model_output_dir, unique_name
+                )
+    finally:
+        if work_image_path != image_path and os.path.exists(work_image_path):
+            try:
+                os.remove(work_image_path)
+            except OSError:
+                pass
 
     if result["success"]:
         return jsonify({

@@ -32,6 +32,11 @@ struct ImageTo3DRequest {
     std::string method      = "auto";                // "auto", "triposr", or "midas"
     std::string serverHost  = "127.0.0.1";           // Python server host
     u32         serverPort  = 5000;                   // Python server port
+    bool        useSelection = false;                // If true, generate from selected image region
+    f32         selectionMinX = 0.0f;                // Normalized [0..1]
+    f32         selectionMinY = 0.0f;                // Normalized [0..1]
+    f32         selectionMaxX = 1.0f;                // Normalized [0..1]
+    f32         selectionMaxY = 1.0f;                // Normalized [0..1]
 };
 
 // ============================================================================

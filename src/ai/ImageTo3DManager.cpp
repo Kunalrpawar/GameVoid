@@ -404,6 +404,13 @@ ImageTo3DResult ImageTo3DManager::GenerateFromImage(const ImageTo3DRequest& requ
     if (!request.objectName.empty()) {
         json += R"(,"name":")" + JsonEscapeStr(request.objectName) + R"(")";
     }
+    if (request.useSelection) {
+        json += R"(,"use_selection":true)";
+        json += R"(,"selection_min_x":)" + std::to_string(request.selectionMinX);
+        json += R"(,"selection_min_y":)" + std::to_string(request.selectionMinY);
+        json += R"(,"selection_max_x":)" + std::to_string(request.selectionMaxX);
+        json += R"(,"selection_max_y":)" + std::to_string(request.selectionMaxY);
+    }
     json += "}";
 
     GV_LOG_INFO("ImageTo3D: Sending request to server...");
