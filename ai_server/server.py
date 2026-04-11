@@ -17,10 +17,12 @@ import json
 import time
 import uuid
 import argparse
+from collections import deque
 from pathlib import Path
 
 from flask import Flask, request, jsonify
 from PIL import Image
+import numpy as np
 
 # Add the ai_server directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -104,6 +106,113 @@ def _crop_from_normalized_selection(image_path: str, data: dict) -> str:
     except Exception as e:
         print(f"[Server] Crop selection failed ({e}); using original image")
         return image_path
+
+
+def _largest_or_seed_component(mask: np.ndarray, seed_x: int, seed_y: int) -> np.ndarray:
+    """Return bool mask for component containing seed if possible; else largest component."""
+    h, w = mask.shape
+    visited = np.zeros((h, w), dtype=np.uint8)
+    components = []
+
+    def bfs(sx: int, sy: int):
+        q = deque()
+        q.append((sx, sy))
+        visited[sy, sx] = 1
+        pts = []
+        while q:
+            x, y = q.popleft()
+            pts.append((x, y))
+            for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                if nx < 0 or ny < 0 or nx >= w or ny >= h:
+                    continue
+                if visited[ny, nx] or not mask[ny, nx]:
+                    continue
+                visited[ny, nx] = 1
+                q.append((nx, ny))
+        return pts
+
+    for y in range(h):
+        for x in range(w):
+            if mask[y, x] and not visited[y, x]:
+                pts = bfs(x, y)
+                components.append(pts)
+
+    if not components:
+        return np.zeros_like(mask, dtype=bool)
+
+    picked = None
+    if 0 <= seed_x < w and 0 <= seed_y < h and mask[seed_y, seed_x]:
+        for pts in components:
+            if (seed_x, seed_y) in pts:
+                picked = pts
+                break
+    if picked is None:
+        picked = max(components, key=len)
+
+    out = np.zeros_like(mask, dtype=bool)
+    for x, y in picked:
+        out[y, x] = True
+    return out
+
+
+def _smart_segment_from_click(image_path: str, data: dict) -> str:
+    """SAM-style click selection fallback: remove background then keep clicked component."""
+    if not data.get("use_smart_point", False):
+        return image_path
+
+    try:
+        click_x = _clamp01(data.get("smart_point_x", 0.5))
+        click_y = _clamp01(data.get("smart_point_y", 0.5))
+
+        img = Image.open(image_path).convert("RGBA")
+        try:
+            from rembg import remove
+            img = remove(img)
+        except Exception:
+            pass
+
+        rgba = np.array(img)
+        alpha = rgba[:, :, 3] > 12
+        if not alpha.any():
+            return image_path
+
+        h, w = alpha.shape
+        sx = int(click_x * (w - 1))
+        sy = int(click_y * (h - 1))
+        comp = _largest_or_seed_component(alpha, sx, sy)
+        if not comp.any():
+            return image_path
+
+        ys, xs = np.where(comp)
+        x0, x1 = int(xs.min()), int(xs.max())
+        y0, y1 = int(ys.min()), int(ys.max())
+
+        pad = max(8, int(max(w, h) * 0.03))
+        x0 = max(0, x0 - pad)
+        y0 = max(0, y0 - pad)
+        x1 = min(w - 1, x1 + pad)
+        y1 = min(h - 1, y1 + pad)
+
+        kept = rgba.copy()
+        kept[~comp] = np.array([127, 127, 127, 0], dtype=np.uint8)
+        crop = kept[y0:y1 + 1, x0:x1 + 1]
+
+        out_path = os.path.join(UPLOAD_DIR, f"smart_{uuid.uuid4().hex[:8]}.png")
+        Image.fromarray(crop, mode="RGBA").save(out_path)
+        print(f"[Server] Smart-click segmented object at ({sx},{sy}) -> {out_path}")
+        return out_path
+    except Exception as e:
+        print(f"[Server] Smart selection failed ({e}); using fallback")
+        return image_path
+
+
+def _prepare_work_image(image_path: str, data: dict) -> str:
+    """Apply smart-click segmentation first, then fallback to rectangle crop."""
+    if data.get("use_smart_point", False):
+        smart = _smart_segment_from_click(image_path, data)
+        if smart != image_path:
+            return smart
+    return _crop_from_normalized_selection(image_path, data)
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -362,7 +471,7 @@ def generate_from_path():
     model_output_dir = os.path.join(OUTPUT_DIR, unique_name)
     os.makedirs(model_output_dir, exist_ok=True)
 
-    work_image_path = _crop_from_normalized_selection(image_path, data)
+    work_image_path = _prepare_work_image(image_path, data)
     print(f"[Server] Generating from path: {work_image_path} -> {model_output_dir}")
 
     try:

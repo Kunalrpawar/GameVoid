@@ -2158,15 +2158,13 @@ void EditorUI::DrawViewport(f32 dt) {
     ImTextureID texID = static_cast<ImTextureID>(m_ViewportColor);
     ImGui::Image(texID, size, ImVec2(0, 1), ImVec2(1, 0));   // flip Y
 
-    // ── Viewport overlay controls (top-left icons) ─────────────────────────
-    DrawViewportOverlayControls(m_VpScreenX, m_VpScreenY);
-
-    // ── Gizmo orientation cube (top-right corner) ──────────────────────────
-    DrawGizmoCube(m_VpScreenX, m_VpScreenY, m_VpScreenW, m_VpScreenH, cam);
-
-    // ── Camera preview PiP (bottom-right corner) ───────────────────────────
-    if (m_ShowCameraPiP)
-        DrawCameraPreviewPiP(m_VpScreenX, m_VpScreenY, m_VpScreenW, m_VpScreenH);
+    // ── Viewport overlays (disable while Image->3D studio is open) ────────
+    if (!m_ShowImageTo3DWorkspace) {
+        DrawViewportOverlayControls(m_VpScreenX, m_VpScreenY);
+        DrawGizmoCube(m_VpScreenX, m_VpScreenY, m_VpScreenW, m_VpScreenH, cam);
+        if (m_ShowCameraPiP)
+            DrawCameraPreviewPiP(m_VpScreenX, m_VpScreenY, m_VpScreenW, m_VpScreenH);
+    }
 
     // ── Unified camera controls via EditorCamera + ViewportInputManager ──
     bool vpHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
@@ -7198,15 +7196,14 @@ void EditorUI::StartImageTo3DGeneration() {
 
     m_Img3DReq.useSelection = m_Img3DHasSelection;
     if (m_Img3DHasSelection) {
-        f32 minX = std::min(m_Img3DSelectionMinUV.x, m_Img3DSelectionMaxUV.x);
-        f32 minY = std::min(m_Img3DSelectionMinUV.y, m_Img3DSelectionMaxUV.y);
-        f32 maxX = std::max(m_Img3DSelectionMinUV.x, m_Img3DSelectionMaxUV.x);
-        f32 maxY = std::max(m_Img3DSelectionMinUV.y, m_Img3DSelectionMaxUV.y);
-        m_Img3DReq.selectionMinX = std::max(0.0f, std::min(1.0f, minX));
-        m_Img3DReq.selectionMinY = std::max(0.0f, std::min(1.0f, minY));
-        m_Img3DReq.selectionMaxX = std::max(0.0f, std::min(1.0f, maxX));
-        m_Img3DReq.selectionMaxY = std::max(0.0f, std::min(1.0f, maxY));
+        m_Img3DReq.selectionMinX = 0.0f;
+        m_Img3DReq.selectionMinY = 0.0f;
+        m_Img3DReq.selectionMaxX = 1.0f;
+        m_Img3DReq.selectionMaxY = 1.0f;
     }
+    m_Img3DReq.useSmartPointSelection = m_Img3DHasSelection;
+    m_Img3DReq.smartPointX = std::max(0.0f, std::min(1.0f, m_Img3DSmartPointUV.x));
+    m_Img3DReq.smartPointY = std::max(0.0f, std::min(1.0f, m_Img3DSmartPointUV.y));
 
 #ifdef _WIN32
     CreateThread(nullptr, 0, EditorUI::Img3DGenerationThread, this, 0, nullptr);
@@ -7260,6 +7257,7 @@ void EditorUI::RefreshImageTo3DSourceTexture() {
     m_Img3DSelectionDragging = false;
     m_Img3DSelectionMinUV = Vec2(0.0f, 0.0f);
     m_Img3DSelectionMaxUV = Vec2(1.0f, 1.0f);
+    m_Img3DSmartPointUV = Vec2(0.5f, 0.5f);
     if (m_Assets) {
         auto tex = m_Assets->LoadTexture(path);
         if (tex && tex->GetID() != 0) {
@@ -7501,7 +7499,7 @@ void EditorUI::DrawImageTo3DWorkspace() {
         return;
     }
 
-    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Meta-style workflow: source image + generation + export");
+    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Meta-style workflow: select region -> generate -> preview -> optional import");
     ImGui::SameLine();
     if (ImGui::SmallButton("Open Bottom Tab")) {
         m_BottomTab = 10;
@@ -7561,19 +7559,8 @@ void EditorUI::DrawImageTo3DWorkspace() {
 
             if (m_Img3DMaskTool == 0) {
                 if (imgHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                    m_Img3DSelectionDragging = true;
-                    m_Img3DSelectionStartUV = toUV(ImGui::GetIO().MousePos);
-                    m_Img3DSelectionMinUV = m_Img3DSelectionStartUV;
-                    m_Img3DSelectionMaxUV = m_Img3DSelectionStartUV;
-                }
-                if (m_Img3DSelectionDragging && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                    m_Img3DSelectionMaxUV = toUV(ImGui::GetIO().MousePos);
-                }
-                if (m_Img3DSelectionDragging && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-                    m_Img3DSelectionDragging = false;
-                    f32 wSel = std::fabs(m_Img3DSelectionMaxUV.x - m_Img3DSelectionMinUV.x);
-                    f32 hSel = std::fabs(m_Img3DSelectionMaxUV.y - m_Img3DSelectionMinUV.y);
-                    m_Img3DHasSelection = (wSel > 0.01f && hSel > 0.01f);
+                    m_Img3DSmartPointUV = toUV(ImGui::GetIO().MousePos);
+                    m_Img3DHasSelection = true;
                 }
             } else if (imgHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                 m_Img3DHasSelection = false;
@@ -7582,15 +7569,11 @@ void EditorUI::DrawImageTo3DWorkspace() {
                 m_Img3DSelectionMaxUV = Vec2(1.0f, 1.0f);
             }
 
-            if (m_Img3DHasSelection || m_Img3DSelectionDragging) {
-                f32 minU = std::min(m_Img3DSelectionMinUV.x, m_Img3DSelectionMaxUV.x);
-                f32 minV = std::min(m_Img3DSelectionMinUV.y, m_Img3DSelectionMaxUV.y);
-                f32 maxU = std::max(m_Img3DSelectionMinUV.x, m_Img3DSelectionMaxUV.x);
-                f32 maxV = std::max(m_Img3DSelectionMinUV.y, m_Img3DSelectionMaxUV.y);
-                ImVec2 s0(imgMin.x + minU * (imgMax.x - imgMin.x), imgMin.y + minV * (imgMax.y - imgMin.y));
-                ImVec2 s1(imgMin.x + maxU * (imgMax.x - imgMin.x), imgMin.y + maxV * (imgMax.y - imgMin.y));
-                dl->AddRectFilled(s0, s1, IM_COL32(255, 64, 160, 35));
-                dl->AddRect(s0, s1, IM_COL32(255, 64, 160, 240), 0.0f, 0, 2.0f);
+            if (m_Img3DHasSelection) {
+                ImVec2 pt(imgMin.x + m_Img3DSmartPointUV.x * (imgMax.x - imgMin.x),
+                          imgMin.y + m_Img3DSmartPointUV.y * (imgMax.y - imgMin.y));
+                dl->AddCircleFilled(pt, 5.0f, IM_COL32(255, 64, 160, 240));
+                dl->AddCircle(pt, 10.0f, IM_COL32(255, 64, 160, 180), 20, 2.0f);
             }
         } else {
             ImGui::TextDisabled("No preview available yet.");
@@ -7606,14 +7589,23 @@ void EditorUI::DrawImageTo3DWorkspace() {
         ImGui::SameLine();
         ImGui::SetNextItemWidth(160.0f);
         ImGui::SliderFloat("Brush##MaskBrush", &m_Img3DMaskBrushSize, 4.0f, 128.0f, "%.0f px");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Clear Selection")) {
+            m_Img3DHasSelection = false;
+            m_Img3DSelectionDragging = false;
+            m_Img3DSelectionMinUV = Vec2(0.0f, 0.0f);
+            m_Img3DSelectionMaxUV = Vec2(1.0f, 1.0f);
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Center Point")) {
+            m_Img3DSmartPointUV = Vec2(0.5f, 0.5f);
+            m_Img3DHasSelection = true;
+        }
+        ImGui::TextDisabled("Tip: In Add mode, click the object (SAM style). In Remove mode, click to clear.");
         if (m_Img3DHasSelection) {
-            f32 minU = std::min(m_Img3DSelectionMinUV.x, m_Img3DSelectionMaxUV.x);
-            f32 minV = std::min(m_Img3DSelectionMinUV.y, m_Img3DSelectionMaxUV.y);
-            f32 maxU = std::max(m_Img3DSelectionMinUV.x, m_Img3DSelectionMaxUV.x);
-            f32 maxV = std::max(m_Img3DSelectionMinUV.y, m_Img3DSelectionMaxUV.y);
-            ImGui::Text("Selected region: %.0f%% x %.0f%%", (maxU - minU) * 100.0f, (maxV - minV) * 100.0f);
+            ImGui::Text("Smart point: (%.0f%%, %.0f%%)", m_Img3DSmartPointUV.x * 100.0f, m_Img3DSmartPointUV.y * 100.0f);
         } else {
-            ImGui::TextDisabled("No selected region (generation uses full image).");
+            ImGui::TextDisabled("No smart point selected (generation uses full image).");
         }
 
         ImGui::TableSetColumnIndex(1);

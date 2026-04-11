@@ -37,6 +37,9 @@ struct ImageTo3DRequest {
     f32         selectionMinY = 0.0f;                // Normalized [0..1]
     f32         selectionMaxX = 1.0f;                // Normalized [0..1]
     f32         selectionMaxY = 1.0f;                // Normalized [0..1]
+    bool        useSmartPointSelection = false;      // If true, server segments object from click point
+    f32         smartPointX = 0.5f;                  // Normalized [0..1]
+    f32         smartPointY = 0.5f;                  // Normalized [0..1]
 };
 
 // ============================================================================

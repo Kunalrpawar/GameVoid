@@ -502,6 +502,7 @@ private:
     Vec2 m_Img3DSelectionMinUV{0.0f, 0.0f}; // normalized [0..1]
     Vec2 m_Img3DSelectionMaxUV{1.0f, 1.0f}; // normalized [0..1]
     Vec2 m_Img3DSelectionStartUV{0.0f, 0.0f};
+    Vec2 m_Img3DSmartPointUV{0.5f, 0.5f};   // normalized click point for SAM-style selection
 
     std::vector<Vec3> m_Img3DPreviewVerts;  // normalized preview mesh vertices
     std::vector<u32>  m_Img3DPreviewIndices;

@@ -411,6 +411,11 @@ ImageTo3DResult ImageTo3DManager::GenerateFromImage(const ImageTo3DRequest& requ
         json += R"(,"selection_max_x":)" + std::to_string(request.selectionMaxX);
         json += R"(,"selection_max_y":)" + std::to_string(request.selectionMaxY);
     }
+    if (request.useSmartPointSelection) {
+        json += R"(,"use_smart_point":true)";
+        json += R"(,"smart_point_x":)" + std::to_string(request.smartPointX);
+        json += R"(,"smart_point_y":)" + std::to_string(request.smartPointY);
+    }
     json += "}";
 
     GV_LOG_INFO("ImageTo3D: Sending request to server...");
