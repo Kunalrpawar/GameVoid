@@ -7181,6 +7181,7 @@ void EditorUI::StartImageTo3DGeneration() {
     m_Img3DDone = false;
     m_Img3DPreviewReady = false;
     m_Img3DPreviewVerts.clear();
+    m_Img3DPreviewNorms.clear();
     m_Img3DPreviewIndices.clear();
     m_Img3DLastResult = ImageTo3DResult{};
     m_Img3DStatusMsg = "Generating...";
@@ -7194,6 +7195,12 @@ void EditorUI::StartImageTo3DGeneration() {
         case 2: m_Img3DReq.method = "midas";   break;
     }
 
+    // Use pre-segmented masked image if SAM points were used
+    m_Img3DReq.maskedImagePath = m_Img3DLastMaskedPath;
+    m_Img3DReq.samPositivePoints = m_Img3DSAMPositivePoints;
+    m_Img3DReq.samNegativePoints = m_Img3DSAMNegativePoints;
+
+    // Legacy single-point support
     m_Img3DReq.useSelection = m_Img3DHasSelection;
     if (m_Img3DHasSelection) {
         m_Img3DReq.selectionMinX = 0.0f;
@@ -7201,7 +7208,7 @@ void EditorUI::StartImageTo3DGeneration() {
         m_Img3DReq.selectionMaxX = 1.0f;
         m_Img3DReq.selectionMaxY = 1.0f;
     }
-    m_Img3DReq.useSmartPointSelection = m_Img3DHasSelection;
+    m_Img3DReq.useSmartPointSelection = m_Img3DHasSelection && m_Img3DSAMPositivePoints.empty();
     m_Img3DReq.smartPointX = std::max(0.0f, std::min(1.0f, m_Img3DSmartPointUV.x));
     m_Img3DReq.smartPointY = std::max(0.0f, std::min(1.0f, m_Img3DSmartPointUV.y));
 
@@ -7335,6 +7342,31 @@ bool EditorUI::LoadImageTo3DPreviewMesh(const std::string& objPath) {
         v = (v - center) * (1.8f / maxExt);
     }
     m_Img3DPreviewIndices = std::move(indices);
+
+    // Compute per-vertex normals for flat shading
+    m_Img3DPreviewNorms.resize(m_Img3DPreviewVerts.size(), Vec3(0, 0, 0));
+    for (size_t i = 0; i + 2 < m_Img3DPreviewIndices.size(); i += 3) {
+        u32 ia = m_Img3DPreviewIndices[i];
+        u32 ib = m_Img3DPreviewIndices[i + 1];
+        u32 ic = m_Img3DPreviewIndices[i + 2];
+        if (ia >= m_Img3DPreviewVerts.size() || ib >= m_Img3DPreviewVerts.size() || ic >= m_Img3DPreviewVerts.size()) continue;
+        Vec3 e1 = m_Img3DPreviewVerts[ib] - m_Img3DPreviewVerts[ia];
+        Vec3 e2 = m_Img3DPreviewVerts[ic] - m_Img3DPreviewVerts[ia];
+        Vec3 fn(e1.y * e2.z - e1.z * e2.y,
+                e1.z * e2.x - e1.x * e2.z,
+                e1.x * e2.y - e1.y * e2.x);
+        f32 len = std::sqrt(fn.x * fn.x + fn.y * fn.y + fn.z * fn.z);
+        if (len > 1e-8f) { fn.x /= len; fn.y /= len; fn.z /= len; }
+        m_Img3DPreviewNorms[ia] = m_Img3DPreviewNorms[ia] + fn;
+        m_Img3DPreviewNorms[ib] = m_Img3DPreviewNorms[ib] + fn;
+        m_Img3DPreviewNorms[ic] = m_Img3DPreviewNorms[ic] + fn;
+    }
+    for (Vec3& n : m_Img3DPreviewNorms) {
+        f32 len = std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
+        if (len > 1e-8f) { n.x /= len; n.y /= len; n.z /= len; }
+        else { n = Vec3(0, 0, 1); }
+    }
+
     m_Img3DPreviewReady = true;
     m_Img3DPreviewYaw = 20.0f;
     m_Img3DPreviewPitch = -12.0f;
@@ -7353,44 +7385,57 @@ void EditorUI::DrawImageTo3DPreviewCanvas(const ImVec2& size) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 p0 = ImGui::GetCursorScreenPos();
     const ImVec2 p1 = ImVec2(p0.x + avail.x, p0.y + avail.y);
-    dl->AddRectFilled(p0, p1, IM_COL32(20, 24, 30, 255), 6.0f);
-    dl->AddRect(p0, p1, IM_COL32(70, 76, 90, 255), 6.0f, 0, 1.0f);
+
+    // Dark gradient background
+    dl->AddRectFilled(p0, p1, IM_COL32(16, 19, 26, 255), 6.0f);
+    dl->AddRectFilled(p0, ImVec2(p1.x, p0.y + avail.y * 0.5f), IM_COL32(22, 26, 35, 255), 6.0f);
+    dl->AddRect(p0, p1, IM_COL32(60, 70, 90, 255), 6.0f, 0, 1.0f);
 
     if (!m_Img3DPreviewReady || m_Img3DPreviewVerts.empty() || m_Img3DPreviewIndices.empty()) {
-        ImGui::SetCursorScreenPos(ImVec2(p0.x + 12.0f, p0.y + 12.0f));
-        ImGui::TextDisabled("No 3D preview yet.");
-        ImGui::SetCursorScreenPos(ImVec2(p0.x + 12.0f, p0.y + 30.0f));
-        ImGui::TextDisabled("Generate from selected area, then preview here.");
+        const char* msg1 = "No 3D preview yet.";
+        const char* msg2 = "Generate a model to see it here.";
+        ImVec2 ts1 = ImGui::CalcTextSize(msg1);
+        ImVec2 ts2 = ImGui::CalcTextSize(msg2);
+        ImVec2 c((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f);
+        dl->AddText(ImVec2(c.x - ts1.x * 0.5f, c.y - 14.0f), IM_COL32(120, 130, 150, 200), msg1);
+        dl->AddText(ImVec2(c.x - ts2.x * 0.5f, c.y + 4.0f), IM_COL32(90, 100, 120, 160), msg2);
         ImGui::Dummy(avail);
         ImGui::EndChild();
         return;
     }
 
+    // Orbit + zoom interaction
     ImGui::InvisibleButton("##Img3DPreviewInteract", avail, ImGuiButtonFlags_MouseButtonLeft);
     const bool hovered = ImGui::IsItemHovered();
     ImVec2 md = ImGui::GetIO().MouseDelta;
     if (hovered && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-        m_Img3DPreviewYaw += md.x * 0.4f;
-        m_Img3DPreviewPitch += md.y * 0.35f;
+        m_Img3DPreviewYaw += md.x * 0.5f;
+        m_Img3DPreviewPitch += md.y * 0.4f;
         m_Img3DPreviewPitch = std::max(-85.0f, std::min(85.0f, m_Img3DPreviewPitch));
     }
     if (hovered) {
         f32 wheel = ImGui::GetIO().MouseWheel;
         if (wheel != 0.0f) {
-            m_Img3DPreviewZoom -= wheel * 0.15f;
-            m_Img3DPreviewZoom = std::max(1.2f, std::min(5.0f, m_Img3DPreviewZoom));
+            m_Img3DPreviewZoom -= wheel * 0.2f;
+            m_Img3DPreviewZoom = std::max(1.0f, std::min(6.0f, m_Img3DPreviewZoom));
         }
     }
 
-    const f32 cy = std::cos(m_Img3DPreviewYaw * 3.14159265f / 180.0f);
-    const f32 sy = std::sin(m_Img3DPreviewYaw * 3.14159265f / 180.0f);
-    const f32 cx = std::cos(m_Img3DPreviewPitch * 3.14159265f / 180.0f);
-    const f32 sx = std::sin(m_Img3DPreviewPitch * 3.14159265f / 180.0f);
+    const f32 DEG2RAD = 3.14159265f / 180.0f;
+    const f32 cy = std::cos(m_Img3DPreviewYaw * DEG2RAD);
+    const f32 sy = std::sin(m_Img3DPreviewYaw * DEG2RAD);
+    const f32 cx = std::cos(m_Img3DPreviewPitch * DEG2RAD);
+    const f32 sx = std::sin(m_Img3DPreviewPitch * DEG2RAD);
+
+    // Light from upper-right-front
+    Vec3 lightDir(0.4f, 0.7f, 0.5f);
+    f32 ll = std::sqrt(lightDir.x * lightDir.x + lightDir.y * lightDir.y + lightDir.z * lightDir.z);
+    if (ll > 0.0f) { lightDir.x /= ll; lightDir.y /= ll; lightDir.z /= ll; }
 
     std::vector<ImVec2> projected(m_Img3DPreviewVerts.size());
-    std::vector<f32> depth(m_Img3DPreviewVerts.size(), 0.0f);
+    std::vector<f32> depthBuf(m_Img3DPreviewVerts.size(), 0.0f);
     const f32 scrScale = std::min(avail.x, avail.y) * 0.42f;
-    const ImVec2 center = ImVec2((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f);
+    const ImVec2 screenCenter = ImVec2((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f);
 
     for (size_t i = 0; i < m_Img3DPreviewVerts.size(); ++i) {
         Vec3 v = m_Img3DPreviewVerts[i];
@@ -7401,26 +7446,67 @@ void EditorUI::DrawImageTo3DPreviewCanvas(const ImVec2& size) {
         f32 z = yzZ + m_Img3DPreviewZoom;
         if (z < 0.1f) z = 0.1f;
         f32 inv = 1.0f / z;
-        projected[i] = ImVec2(center.x + (xzX * inv) * scrScale,
-                              center.y - (yzY * inv) * scrScale);
-        depth[i] = z;
+        projected[i] = ImVec2(screenCenter.x + (xzX * inv) * scrScale,
+                              screenCenter.y - (yzY * inv) * scrScale);
+        depthBuf[i] = z;
     }
 
-    for (size_t i = 0; i + 2 < m_Img3DPreviewIndices.size(); i += 3) {
-        u32 ia = m_Img3DPreviewIndices[i];
-        u32 ib = m_Img3DPreviewIndices[i + 1];
-        u32 ic = m_Img3DPreviewIndices[i + 2];
+    // Depth-sort triangles for painter's algorithm
+    struct TriSort { size_t idx; f32 z; };
+    size_t triCount = m_Img3DPreviewIndices.size() / 3;
+    std::vector<TriSort> triOrder(triCount);
+    for (size_t i = 0; i < triCount; ++i) {
+        u32 ia = m_Img3DPreviewIndices[i * 3];
+        u32 ib = m_Img3DPreviewIndices[i * 3 + 1];
+        u32 ic = m_Img3DPreviewIndices[i * 3 + 2];
+        triOrder[i].idx = i;
+        triOrder[i].z = (ia < depthBuf.size() && ib < depthBuf.size() && ic < depthBuf.size())
+            ? (depthBuf[ia] + depthBuf[ib] + depthBuf[ic]) / 3.0f : 999.0f;
+    }
+    std::sort(triOrder.begin(), triOrder.end(),
+              [](const TriSort& a, const TriSort& b) { return a.z > b.z; });
+
+    // Flat-shaded filled triangles
+    bool hasNorms = !m_Img3DPreviewNorms.empty() && m_Img3DPreviewNorms.size() == m_Img3DPreviewVerts.size();
+    for (const auto& tri : triOrder) {
+        size_t i3 = tri.idx * 3;
+        u32 ia = m_Img3DPreviewIndices[i3];
+        u32 ib = m_Img3DPreviewIndices[i3 + 1];
+        u32 ic = m_Img3DPreviewIndices[i3 + 2];
         if (ia >= projected.size() || ib >= projected.size() || ic >= projected.size()) continue;
 
-        f32 zAvg = (depth[ia] + depth[ib] + depth[ic]) / 3.0f;
-        f32 shade = std::max(0.25f, std::min(1.0f, 2.2f / zAvg));
-        ImU32 edgeCol = IM_COL32(static_cast<int>(110 * shade), static_cast<int>(210 * shade), 255, 210);
-        dl->AddLine(projected[ia], projected[ib], edgeCol, 1.0f);
-        dl->AddLine(projected[ib], projected[ic], edgeCol, 1.0f);
-        dl->AddLine(projected[ic], projected[ia], edgeCol, 1.0f);
+        // Backface culling
+        ImVec2 ab(projected[ib].x - projected[ia].x, projected[ib].y - projected[ia].y);
+        ImVec2 ac(projected[ic].x - projected[ia].x, projected[ic].y - projected[ia].y);
+        if (ab.x * ac.y - ab.y * ac.x > 0.0f) continue;
+
+        f32 shade = 0.45f;
+        if (hasNorms) {
+            Vec3 avgN;
+            avgN.x = (m_Img3DPreviewNorms[ia].x + m_Img3DPreviewNorms[ib].x + m_Img3DPreviewNorms[ic].x) / 3.0f;
+            avgN.y = (m_Img3DPreviewNorms[ia].y + m_Img3DPreviewNorms[ib].y + m_Img3DPreviewNorms[ic].y) / 3.0f;
+            avgN.z = (m_Img3DPreviewNorms[ia].z + m_Img3DPreviewNorms[ib].z + m_Img3DPreviewNorms[ic].z) / 3.0f;
+            f32 nxzX = avgN.x * cy - avgN.z * sy;
+            f32 nxzZ = avgN.x * sy + avgN.z * cy;
+            f32 nyzY = avgN.y * cx - nxzZ * sx;
+            f32 nyzZ = avgN.y * sx + nxzZ * cx;
+            f32 nl = std::sqrt(nxzX * nxzX + nyzY * nyzY + nyzZ * nyzZ);
+            if (nl > 1e-6f) { nxzX /= nl; nyzY /= nl; nyzZ /= nl; }
+            shade = 0.2f + 0.8f * std::max(0.0f, nxzX * lightDir.x + nyzY * lightDir.y + nyzZ * lightDir.z);
+        }
+        shade = std::max(0.15f, std::min(1.0f, shade));
+
+        int r = std::min(255, static_cast<int>(90 * shade + 40));
+        int g = std::min(255, static_cast<int>(140 * shade + 50));
+        int b_c = std::min(255, static_cast<int>(200 * shade + 55));
+        dl->AddTriangleFilled(projected[ia], projected[ib], projected[ic], IM_COL32(r, g, b_c, 240));
+        dl->AddTriangle(projected[ia], projected[ib], projected[ic], IM_COL32(r / 2, g / 2, b_c / 2, 60), 0.5f);
     }
 
-    dl->AddText(ImVec2(p0.x + 10.0f, p0.y + 10.0f), IM_COL32(200, 210, 230, 255), "3D Preview (drag to orbit, wheel to zoom)");
+    char hud[128];
+    std::snprintf(hud, sizeof(hud), "Verts: %zu  Tris: %zu  (drag=orbit, scroll=zoom)",
+                  m_Img3DPreviewVerts.size(), m_Img3DPreviewIndices.size() / 3);
+    dl->AddText(ImVec2(p0.x + 8.0f, p1.y - 20.0f), IM_COL32(180, 190, 210, 200), hud);
     ImGui::Dummy(avail);
     ImGui::EndChild();
 }
@@ -7459,7 +7545,6 @@ void EditorUI::ExportImageTo3DOutputs() {
         std::ifstream in(srcPath.c_str(), std::ios::binary);
         if (!in.good()) return false;
         in.close();
-
         std::string dstPath = outDir + "\\" + fileNameFromPath(srcPath);
 #ifdef _WIN32
         return CopyFileA(srcPath.c_str(), dstPath.c_str(), FALSE) != 0;
@@ -7475,14 +7560,25 @@ void EditorUI::ExportImageTo3DOutputs() {
     if (copyIfExists(m_Img3DLastResult.objFilePath)) copied++;
     if (copyIfExists(m_Img3DLastResult.textureFilePath)) copied++;
 
+    std::string mtlPath = m_Img3DLastResult.objFilePath;
+    size_t dotPos = mtlPath.rfind('.');
+    if (dotPos != std::string::npos) {
+        mtlPath = mtlPath.substr(0, dotPos) + ".mtl";
+        if (copyIfExists(mtlPath)) copied++;
+    }
+
     if (copied > 0) {
-        m_Img3DStatusMsg = "Exported to: " + outDir;
+        m_Img3DStatusMsg = "Exported " + std::to_string(copied) + " files to: " + outDir;
         PushLog("[Image3D] Exported generated assets to " + outDir);
     } else {
         m_Img3DStatusMsg = "Export failed: output files not found.";
         PushLog("[Image3D] Export failed: source outputs were not found on disk.");
     }
 }
+
+// ============================================================================
+// Image to 3D Studio — Full-Screen Side-by-Side Workspace with SAM Masking
+// ============================================================================
 
 void EditorUI::DrawImageTo3DWorkspace() {
     if (!m_ShowImageTo3DWorkspace) return;
@@ -7491,32 +7587,34 @@ void EditorUI::DrawImageTo3DWorkspace() {
     RefreshImageTo3DSourceTexture();
 
     ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + 8.0f, vp->WorkPos.y + 8.0f), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(vp->WorkSize.x - 16.0f, vp->WorkSize.y - 16.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + 4.0f, vp->WorkPos.y + 4.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(vp->WorkSize.x - 8.0f, vp->WorkSize.y - 8.0f), ImGuiCond_Always);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.09f, 0.10f, 0.12f, 1.0f));
     if (!ImGui::Begin("Image to 3D Studio", &m_ShowImageTo3DWorkspace,
                       ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::PopStyleColor();
         ImGui::End();
         return;
     }
+    ImGui::PopStyleColor();
 
-    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Meta-style workflow: select region -> generate -> preview -> optional import");
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Open Bottom Tab")) {
-        m_BottomTab = 10;
-    }
-    ImGui::Separator();
+    // ── Top toolbar ──
+    {
+        ImVec4 sCol = m_Img3DServerOnline ? ImVec4(0.2f, 1.0f, 0.4f, 1.0f) : ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
+        ImGui::TextColored(sCol, "%s", m_Img3DServerOnline ? "SERVER ONLINE" : "SERVER OFFLINE");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Check##Studio")) { m_Img3DServerOnline = m_ImageTo3D.IsServerRunning(); }
+        ImGui::SameLine();
+        if (!m_Img3DServerOnline && ImGui::SmallButton("Start##Studio")) {
+            m_Img3DServerOnline = m_ImageTo3D.StartServer();
+            PushLog(m_Img3DServerOnline ? "[Image3D] Server started." : "[Image3D] Failed to start server.");
+        }
 
-    if (ImGui::BeginTable("Img3DStudioSplit", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("Source", ImGuiTableColumnFlags_WidthStretch, 0.56f);
-        ImGui::TableSetupColumn("Result", ImGuiTableColumnFlags_WidthStretch, 0.44f);
-        ImGui::TableNextRow();
-
-        ImGui::TableSetColumnIndex(0);
-        ImGui::Text("Source Image");
-        ImGui::SetNextItemWidth(-82.0f);
+        ImGui::SameLine(0, 20.0f);
+        ImGui::SetNextItemWidth(200.0f);
         ImGui::InputText("##Img3DStudioPath", m_Img3DPathBuf, sizeof(m_Img3DPathBuf));
         ImGui::SameLine();
-        if (ImGui::Button("Browse##Img3DStudio", ImVec2(72, 0))) {
+        if (ImGui::Button("Browse", ImVec2(70, 0))) {
             std::string path = OpenFileDialog(
                 "Image Files (*.png;*.jpg;*.jpeg;*.bmp;*.webp)\0*.png;*.jpg;*.jpeg;*.bmp;*.webp\0"
                 "All Files (*.*)\0*.*\0",
@@ -7524,156 +7622,232 @@ void EditorUI::DrawImageTo3DWorkspace() {
             if (!path.empty()) {
                 std::snprintf(m_Img3DPathBuf, sizeof(m_Img3DPathBuf), "%s", path.c_str());
                 RefreshImageTo3DSourceTexture();
-                PushLog("[Image3D] Selected in studio: " + path);
-            }
-        }
-
-        ImVec2 previewSize = ImVec2(-1, ImGui::GetContentRegionAvail().y - 120.0f);
-        if (previewSize.y < 180.0f) previewSize.y = 180.0f;
-        ImGui::BeginChild("Img3DStudioSourcePreview", previewSize, true);
-        if (m_Img3DSourceTexture && m_Img3DSourceTexture->GetID() != 0) {
-            f32 availW = ImGui::GetContentRegionAvail().x;
-            f32 availH = ImGui::GetContentRegionAvail().y;
-            f32 texW = static_cast<f32>(std::max(1u, m_Img3DSourceTexture->GetWidth()));
-            f32 texH = static_cast<f32>(std::max(1u, m_Img3DSourceTexture->GetHeight()));
-            f32 scale = std::min(availW / texW, availH / texH);
-            f32 drawW = texW * scale;
-            f32 drawH = texH * scale;
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (availW - drawW) * 0.5f);
-            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (availH - drawH) * 0.5f);
-            ImGui::Image(static_cast<ImTextureID>(m_Img3DSourceTexture->GetID()), ImVec2(drawW, drawH), ImVec2(0, 1), ImVec2(1, 0));
-
-            // Selection rectangle (Meta-style region select)
-            const ImVec2 imgMin = ImGui::GetItemRectMin();
-            const ImVec2 imgMax = ImGui::GetItemRectMax();
-            const bool imgHovered = ImGui::IsItemHovered();
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-
-            auto toUV = [&](const ImVec2& p) -> Vec2 {
-                f32 u = (p.x - imgMin.x) / std::max(1.0f, imgMax.x - imgMin.x);
-                f32 v = (p.y - imgMin.y) / std::max(1.0f, imgMax.y - imgMin.y);
-                u = std::max(0.0f, std::min(1.0f, u));
-                v = std::max(0.0f, std::min(1.0f, v));
-                return Vec2(u, v);
-            };
-
-            if (m_Img3DMaskTool == 0) {
-                if (imgHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                    m_Img3DSmartPointUV = toUV(ImGui::GetIO().MousePos);
-                    m_Img3DHasSelection = true;
-                }
-            } else if (imgHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                m_Img3DSAMPositivePoints.clear();
+                m_Img3DSAMNegativePoints.clear();
+                m_Img3DMaskPreviewTexture.reset();
+                m_Img3DMaskPreviewPath.clear();
+                m_Img3DLastMaskedPath.clear();
                 m_Img3DHasSelection = false;
-                m_Img3DSelectionDragging = false;
-                m_Img3DSelectionMinUV = Vec2(0.0f, 0.0f);
-                m_Img3DSelectionMaxUV = Vec2(1.0f, 1.0f);
+                PushLog("[Image3D] Selected: " + path);
             }
-
-            if (m_Img3DHasSelection) {
-                ImVec2 pt(imgMin.x + m_Img3DSmartPointUV.x * (imgMax.x - imgMin.x),
-                          imgMin.y + m_Img3DSmartPointUV.y * (imgMax.y - imgMin.y));
-                dl->AddCircleFilled(pt, 5.0f, IM_COL32(255, 64, 160, 240));
-                dl->AddCircle(pt, 10.0f, IM_COL32(255, 64, 160, 180), 20, 2.0f);
-            }
-        } else {
-            ImGui::TextDisabled("No preview available yet.");
-            ImGui::TextDisabled("Pick an image to start editing and generation.");
-        }
-        ImGui::EndChild();
-
-        ImGui::Text("Mask Tool");
-        ImGui::SameLine();
-        ImGui::RadioButton("Add##MaskTool", &m_Img3DMaskTool, 0);
-        ImGui::SameLine();
-        ImGui::RadioButton("Remove##MaskTool", &m_Img3DMaskTool, 1);
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(160.0f);
-        ImGui::SliderFloat("Brush##MaskBrush", &m_Img3DMaskBrushSize, 4.0f, 128.0f, "%.0f px");
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Clear Selection")) {
-            m_Img3DHasSelection = false;
-            m_Img3DSelectionDragging = false;
-            m_Img3DSelectionMinUV = Vec2(0.0f, 0.0f);
-            m_Img3DSelectionMaxUV = Vec2(1.0f, 1.0f);
-        }
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Center Point")) {
-            m_Img3DSmartPointUV = Vec2(0.5f, 0.5f);
-            m_Img3DHasSelection = true;
-        }
-        ImGui::TextDisabled("Tip: In Add mode, click the object (SAM style). In Remove mode, click to clear.");
-        if (m_Img3DHasSelection) {
-            ImGui::Text("Smart point: (%.0f%%, %.0f%%)", m_Img3DSmartPointUV.x * 100.0f, m_Img3DSmartPointUV.y * 100.0f);
-        } else {
-            ImGui::TextDisabled("No smart point selected (generation uses full image).");
         }
 
-        ImGui::TableSetColumnIndex(1);
-        ImGui::Text("3D Result Preview");
-        DrawImageTo3DPreviewCanvas(ImVec2(-1.0f, 280.0f));
+        ImGui::SameLine(0, 20.0f);
+        const char* methods[] = { "Auto", "TripoSR", "MiDaS" };
+        ImGui::SetNextItemWidth(90.0f);
+        ImGui::Combo("##Method", &m_Img3DMethod, methods, 3);
 
-        ImGui::Text("Generation & Import");
-        bool serverOnlineNow = m_Img3DServerOnline;
-        ImVec4 sCol = serverOnlineNow ? ImVec4(0.2f, 1.0f, 0.3f, 1.0f) : ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
-        ImGui::TextColored(sCol, "%s", serverOnlineNow ? "Server online" : "Server offline");
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Check##Img3DStudio")) {
-            m_Img3DServerOnline = m_ImageTo3D.IsServerRunning();
-        }
-        ImGui::SameLine();
-        if (!m_Img3DServerOnline && ImGui::SmallButton("Start##Img3DStudio")) {
-            m_Img3DServerOnline = m_ImageTo3D.StartServer();
-            PushLog(m_Img3DServerOnline ? "[Image3D] Server started (studio)." : "[Image3D] Failed to start server (studio).");
-        }
-
-        const char* methods[] = { "Auto (Best Available)", "TripoSR (Full 3D)", "MiDaS (Depth-based)" };
-        ImGui::SetNextItemWidth(-1);
-        ImGui::Combo("Method##Img3DStudioMethod", &m_Img3DMethod, methods, 3);
-
+        ImGui::SameLine(0, 15.0f);
         bool canGenerate = (m_Img3DPathBuf[0] != '\0') && !m_Img3DGenerating && m_Img3DServerOnline;
         if (!canGenerate) ImGui::BeginDisabled();
-        if (ImGui::Button(m_Img3DGenerating ? "Generating..." : "Generate 3D", ImVec2(-1, 40))) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.55f, 0.85f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.65f, 0.95f, 1.0f));
+        if (ImGui::Button(m_Img3DGenerating ? "Generating..." : "Generate 3D", ImVec2(120, 0))) {
             StartImageTo3DGeneration();
         }
+        ImGui::PopStyleColor(2);
         if (!canGenerate) ImGui::EndDisabled();
 
         if (m_Img3DGenerating) {
-            ImGui::ProgressBar(m_Img3DProgress, ImVec2(-1, 0), "Generating...");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::ProgressBar(m_Img3DProgress, ImVec2(0, 0), "Generating...");
         }
 
         if (!m_Img3DStatusMsg.empty()) {
+            ImGui::SameLine(0, 15.0f);
             bool isErr = m_Img3DStatusMsg.find("Failed") != std::string::npos ||
                          m_Img3DStatusMsg.find("Error") != std::string::npos;
-            ImVec4 col = isErr ? ImVec4(1.0f, 0.35f, 0.35f, 1.0f) : ImVec4(0.8f, 0.85f, 1.0f, 1.0f);
+            ImVec4 col = isErr ? ImVec4(1.0f, 0.4f, 0.4f, 1.0f) : ImVec4(0.7f, 0.85f, 1.0f, 1.0f);
             ImGui::TextColored(col, "%s", m_Img3DStatusMsg.c_str());
         }
+    }
+    ImGui::Separator();
 
-        ImGui::Separator();
-        if (m_Img3DLastResult.success) {
-            ImGui::Text("Object: %s", m_Img3DLastResult.objectName.c_str());
-            ImGui::Text("Verts: %u", m_Img3DLastResult.vertexCount);
-            ImGui::Text("Faces: %u", m_Img3DLastResult.faceCount);
-            ImGui::Text("Time: %.1f s", m_Img3DLastResult.generationTime);
+    // ── Side-by-side layout ──
+    f32 totalAvailH = ImGui::GetContentRegionAvail().y;
 
-            if (ImGui::Button("Import To Main Scene", ImVec2(-1, 28))) {
-                if (m_Scene && m_Assets) {
-                    GameObject* obj = m_ImageTo3D.LoadIntoScene(m_Img3DLastResult, *m_Scene, *m_Assets);
-                    if (obj) {
-                        m_Selected = obj;
-                        m_Img3DStatusMsg = "Imported to scene: " + obj->GetName();
-                        PushLog("[Image3D] Imported into scene from studio: " + obj->GetName());
+    if (ImGui::BeginTable("Img3DStudioSplit", 2,
+            ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("Source", ImGuiTableColumnFlags_WidthStretch, 0.50f);
+        ImGui::TableSetupColumn("Preview", ImGuiTableColumnFlags_WidthStretch, 0.50f);
+        ImGui::TableNextRow();
+
+        // ══════════════════════════════════════════════════════════════════
+        // LEFT — Source Image + SAM Click Points
+        // ══════════════════════════════════════════════════════════════════
+        ImGui::TableSetColumnIndex(0);
+        {
+            ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "Source Image");
+            ImGui::SameLine();
+            ImGui::TextDisabled("(Left-click = include, Right-click = exclude)");
+
+            // SAM toolbar
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                m_Img3DMaskTool == 0 ? ImVec4(0.15f, 0.6f, 0.3f, 1.0f) : ImVec4(0.24f, 0.25f, 0.26f, 1.0f));
+            if (ImGui::Button("+ Include", ImVec2(70, 0))) m_Img3DMaskTool = 0;
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                m_Img3DMaskTool == 1 ? ImVec4(0.7f, 0.2f, 0.2f, 1.0f) : ImVec4(0.24f, 0.25f, 0.26f, 1.0f));
+            if (ImGui::Button("- Exclude", ImVec2(70, 0))) m_Img3DMaskTool = 1;
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Clear All")) {
+                m_Img3DSAMPositivePoints.clear();
+                m_Img3DSAMNegativePoints.clear();
+                m_Img3DMaskPreviewTexture.reset();
+                m_Img3DMaskPreviewPath.clear();
+                m_Img3DLastMaskedPath.clear();
+                m_Img3DHasSelection = false;
+            }
+            ImGui::SameLine();
+            if ((!m_Img3DSAMPositivePoints.empty() || !m_Img3DSAMNegativePoints.empty()) && ImGui::SmallButton("Undo")) {
+                if (!m_Img3DSAMNegativePoints.empty()) m_Img3DSAMNegativePoints.pop_back();
+                else if (!m_Img3DSAMPositivePoints.empty()) m_Img3DSAMPositivePoints.pop_back();
+                m_Img3DMaskPreviewTexture.reset();
+                m_Img3DMaskPreviewPath.clear();
+            }
+            ImGui::SameLine();
+            ImGui::Checkbox("Show Mask", &m_Img3DShowMaskOverlay);
+            ImGui::SameLine(0, 15.0f);
+            ImGui::TextDisabled("%zu+ %zu-", m_Img3DSAMPositivePoints.size(), m_Img3DSAMNegativePoints.size());
+
+            f32 imgAreaH = totalAvailH - 80.0f;
+            if (imgAreaH < 200.0f) imgAreaH = 200.0f;
+            ImGui::BeginChild("Img3DStudioSourcePreview", ImVec2(-1, imgAreaH), true, ImGuiWindowFlags_NoScrollbar);
+
+            Shared<Texture> dispTex = m_Img3DSourceTexture;
+            if (m_Img3DShowMaskOverlay && m_Img3DMaskPreviewTexture && m_Img3DMaskPreviewTexture->GetID() != 0) {
+                dispTex = m_Img3DMaskPreviewTexture;
+            }
+
+            if (dispTex && dispTex->GetID() != 0) {
+                f32 aW = ImGui::GetContentRegionAvail().x;
+                f32 aH = ImGui::GetContentRegionAvail().y;
+                f32 tW = static_cast<f32>(std::max(1u, dispTex->GetWidth()));
+                f32 tH = static_cast<f32>(std::max(1u, dispTex->GetHeight()));
+                f32 sc = std::min(aW / tW, aH / tH);
+                f32 dW = tW * sc, dH = tH * sc;
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (aW - dW) * 0.5f);
+                ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (aH - dH) * 0.5f);
+                ImGui::Image(static_cast<ImTextureID>(dispTex->GetID()), ImVec2(dW, dH), ImVec2(0, 1), ImVec2(1, 0));
+
+                const ImVec2 imgMin = ImGui::GetItemRectMin();
+                const ImVec2 imgMax = ImGui::GetItemRectMax();
+                const bool imgHov = ImGui::IsItemHovered();
+                ImDrawList* imgDL = ImGui::GetWindowDrawList();
+
+                auto toUV = [&](const ImVec2& p) -> Vec2 {
+                    f32 u = (p.x - imgMin.x) / std::max(1.0f, imgMax.x - imgMin.x);
+                    f32 v = (p.y - imgMin.y) / std::max(1.0f, imgMax.y - imgMin.y);
+                    return Vec2(std::max(0.0f, std::min(1.0f, u)), std::max(0.0f, std::min(1.0f, v)));
+                };
+
+                // Handle clicks
+                if (imgHov) {
+                    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                        Vec2 uv = toUV(ImGui::GetIO().MousePos);
+                        if (m_Img3DMaskTool == 0) { m_Img3DSAMPositivePoints.push_back(uv); m_Img3DHasSelection = true; }
+                        else { m_Img3DSAMNegativePoints.push_back(uv); }
+                        m_Img3DMaskPreviewTexture.reset();
+                        m_Img3DMaskPreviewPath.clear();
+
+                        if (m_Img3DServerOnline && !m_Img3DSAMPositivePoints.empty()) {
+                            SegmentResult seg = m_ImageTo3D.SegmentPreview(m_Img3DPathBuf, m_Img3DSAMPositivePoints, m_Img3DSAMNegativePoints);
+                            if (seg.success && !seg.previewImagePath.empty() && m_Assets) {
+                                m_Img3DMaskPreviewTexture = m_Assets->LoadTexture(seg.previewImagePath);
+                            }
+                            SegmentResult mask = m_ImageTo3D.SegmentImageAtPoints(m_Img3DPathBuf, m_Img3DSAMPositivePoints, m_Img3DSAMNegativePoints);
+                            if (mask.success) { m_Img3DLastMaskedPath = mask.maskedImagePath; m_Img3DStatusMsg = "Segmented " + std::to_string(mask.coveragePercent) + "% of image"; }
+                        }
+                    }
+                    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                        m_Img3DSAMNegativePoints.push_back(toUV(ImGui::GetIO().MousePos));
+                        m_Img3DMaskPreviewTexture.reset();
+                        if (m_Img3DServerOnline && !m_Img3DSAMPositivePoints.empty()) {
+                            SegmentResult seg = m_ImageTo3D.SegmentPreview(m_Img3DPathBuf, m_Img3DSAMPositivePoints, m_Img3DSAMNegativePoints);
+                            if (seg.success && !seg.previewImagePath.empty() && m_Assets) m_Img3DMaskPreviewTexture = m_Assets->LoadTexture(seg.previewImagePath);
+                            SegmentResult mask = m_ImageTo3D.SegmentImageAtPoints(m_Img3DPathBuf, m_Img3DSAMPositivePoints, m_Img3DSAMNegativePoints);
+                            if (mask.success) m_Img3DLastMaskedPath = mask.maskedImagePath;
+                        }
                     }
                 }
+
+                // Draw click markers
+                for (const Vec2& p : m_Img3DSAMPositivePoints) {
+                    ImVec2 s(imgMin.x + p.x * (imgMax.x - imgMin.x), imgMin.y + p.y * (imgMax.y - imgMin.y));
+                    imgDL->AddCircleFilled(s, 6.0f, IM_COL32(0, 240, 90, 230));
+                    imgDL->AddCircle(s, 9.0f, IM_COL32(255, 255, 255, 180), 16, 2.0f);
+                }
+                for (const Vec2& p : m_Img3DSAMNegativePoints) {
+                    ImVec2 s(imgMin.x + p.x * (imgMax.x - imgMin.x), imgMin.y + p.y * (imgMax.y - imgMin.y));
+                    imgDL->AddCircleFilled(s, 6.0f, IM_COL32(255, 60, 60, 230));
+                    imgDL->AddCircle(s, 9.0f, IM_COL32(255, 255, 255, 180), 16, 2.0f);
+                }
+            } else {
+                ImVec2 c = ImVec2(ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x * 0.5f,
+                                  ImGui::GetCursorScreenPos().y + ImGui::GetContentRegionAvail().y * 0.5f);
+                ImDrawList* dlM = ImGui::GetWindowDrawList();
+                const char* msg = "Browse and select an image to begin";
+                ImVec2 ts = ImGui::CalcTextSize(msg);
+                dlM->AddText(ImVec2(c.x - ts.x * 0.5f, c.y - ts.y * 0.5f), IM_COL32(120, 130, 150, 180), msg);
+                ImGui::Dummy(ImGui::GetContentRegionAvail());
             }
-            if (ImGui::Button("Export Outputs", ImVec2(-1, 28))) {
-                ExportImageTo3DOutputs();
+            ImGui::EndChild();
+        }
+
+        // ══════════════════════════════════════════════════════════════════
+        // RIGHT — 3D Preview + Result + Export
+        // ══════════════════════════════════════════════════════════════════
+        ImGui::TableSetColumnIndex(1);
+        {
+            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.7f, 1.0f), "3D Preview");
+            if (m_Img3DPreviewReady) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(%zu verts, %zu tris)", m_Img3DPreviewVerts.size(), m_Img3DPreviewIndices.size() / 3);
             }
 
-            ImGui::TextWrapped("OBJ: %s", m_Img3DLastResult.objFilePath.c_str());
-            ImGui::TextWrapped("Texture: %s", m_Img3DLastResult.textureFilePath.c_str());
-        } else {
-            ImGui::TextDisabled("No model generated yet.");
-            ImGui::TextDisabled("Generate a model to enable export controls.");
+            f32 previewH = totalAvailH - 180.0f;
+            if (previewH < 200.0f) previewH = 200.0f;
+            DrawImageTo3DPreviewCanvas(ImVec2(-1.0f, previewH));
+
+            ImGui::Spacing();
+            if (m_Img3DLastResult.success) {
+                ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1.0f), "Result");
+                ImGui::SameLine();
+                ImGui::Text(" %s | %u verts | %u faces | %.1fs | %s",
+                    m_Img3DLastResult.objectName.c_str(), m_Img3DLastResult.vertexCount,
+                    m_Img3DLastResult.faceCount, m_Img3DLastResult.generationTime,
+                    m_Img3DLastResult.generationMethod.c_str());
+
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.55f, 0.25f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.70f, 0.30f, 1.0f));
+                if (ImGui::Button("Import to Scene", ImVec2(150, 30))) {
+                    if (m_Scene && m_Assets) {
+                        GameObject* obj = m_ImageTo3D.LoadIntoScene(m_Img3DLastResult, *m_Scene, *m_Assets);
+                        if (obj) { m_Selected = obj; m_Img3DStatusMsg = "Imported: " + obj->GetName(); PushLog("[Image3D] Imported: " + obj->GetName()); }
+                    }
+                }
+                ImGui::PopStyleColor(2);
+
+                ImGui::SameLine();
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.45f, 0.35f, 0.15f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.60f, 0.45f, 0.20f, 1.0f));
+                if (ImGui::Button("Export OBJ + Texture", ImVec2(160, 30))) { ExportImageTo3DOutputs(); }
+                ImGui::PopStyleColor(2);
+
+                ImGui::SameLine();
+                if (ImGui::Button("Re-generate", ImVec2(100, 30))) { StartImageTo3DGeneration(); }
+
+                ImGui::TextDisabled("OBJ: %s", m_Img3DLastResult.objFilePath.c_str());
+                ImGui::TextDisabled("Tex: %s", m_Img3DLastResult.textureFilePath.c_str());
+            } else if (!m_Img3DLastResult.errorMessage.empty()) {
+                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Error: %s", m_Img3DLastResult.errorMessage.c_str());
+            } else {
+                ImGui::TextDisabled("Select image -> Click to mask object -> Generate 3D");
+                ImGui::TextColored(ImVec4(0.5f, 0.7f, 1.0f, 0.7f), "1. Load image  2. Green click = include  3. Red click = exclude  4. Generate");
+            }
         }
 
         ImGui::EndTable();
@@ -7697,38 +7871,26 @@ void EditorUI::DrawImageTo3DPanel() {
     ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.0f, 1), "Image to 3D Model");
     ImGui::Separator();
 
-    // Server status indicator
     {
         const char* statusLabel = m_Img3DServerOnline ? "Server: ONLINE" : "Server: OFFLINE";
-        ImVec4 statusColor = m_Img3DServerOnline
-            ? ImVec4(0.2f, 1.0f, 0.3f, 1.0f)
-            : ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
+        ImVec4 statusColor = m_Img3DServerOnline ? ImVec4(0.2f, 1.0f, 0.3f, 1.0f) : ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
         ImGui::TextColored(statusColor, "%s", statusLabel);
-
         ImGui::SameLine();
         if (ImGui::SmallButton("Check")) {
             m_Img3DServerOnline = m_ImageTo3D.IsServerRunning();
-            PushLog(m_Img3DServerOnline
-                ? "[Image3D] Server is online."
-                : "[Image3D] Server is offline.");
+            PushLog(m_Img3DServerOnline ? "[Image3D] Server is online." : "[Image3D] Server is offline.");
         }
         ImGui::SameLine();
         if (!m_Img3DServerOnline) {
             if (ImGui::SmallButton("Start Server")) {
                 PushLog("[Image3D] Starting AI server...");
                 m_Img3DServerOnline = m_ImageTo3D.StartServer();
-                if (m_Img3DServerOnline) {
-                    PushLog("[Image3D] Server started successfully!");
-                } else {
-                    PushLog("[Image3D] Failed to start server. Run: .\\ai_server\\setup_ai_server.ps1");
-                }
+                PushLog(m_Img3DServerOnline ? "[Image3D] Server started!" : "[Image3D] Failed to start server.");
             }
         }
     }
 
     ImGui::Spacing();
-
-    // Image file path input
     ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.4f, 1), "Source Image");
     ImGui::SetNextItemWidth(-70);
     ImGui::InputText("##Img3DPath", m_Img3DPathBuf, sizeof(m_Img3DPathBuf));
@@ -7736,9 +7898,7 @@ void EditorUI::DrawImageTo3DPanel() {
     if (ImGui::Button("Browse##Img3D", ImVec2(60, 0))) {
         std::string path = OpenFileDialog(
             "Image Files (*.png;*.jpg;*.jpeg;*.bmp;*.webp)\0*.png;*.jpg;*.jpeg;*.bmp;*.webp\0"
-            "All Files (*.*)\0*.*\0",
-            "Select Image for 3D Generation"
-        );
+            "All Files (*.*)\0*.*\0", "Select Image for 3D Generation");
         if (!path.empty()) {
             std::snprintf(m_Img3DPathBuf, sizeof(m_Img3DPathBuf), "%s", path.c_str());
             PushLog("[Image3D] Selected: " + path);
@@ -7746,8 +7906,6 @@ void EditorUI::DrawImageTo3DPanel() {
     }
 
     ImGui::Spacing();
-
-    // Generation method
     ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.4f, 1), "Method");
     const char* methods[] = { "Auto (Best Available)", "TripoSR (Full 3D)", "MiDaS (Depth-based)" };
     ImGui::Combo("##Img3DMethod", &m_Img3DMethod, methods, 3);
@@ -7756,54 +7914,34 @@ void EditorUI::DrawImageTo3DPanel() {
     ImGui::Separator();
     ImGui::Spacing();
 
-    if (ImGui::Button("Open Full Screen Studio", ImVec2(-1, 24))) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.50f, 0.80f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.60f, 0.90f, 1.0f));
+    if (ImGui::Button("Open Full Studio (SAM Masking)", ImVec2(-1, 28))) {
         m_ShowImageTo3DWorkspace = true;
     }
+    ImGui::PopStyleColor(2);
 
     ImGui::Spacing();
 
-    // Generate button
     bool canGenerate = (m_Img3DPathBuf[0] != '\0') && !m_Img3DGenerating && m_Img3DServerOnline;
-    if (!canGenerate) {
-        ImGui::BeginDisabled();
-    }
-    if (ImGui::Button("Generate 3D Model", ImVec2(-1, 36))) {
-        StartImageTo3DGeneration();
-    }
-    if (!canGenerate) {
-        ImGui::EndDisabled();
-    }
+    if (!canGenerate) ImGui::BeginDisabled();
+    if (ImGui::Button("Generate 3D Model", ImVec2(-1, 36))) { StartImageTo3DGeneration(); }
+    if (!canGenerate) ImGui::EndDisabled();
 
-    // Status hints
-    if (!m_Img3DServerOnline) {
-        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1), "Start the AI server first!");
-    } else if (m_Img3DPathBuf[0] == '\0') {
-        ImGui::TextDisabled("Select an image to begin.");
-    }
+    if (!m_Img3DServerOnline) ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1), "Start the AI server first!");
+    else if (m_Img3DPathBuf[0] == '\0') ImGui::TextDisabled("Select an image to begin.");
 
-    // Progress bar
-    if (m_Img3DGenerating) {
-        ImGui::ProgressBar(m_Img3DProgress, ImVec2(-1, 0), "Generating...");
-    }
+    if (m_Img3DGenerating) ImGui::ProgressBar(m_Img3DProgress, ImVec2(-1, 0), "Generating...");
 
-    // Status message
     if (!m_Img3DStatusMsg.empty()) {
         ImGui::Spacing();
-        bool isError = m_Img3DStatusMsg.find("Failed") != std::string::npos ||
-                       m_Img3DStatusMsg.find("Error") != std::string::npos;
-        bool isSuccess = m_Img3DStatusMsg.find("Done") != std::string::npos ||
-                         m_Img3DStatusMsg.find("Success") != std::string::npos;
-        ImVec4 msgCol = isError   ? ImVec4(1, 0.3f, 0.3f, 1)
-                      : isSuccess ? ImVec4(0.3f, 1, 0.3f, 1)
-                                  : ImVec4(0.8f, 0.8f, 0.4f, 1);
+        bool isError = m_Img3DStatusMsg.find("Failed") != std::string::npos || m_Img3DStatusMsg.find("Error") != std::string::npos;
+        bool isSuccess = m_Img3DStatusMsg.find("Done") != std::string::npos || m_Img3DStatusMsg.find("Success") != std::string::npos;
+        ImVec4 msgCol = isError ? ImVec4(1, 0.3f, 0.3f, 1) : isSuccess ? ImVec4(0.3f, 1, 0.3f, 1) : ImVec4(0.8f, 0.8f, 0.4f, 1);
         ImGui::TextColored(msgCol, "%s", m_Img3DStatusMsg.c_str());
     }
 
     ImGui::TableSetColumnIndex(1);
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // Column 2: Result Info
-    // ═══════════════════════════════════════════════════════════════════════
     ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1), "Generation Result");
     ImGui::Separator();
 
@@ -7813,25 +7951,21 @@ void EditorUI::DrawImageTo3DPanel() {
         ImGui::Text("Vertices: %u", m_Img3DLastResult.vertexCount);
         ImGui::Text("Faces:    %u", m_Img3DLastResult.faceCount);
         ImGui::Text("Time:     %.1f s", m_Img3DLastResult.generationTime);
-
         ImGui::Spacing();
         ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.8f, 1), "Output Files:");
         ImGui::TextWrapped("OBJ: %s", m_Img3DLastResult.objFilePath.c_str());
         ImGui::TextWrapped("Tex: %s", m_Img3DLastResult.textureFilePath.c_str());
-
         ImGui::Spacing();
         ImGui::Separator();
-
-        // Re-load button
-        if (ImGui::Button("Re-load into Scene", ImVec2(-1, 24))) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.55f, 0.25f, 1.0f));
+        if (ImGui::Button("Import to Scene", ImVec2(-1, 24))) {
             if (m_Scene && m_Assets) {
                 GameObject* obj = m_ImageTo3D.LoadIntoScene(m_Img3DLastResult, *m_Scene, *m_Assets);
-                if (obj) {
-                    m_Selected = obj;
-                    PushLog("[Image3D] Re-loaded: " + obj->GetName());
-                }
+                if (obj) { m_Selected = obj; PushLog("[Image3D] Re-loaded: " + obj->GetName()); }
             }
         }
+        ImGui::PopStyleColor();
+        if (ImGui::Button("Export Outputs", ImVec2(-1, 24))) { ExportImageTo3DOutputs(); }
     } else if (!m_Img3DLastResult.errorMessage.empty()) {
         ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "Last Error:");
         ImGui::TextWrapped("%s", m_Img3DLastResult.errorMessage.c_str());
@@ -7841,42 +7975,28 @@ void EditorUI::DrawImageTo3DPanel() {
     }
 
     ImGui::TableSetColumnIndex(2);
-    // ═══════════════════════════════════════════════════════════════════════
-    // Column 3: Instructions & Help
-    // ═══════════════════════════════════════════════════════════════════════
     ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.4f, 1), "How It Works");
     ImGui::Separator();
-
     ImGui::TextWrapped(
         "1. Start the AI server (first time only)\n"
         "2. Browse and select an image (PNG/JPG)\n"
-        "3. Choose a generation method\n"
-        "4. Click 'Generate 3D Model'\n"
-        "5. Model auto-loads into the scene!"
+        "3. Open Full Studio for SAM-style masking\n"
+        "4. Click on objects to select them\n"
+        "5. Click 'Generate 3D' to create the model\n"
+        "6. Import to scene or export files"
     );
-
+    ImGui::Spacing();
+    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1), "SAM Masking (Full Studio):");
+    ImGui::BulletText("Left-click: include object (green)");
+    ImGui::BulletText("Right-click: exclude region (red)");
     ImGui::Spacing();
     ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1), "Methods:");
     ImGui::BulletText("Auto: tries TripoSR, falls back to MiDaS");
-    ImGui::BulletText("TripoSR: full 360 deg 3D (slower, better)");
-    ImGui::BulletText("MiDaS: depth-based relief (faster)");
-
+    ImGui::BulletText("TripoSR: full 360 3D (slower, better)");
+    ImGui::BulletText("MiDaS: depth-based volumetric (faster)");
     ImGui::Spacing();
     ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1), "Setup:");
-    ImGui::TextWrapped(
-        "Run this command once to install:\n"
-        ".\\ai_server\\setup_ai_server.ps1"
-    );
-    ImGui::Spacing();
-    ImGui::TextWrapped(
-        "To start server only:\n"
-        ".\\ai_server\\setup_ai_server.ps1 -StartOnly"
-    );
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1), "Supported: chair, car, tree, etc.");
-    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1), "Output: OBJ + PNG texture");
+    ImGui::TextWrapped("Run: .\\ai_server\\setup_ai_server.ps1");
 
         ImGui::EndTable();
     }

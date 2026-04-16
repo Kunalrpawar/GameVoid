@@ -495,7 +495,7 @@ private:
     ImageTo3DResult m_Img3DLastResult;      // last generation result
     Shared<Texture> m_Img3DSourceTexture;   // preview texture for selected source image
     std::string m_Img3DSourceTexturePath;   // cache key for preview image
-    i32  m_Img3DMaskTool = 0;               // 0=Add selection, 1=Remove selection
+    i32  m_Img3DMaskTool = 0;               // 0=Add point (positive), 1=Remove point (negative)
     f32  m_Img3DMaskBrushSize = 32.0f;      // reserved for future freehand mask paint
     bool m_Img3DHasSelection = false;       // selected source region is active
     bool m_Img3DSelectionDragging = false;  // dragging rectangle in source preview
@@ -504,7 +504,17 @@ private:
     Vec2 m_Img3DSelectionStartUV{0.0f, 0.0f};
     Vec2 m_Img3DSmartPointUV{0.5f, 0.5f};   // normalized click point for SAM-style selection
 
+    // SAM multi-point segmentation state
+    std::vector<Vec2> m_Img3DSAMPositivePoints;  // points ON the object (include)
+    std::vector<Vec2> m_Img3DSAMNegativePoints;  // points to EXCLUDE
+    Shared<Texture>   m_Img3DMaskPreviewTexture;  // SAM mask overlay preview texture
+    std::string       m_Img3DMaskPreviewPath;     // cache key for mask preview
+    std::string       m_Img3DLastMaskedPath;      // last segmented/masked image path
+    bool m_Img3DShowMaskOverlay = true;           // toggle mask overlay visibility
+    bool m_Img3DSegmenting = false;               // segmentation in progress
+
     std::vector<Vec3> m_Img3DPreviewVerts;  // normalized preview mesh vertices
+    std::vector<Vec3> m_Img3DPreviewNorms;  // per-vertex normals for flat shading
     std::vector<u32>  m_Img3DPreviewIndices;
     bool m_Img3DPreviewReady = false;
     f32  m_Img3DPreviewYaw = 20.0f;

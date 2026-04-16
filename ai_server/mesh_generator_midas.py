@@ -1,32 +1,27 @@
 """
-GameVoid Engine — MiDaS Depth-Based Mesh Generator (Lightweight Fallback)
-==========================================================================
-Uses MiDaS for monocular depth estimation, then constructs a mesh via
-Open3D point cloud → Poisson surface reconstruction.
+GameVoid Engine — MiDaS Depth-Based Mesh Generator (Improved)
+================================================================
+Uses MiDaS for monocular depth estimation, then constructs a thick volumetric
+mesh via Open3D. Produces genuine 3D meshes with proper thickness and detail.
 
-This is a lightweight alternative when TripoSR is unavailable or the user
-lacks a capable GPU. Produces 2.5D relief meshes (front face only).
+Key improvements:
+ - Higher resolution mesh (192)
+ - Bilateral depth smoothing
+ - Double-sided mesh with volume (front + back + sides)
+ - Better UV mapping (cylindrical projection)
+ - Poisson depth 9 for more geometric detail
+ - Target 8000 faces for higher quality
 """
 
 import os
 import time
 import numpy as np
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageFilter
 
 
 def generate_mesh_midas(image_path: str, output_dir: str, object_name: str = "model") -> dict:
-    """
-    Generate a 3D mesh from a single image using MiDaS depth estimation.
-
-    Args:
-        image_path: Path to the input image
-        output_dir: Directory to save the output OBJ + texture
-        object_name: Name for the output files
-
-    Returns:
-        dict with keys: success, obj_path, texture_path, vertex_count, face_count, error
-    """
+    """Generate a 3D mesh from a single image using MiDaS depth estimation."""
     result = {
         "success": False,
         "obj_path": "",
@@ -51,22 +46,20 @@ def generate_mesh_midas(image_path: str, output_dir: str, object_name: str = "mo
         img = Image.open(image_path).convert("RGB")
         orig_w, orig_h = img.size
 
-        # Save texture (original image)
+        # Save texture
         texture_path = os.path.join(output_dir, f"{object_name}_texture.png")
         img.save(texture_path)
 
-        # ── Step 1: MiDaS Depth Estimation ──────────────────────────────────
+        # ── Step 1: MiDaS Depth Estimation ──
         print("[MiDaS] Loading MiDaS model...")
         midas = torch.hub.load("intel-isl/MiDaS", "MiDaS_small", trust_repo=True)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         midas.to(device)
         midas.eval()
 
-        # Load transforms
         midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms", trust_repo=True)
         transform = midas_transforms.small_transform
 
-        # Run inference
         input_img = np.array(img)
         input_batch = transform(input_img).to(device)
 
@@ -74,7 +67,7 @@ def generate_mesh_midas(image_path: str, output_dir: str, object_name: str = "mo
             prediction = midas(input_batch)
             prediction = torch.nn.functional.interpolate(
                 prediction.unsqueeze(1),
-                size=(256, 256),
+                size=(384, 384),  # Higher resolution
                 mode="bicubic",
                 align_corners=False,
             ).squeeze()
@@ -89,75 +82,87 @@ def generate_mesh_midas(image_path: str, output_dir: str, object_name: str = "mo
         else:
             depth_map = np.zeros_like(depth_map)
 
+        # Bilateral filtering for edge-preserving smoothing
+        depth_map = _bilateral_filter(depth_map)
+
         print(f"[MiDaS] Depth map computed: {depth_map.shape}")
 
-        # ── Step 2: Create Point Cloud from Depth ────────────────────────────
+        # ── Step 2: Create volumetric mesh with front + back ──
+        mesh_resolution = 192  # Increased from 128
         h, w = depth_map.shape
-        mesh_resolution = min(h, w, 128)  # Cap resolution for performance
 
-        # Resize depth map if needed
         if h != mesh_resolution or w != mesh_resolution:
             depth_img = Image.fromarray((depth_map * 255).astype(np.uint8))
             depth_img = depth_img.resize((mesh_resolution, mesh_resolution), Image.Resampling.LANCZOS)
             depth_map = np.array(depth_img, dtype=np.float32) / 255.0
             h, w = depth_map.shape
 
-        # Resize color image to match
+        # Try to get object mask for better results
+        mask = _get_object_mask(image_path, h, w)
+
         color_img = img.resize((w, h), Image.Resampling.LANCZOS)
         colors = np.array(color_img, dtype=np.float32) / 255.0
 
-        # Create point cloud
-        points = []
-        point_colors = []
-        normals_list = []
+        # Create BOTH front and back point clouds for volume
+        front_points = []
+        back_points = []
+        all_colors = []
 
-        depth_scale = 0.4  # How much depth affects Z
+        depth_scale = 0.5   # Increased depth for more 3D effect
+        back_offset = 0.15  # Distance behind the object
 
         for y in range(h):
             for x in range(w):
-                # Map to [-0.5, 0.5] range
+                if not mask[y, x]:
+                    continue
                 px = (x / (w - 1)) - 0.5
-                py = 0.5 - (y / (h - 1))  # Flip Y for OpenGL convention
-                pz = depth_map[y, x] * depth_scale
+                py = 0.5 - (y / (h - 1))
+                pz_front = depth_map[y, x] * depth_scale
+                pz_back = -back_offset - depth_map[y, x] * 0.1  # Slight depth variation on back
 
-                points.append([px, py, pz])
-                point_colors.append(colors[y, x])
+                front_points.append([px, py, pz_front])
+                back_points.append([px, py, pz_back])
+                all_colors.append(colors[y, x])
 
-        points = np.array(points, dtype=np.float64)
-        point_colors = np.array(point_colors, dtype=np.float64)
+        if not front_points:
+            result["error"] = "No object pixels found for mesh generation"
+            return result
 
-        # ── Step 3: Open3D Point Cloud → Mesh ────────────────────────────────
-        print("[MiDaS] Constructing mesh via Open3D...")
+        # Combine front and back points
+        points = np.array(front_points + back_points, dtype=np.float64)
+        point_colors = np.array(all_colors + all_colors, dtype=np.float64)  # Same color for both sides
+
+        # ── Step 3: Open3D Mesh Construction ──
+        print("[MiDaS] Constructing volumetric mesh via Open3D...")
 
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(points)
         pcd.colors = o3d.utility.Vector3dVector(point_colors)
 
-        # Estimate normals
         pcd.estimate_normals(
-            search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.05, max_nn=30)
+            search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.04, max_nn=40)
         )
-        pcd.orient_normals_towards_camera_location(camera_location=[0, 0, 2])
+        pcd.orient_normals_towards_camera_location(camera_location=[0, 0, 3])
 
-        # Poisson surface reconstruction
+        # Poisson reconstruction at higher depth
         mesh_o3d, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
-            pcd, depth=8, width=0, scale=1.1, linear_fit=False
+            pcd, depth=9, width=0, scale=1.1, linear_fit=False
         )
 
-        # Remove low-density vertices (cleanup)
+        # Remove low-density vertices
         densities = np.asarray(densities)
-        density_threshold = np.quantile(densities, 0.05)
+        density_threshold = np.quantile(densities, 0.04)
         vertices_to_remove = densities < density_threshold
         mesh_o3d.remove_vertices_by_mask(vertices_to_remove)
 
-        # Simplify mesh
-        target_faces = 5000
+        # Higher target face count for detail
+        target_faces = 8000
         if len(mesh_o3d.triangles) > target_faces:
             mesh_o3d = mesh_o3d.simplify_quadric_decimation(target_faces)
 
         mesh_o3d.compute_vertex_normals()
 
-        # ── Step 4: Extract and Normalize ────────────────────────────────────
+        # ── Step 4: Post-process ──
         vertices = np.asarray(mesh_o3d.vertices, dtype=np.float32)
         faces = np.asarray(mesh_o3d.triangles, dtype=np.int32)
 
@@ -168,25 +173,18 @@ def generate_mesh_midas(image_path: str, output_dir: str, object_name: str = "mo
         if scale > 0:
             vertices /= scale
 
-        # Compute normals
         mesh_normals = np.asarray(mesh_o3d.vertex_normals, dtype=np.float32)
         if len(mesh_normals) != len(vertices):
-            mesh_normals = _compute_normals_simple(vertices, faces)
+            mesh_normals = _compute_normals(vertices, faces)
 
-        # Generate UVs (planar projection from front)
-        uvs = np.zeros((len(vertices), 2), dtype=np.float32)
-        for i, v in enumerate(vertices):
-            uvs[i] = [v[0] + 0.5, v[1] + 0.5]
-        uvs = np.clip(uvs, 0.0, 1.0)
+        # Cylindrical UV mapping (better for 3D objects than flat planar)
+        uvs = _generate_cylindrical_uvs(vertices)
 
-        # ── Step 5: Export OBJ ───────────────────────────────────────────────
+        # ── Step 5: Export ──
         obj_path = os.path.join(output_dir, f"{object_name}.obj")
         mtl_path = os.path.join(output_dir, f"{object_name}.mtl")
-
-        _export_obj(
-            vertices, faces, mesh_normals, uvs,
-            obj_path, mtl_path, object_name, texture_path
-        )
+        _export_obj(vertices, faces, mesh_normals, uvs,
+                    obj_path, mtl_path, object_name, texture_path)
 
         result["success"] = True
         result["obj_path"] = obj_path
@@ -195,10 +193,8 @@ def generate_mesh_midas(image_path: str, output_dir: str, object_name: str = "mo
         result["face_count"] = len(faces)
         result["generation_time"] = time.time() - start_time
 
-        print(
-            f"[MiDaS] Done! {result['vertex_count']} verts, "
-            f"{result['face_count']} faces, {result['generation_time']:.1f}s"
-        )
+        print(f"[MiDaS] Done! {result['vertex_count']} verts, "
+              f"{result['face_count']} faces, {result['generation_time']:.1f}s")
 
     except ImportError as e:
         result["error"] = f"Missing dependency: {e}. Install with: pip install torch open3d"
@@ -213,7 +209,46 @@ def generate_mesh_midas(image_path: str, output_dir: str, object_name: str = "mo
     return result
 
 
-def _compute_normals_simple(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
+def _bilateral_filter(depth: np.ndarray) -> np.ndarray:
+    """Edge-preserving bilateral filter on depth map."""
+    try:
+        import cv2
+        depth_u8 = (depth * 255).astype(np.uint8)
+        filtered = cv2.bilateralFilter(depth_u8, 7, 50, 50)
+        return filtered.astype(np.float32) / 255.0
+    except ImportError:
+        depth_img = Image.fromarray((depth * 255).astype(np.uint8))
+        depth_img = depth_img.filter(ImageFilter.GaussianBlur(radius=1.5))
+        return np.array(depth_img, dtype=np.float32) / 255.0
+
+
+def _get_object_mask(image_path: str, target_h: int, target_w: int) -> np.ndarray:
+    """Get an object mask via rembg, or return all-True if unavailable."""
+    try:
+        from rembg import remove
+        from PIL import Image as PILImage
+        img = PILImage.open(image_path).convert("RGBA")
+        masked = remove(img)
+        alpha = np.array(masked)[:, :, 3]
+        mask_img = PILImage.fromarray(alpha).resize((target_w, target_h), PILImage.Resampling.LANCZOS)
+        return np.array(mask_img, dtype=np.float32) / 255.0 > 0.3
+    except Exception:
+        return np.ones((target_h, target_w), dtype=bool)
+
+
+def _generate_cylindrical_uvs(vertices: np.ndarray) -> np.ndarray:
+    """Cylindrical UV projection — wraps texture around the object."""
+    uvs = np.zeros((len(vertices), 2), dtype=np.float32)
+    for i, v in enumerate(vertices):
+        # U from angle around Y axis
+        u = 0.5 + np.arctan2(v[0], v[2]) / (2 * np.pi)
+        # V from height
+        v_coord = v[1] + 0.5  # Map [-0.5, 0.5] → [0, 1]
+        uvs[i] = [u, np.clip(v_coord, 0.0, 1.0)]
+    return np.clip(uvs, 0.0, 1.0)
+
+
+def _compute_normals(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
     """Compute per-vertex normals by averaging face normals."""
     normals = np.zeros_like(vertices)
     for face in faces:

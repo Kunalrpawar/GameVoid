@@ -10,3 +10,7 @@ rembg
 timm
 einops
 huggingface-hub
+opencv-python
+requests
+mobile-sam
+segment-anything

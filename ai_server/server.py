@@ -17,7 +17,6 @@ import json
 import time
 import uuid
 import argparse
-from collections import deque
 from pathlib import Path
 
 from flask import Flask, request, jsonify
@@ -30,6 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from image_analyzer import ImageAnalyzer
 import mesh_generator
 import mesh_generator_midas
+import sam_segmenter
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
@@ -108,111 +108,159 @@ def _crop_from_normalized_selection(image_path: str, data: dict) -> str:
         return image_path
 
 
-def _largest_or_seed_component(mask: np.ndarray, seed_x: int, seed_y: int) -> np.ndarray:
-    """Return bool mask for component containing seed if possible; else largest component."""
-    h, w = mask.shape
-    visited = np.zeros((h, w), dtype=np.uint8)
-    components = []
+def _prepare_work_image(image_path: str, data: dict) -> str:
+    """Prepare the image used by generation.
 
-    def bfs(sx: int, sy: int):
-        q = deque()
-        q.append((sx, sy))
-        visited[sy, sx] = 1
-        pts = []
-        while q:
-            x, y = q.popleft()
-            pts.append((x, y))
-            for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
-                if nx < 0 or ny < 0 or nx >= w or ny >= h:
-                    continue
-                if visited[ny, nx] or not mask[ny, nx]:
-                    continue
-                visited[ny, nx] = 1
-                q.append((nx, ny))
-        return pts
+    Priority:
+      1) Provided masked image path (precomputed by /segment)
+      2) SAM point-based segmentation (positive + negative points)
+      3) Legacy single smart-point segmentation
+      4) Rectangle crop fallback
+      5) Original image
+    """
+    mask_path = data.get("mask_image_path", "")
+    if mask_path and os.path.exists(mask_path):
+        print(f"[Server] Using provided mask image: {mask_path}")
+        return mask_path
 
-    for y in range(h):
-        for x in range(w):
-            if mask[y, x] and not visited[y, x]:
-                pts = bfs(x, y)
-                components.append(pts)
+    positive_points = data.get("positive_points", [])
+    negative_points = data.get("negative_points", [])
 
-    if not components:
-        return np.zeros_like(mask, dtype=bool)
+    if not positive_points and data.get("use_smart_point", False):
+        positive_points = [[_clamp01(data.get("smart_point_x", 0.5)),
+                            _clamp01(data.get("smart_point_y", 0.5))]]
 
-    picked = None
-    if 0 <= seed_x < w and 0 <= seed_y < h and mask[seed_y, seed_x]:
-        for pts in components:
-            if (seed_x, seed_y) in pts:
-                picked = pts
-                break
-    if picked is None:
-        picked = max(components, key=len)
+    if positive_points:
+        try:
+            pos = [(float(p[0]), float(p[1])) for p in positive_points]
+            neg = [(float(p[0]), float(p[1])) for p in negative_points]
+            mask = sam_segmenter.segment_from_points(image_path, pos, neg)
+            if mask is not None and mask.any():
+                cropped, _ = sam_segmenter.create_masked_image(image_path, mask)
+                out_path = os.path.join(UPLOAD_DIR, f"smart_{uuid.uuid4().hex[:8]}.png")
+                Image.fromarray(cropped, mode="RGBA").save(out_path)
+                print(
+                    f"[Server] SAM pre-segmentation applied ({len(pos)}+/{len(neg)}-) -> {out_path}"
+                )
+                return out_path
+        except Exception as e:
+            print(f"[Server] SAM pre-segmentation failed ({e}); falling back")
 
-    out = np.zeros_like(mask, dtype=bool)
-    for x, y in picked:
-        out[y, x] = True
-    return out
+    return _crop_from_normalized_selection(image_path, data)
 
 
-def _smart_segment_from_click(image_path: str, data: dict) -> str:
-    """SAM-style click selection fallback: remove background then keep clicked component."""
-    if not data.get("use_smart_point", False):
-        return image_path
+# ── Segmentation Endpoints ───────────────────────────────────────────────────
+
+
+@app.route("/segment", methods=["POST"])
+def segment_object():
+    """
+    Segment an object in an image using SAM-style click points.
+
+    Expects JSON:
+        {
+            "image_path": "C:/path/to/image.png",
+            "positive_points": [[0.5, 0.3], [0.6, 0.4]],  // normalized (x, y)
+            "negative_points": [[0.1, 0.9]]                // optional
+        }
+
+    Returns JSON with path to the cropped masked image.
+    """
+    data = request.get_json(silent=True)
+    if not data or "image_path" not in data:
+        return jsonify({"success": False, "error": "No image_path provided"}), 400
+
+    image_path = data["image_path"]
+    if not os.path.exists(image_path):
+        return jsonify({"success": False, "error": f"Image not found: {image_path}"}), 400
+
+    positive_points = data.get("positive_points", [])
+    negative_points = data.get("negative_points", [])
+
+    if not positive_points:
+        return jsonify({"success": False, "error": "At least one positive point required"}), 400
 
     try:
-        click_x = _clamp01(data.get("smart_point_x", 0.5))
-        click_y = _clamp01(data.get("smart_point_y", 0.5))
+        # Convert to tuples
+        pos = [(float(p[0]), float(p[1])) for p in positive_points]
+        neg = [(float(p[0]), float(p[1])) for p in negative_points]
 
-        img = Image.open(image_path).convert("RGBA")
-        try:
-            from rembg import remove
-            img = remove(img)
-        except Exception:
-            pass
+        print(f"[Server] Segmenting with {len(pos)} positive, {len(neg)} negative points")
 
-        rgba = np.array(img)
-        alpha = rgba[:, :, 3] > 12
-        if not alpha.any():
-            return image_path
+        mask = sam_segmenter.segment_from_points(image_path, pos, neg)
+        if mask is None or not mask.any():
+            return jsonify({"success": False, "error": "Segmentation produced empty mask"}), 500
 
-        h, w = alpha.shape
-        sx = int(click_x * (w - 1))
-        sy = int(click_y * (h - 1))
-        comp = _largest_or_seed_component(alpha, sx, sy)
-        if not comp.any():
-            return image_path
+        # Create cropped masked image
+        cropped, bbox = sam_segmenter.create_masked_image(image_path, mask)
+        out_path = os.path.join(UPLOAD_DIR, f"seg_{uuid.uuid4().hex[:8]}.png")
+        from PIL import Image as PILImage
+        PILImage.fromarray(cropped, mode="RGBA").save(out_path)
 
-        ys, xs = np.where(comp)
-        x0, x1 = int(xs.min()), int(xs.max())
-        y0, y1 = int(ys.min()), int(ys.max())
+        pixel_count = int(mask.sum())
+        total_pixels = int(mask.size)
 
-        pad = max(8, int(max(w, h) * 0.03))
-        x0 = max(0, x0 - pad)
-        y0 = max(0, y0 - pad)
-        x1 = min(w - 1, x1 + pad)
-        y1 = min(h - 1, y1 + pad)
+        return jsonify({
+            "success": True,
+            "masked_image_path": out_path,
+            "mask_pixel_count": pixel_count,
+            "total_pixels": total_pixels,
+            "coverage_percent": round(pixel_count / max(1, total_pixels) * 100, 1),
+            "bbox": list(bbox),
+        })
 
-        kept = rgba.copy()
-        kept[~comp] = np.array([127, 127, 127, 0], dtype=np.uint8)
-        crop = kept[y0:y1 + 1, x0:x1 + 1]
-
-        out_path = os.path.join(UPLOAD_DIR, f"smart_{uuid.uuid4().hex[:8]}.png")
-        Image.fromarray(crop, mode="RGBA").save(out_path)
-        print(f"[Server] Smart-click segmented object at ({sx},{sy}) -> {out_path}")
-        return out_path
     except Exception as e:
-        print(f"[Server] Smart selection failed ({e}); using fallback")
-        return image_path
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
-def _prepare_work_image(image_path: str, data: dict) -> str:
-    """Apply smart-click segmentation first, then fallback to rectangle crop."""
-    if data.get("use_smart_point", False):
-        smart = _smart_segment_from_click(image_path, data)
-        if smart != image_path:
-            return smart
-    return _crop_from_normalized_selection(image_path, data)
+@app.route("/segment_preview", methods=["POST"])
+def segment_preview():
+    """
+    Generate a preview visualization of segmentation mask overlaid on image.
+
+    Expects JSON same as /segment.
+    Returns JSON with path to the preview PNG.
+    """
+    data = request.get_json(silent=True)
+    if not data or "image_path" not in data:
+        return jsonify({"success": False, "error": "No image_path provided"}), 400
+
+    image_path = data["image_path"]
+    if not os.path.exists(image_path):
+        return jsonify({"success": False, "error": f"Image not found: {image_path}"}), 400
+
+    positive_points = data.get("positive_points", [])
+    negative_points = data.get("negative_points", [])
+
+    if not positive_points:
+        return jsonify({"success": False, "error": "At least one positive point required"}), 400
+
+    try:
+        pos = [(float(p[0]), float(p[1])) for p in positive_points]
+        neg = [(float(p[0]), float(p[1])) for p in negative_points]
+
+        mask = sam_segmenter.segment_from_points(image_path, pos, neg)
+        if mask is None or not mask.any():
+            return jsonify({"success": False, "error": "Segmentation produced empty mask"}), 500
+
+        # Create overlay visualization
+        overlay = sam_segmenter.create_mask_overlay(image_path, mask, pos, neg)
+        out_path = os.path.join(UPLOAD_DIR, f"preview_{uuid.uuid4().hex[:8]}.png")
+        from PIL import Image as PILImage
+        PILImage.fromarray(overlay, mode="RGBA").save(out_path)
+
+        return jsonify({
+            "success": True,
+            "preview_path": out_path,
+            "mask_pixel_count": int(mask.sum()),
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -439,7 +487,18 @@ def generate_from_path():
         {
             "image_path": "C:/path/to/image.png",
             "method": "auto",
-            "name": "chair"
+            "name": "chair",
+            "mask_image_path": "C:/path/to/masked.png",        // optional
+            "positive_points": [[0.5, 0.3], [0.6, 0.4]],         // optional
+            "negative_points": [[0.1, 0.9]],                     // optional
+            "use_selection": true,                               // optional legacy crop
+            "selection_min_x": 0.1,
+            "selection_min_y": 0.2,
+            "selection_max_x": 0.8,
+            "selection_max_y": 0.9,
+            "use_smart_point": true,                             // optional legacy point
+            "smart_point_x": 0.45,
+            "smart_point_y": 0.56
         }
     """
     data = request.get_json(silent=True)
@@ -486,7 +545,14 @@ def generate_from_path():
                     work_image_path, model_output_dir, unique_name
                 )
     finally:
-        if work_image_path != image_path and os.path.exists(work_image_path):
+        # Only cleanup temporary files created in ai_server/uploads.
+        normalized_upload = os.path.normpath(UPLOAD_DIR)
+        normalized_work = os.path.normpath(work_image_path)
+        if (
+            work_image_path != image_path
+            and os.path.exists(work_image_path)
+            and normalized_work.startswith(normalized_upload)
+        ):
             try:
                 os.remove(work_image_path)
             except OSError:

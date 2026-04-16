@@ -15,6 +15,7 @@
 #include "core/Types.h"
 #include "core/Math.h"
 #include <string>
+#include <vector>
 
 namespace gv {
 
@@ -40,6 +41,11 @@ struct ImageTo3DRequest {
     bool        useSmartPointSelection = false;      // If true, server segments object from click point
     f32         smartPointX = 0.5f;                  // Normalized [0..1]
     f32         smartPointY = 0.5f;                  // Normalized [0..1]
+
+    // Multi-point SAM segmentation (Meta SAM-style)
+    std::vector<Vec2> samPositivePoints;              // Points ON the object (include)
+    std::vector<Vec2> samNegativePoints;              // Points to EXCLUDE
+    std::string       maskedImagePath;                // Pre-segmented image path (from /segment)
 };
 
 // ============================================================================
@@ -67,6 +73,19 @@ struct ImageAnalysisResult {
     std::string objectName;
     std::string category;
     std::string description;
+    std::string errorMessage;
+};
+
+// ============================================================================
+// SAM Segmentation Result
+// ============================================================================
+struct SegmentResult {
+    bool        success = false;
+    std::string maskedImagePath;                     // Cropped RGBA image with background removed
+    std::string previewImagePath;                    // Overlay visualization path
+    u32         maskPixelCount = 0;
+    u32         totalPixels    = 0;
+    f32         coveragePercent = 0.0f;
     std::string errorMessage;
 };
 
@@ -116,6 +135,23 @@ public:
                                   Scene& scene,
                                   AssetManager& assets,
                                   const std::string& method = "auto");
+
+    // ── SAM Segmentation ──────────────────────────────────────────────────
+
+    /// Segment an object using click points (calls /segment on Python server).
+    /// Returns a SegmentResult with the path to the masked image.
+    SegmentResult SegmentImageAtPoints(const std::string& imagePath,
+                                       const std::vector<Vec2>& positivePoints,
+                                       const std::vector<Vec2>& negativePoints,
+                                       const std::string& host = "127.0.0.1",
+                                       u32 port = 5000) const;
+
+    /// Get a preview visualization of the segmentation mask.
+    SegmentResult SegmentPreview(const std::string& imagePath,
+                                 const std::vector<Vec2>& positivePoints,
+                                 const std::vector<Vec2>& negativePoints,
+                                 const std::string& host = "127.0.0.1",
+                                 u32 port = 5000) const;
 
     // ── Configuration ──────────────────────────────────────────────────────
 
