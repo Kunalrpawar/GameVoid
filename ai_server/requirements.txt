@@ -14,3 +14,4 @@ opencv-python
 requests
 mobile-sam
 segment-anything
+pygltflib

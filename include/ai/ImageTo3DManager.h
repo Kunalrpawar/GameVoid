@@ -90,6 +90,16 @@ struct SegmentResult {
 };
 
 // ============================================================================
+// Export Result
+// ============================================================================
+struct ModelExportResult {
+    bool        success = false;
+    std::string format;
+    std::string exportPath;
+    std::string errorMessage;
+};
+
+// ============================================================================
 // Image To 3D Manager
 // ============================================================================
 /// Orchestrates the Image → 3D Model → Scene pipeline.
@@ -152,6 +162,14 @@ public:
                                  const std::vector<Vec2>& negativePoints,
                                  const std::string& host = "127.0.0.1",
                                  u32 port = 5000) const;
+
+    /// Export generated model assets to OBJ/GLTF/GLB using Python server.
+    ModelExportResult ExportModel(const std::string& objPath,
+                                  const std::string& texturePath,
+                                  const std::string& format,
+                                  const std::string& outputDir,
+                                  const std::string& host = "127.0.0.1",
+                                  u32 port = 5000) const;
 
     // ── Configuration ──────────────────────────────────────────────────────
 

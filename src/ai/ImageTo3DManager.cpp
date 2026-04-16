@@ -570,6 +570,50 @@ SegmentResult ImageTo3DManager::SegmentPreview(const std::string& imagePath,
     return result;
 }
 
+ModelExportResult ImageTo3DManager::ExportModel(const std::string& objPath,
+                                                const std::string& texturePath,
+                                                const std::string& format,
+                                                const std::string& outputDir,
+                                                const std::string& host,
+                                                u32 port) const {
+    ModelExportResult result;
+
+    if (objPath.empty()) {
+        result.errorMessage = "objPath is required for export";
+        return result;
+    }
+
+    std::string obj = objPath;
+    std::string tex = texturePath;
+    std::string out = outputDir;
+    std::replace(obj.begin(), obj.end(), '\\', '/');
+    std::replace(tex.begin(), tex.end(), '\\', '/');
+    std::replace(out.begin(), out.end(), '\\', '/');
+
+    std::string json = R"({"obj_path":")" + JsonEscapeStr(obj) +
+                       R"(","texture_path":")" + JsonEscapeStr(tex) +
+                       R"(","format":")" + JsonEscapeStr(format) + R"(")";
+    if (!out.empty()) {
+        json += R"(,"output_dir":")" + JsonEscapeStr(out) + R"(")";
+    }
+    json += "}";
+
+    std::string resp = HttpPostJson(host, port, "/export_model", json);
+    if (resp.empty()) {
+        result.errorMessage = "Server not responding for model export";
+        return result;
+    }
+
+    result.success = ExtractJsonBool(resp, "success");
+    result.format = ExtractJsonString(resp, "format");
+    result.exportPath = ExtractJsonString(resp, "export_path");
+    if (!result.success) {
+        result.errorMessage = ExtractJsonString(resp, "error");
+    }
+
+    return result;
+}
+
 // ── Scene Integration ───────────────────────────────────────────────────────
 
 GameObject* ImageTo3DManager::LoadIntoScene(const ImageTo3DResult& result,

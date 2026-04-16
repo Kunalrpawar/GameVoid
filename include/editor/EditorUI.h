@@ -178,8 +178,12 @@ private:
     void UpdateImageTo3DGenerationState();
     void RefreshImageTo3DSourceTexture();
     bool LoadImageTo3DPreviewMesh(const std::string& objPath);
+    bool EnsureImageTo3DPreviewRenderResources();
+    void DestroyImageTo3DPreviewRenderResources();
+    bool EnsureImageTo3DPreviewFBO(u32 width, u32 height);
+    bool RenderImageTo3DPreviewFBO(u32 width, u32 height);
     void DrawImageTo3DPreviewCanvas(const ImVec2& size);
-    void ExportImageTo3DOutputs();
+    void ExportImageTo3DOutputs(const std::string& format = "obj");
 
     // ── 2D clipboard helpers ───────────────────────────────────────────────
     void CopySelected2D();
@@ -491,7 +495,7 @@ private:
     std::string m_Img3DLastObjPath;         // last generated OBJ path
     std::string m_Img3DLastTexPath;         // last generated texture path
     i32  m_Img3DMethod          = 0;        // 0=Auto, 1=TripoSR, 2=MiDaS
-    i32  m_Img3DExportFormat    = 0;        // 0=OBJ, 1=GLTF (OBJ fallback for now)
+    i32  m_Img3DExportFormat    = 0;        // 0=OBJ, 1=GLTF, 2=GLB
     ImageTo3DRequest m_Img3DReq;            // stored request
     ImageTo3DResult m_Img3DLastResult;      // last generation result
     Shared<Texture> m_Img3DSourceTexture;   // preview texture for selected source image
@@ -516,11 +520,25 @@ private:
 
     std::vector<Vec3> m_Img3DPreviewVerts;  // normalized preview mesh vertices
     std::vector<Vec3> m_Img3DPreviewNorms;  // per-vertex normals for flat shading
+    std::vector<Vec2> m_Img3DPreviewUVs;    // preview UVs for textured render
     std::vector<u32>  m_Img3DPreviewIndices;
+    std::string m_Img3DLastExportPath;      // latest exported file for drag-drop
     bool m_Img3DPreviewReady = false;
     f32  m_Img3DPreviewYaw = 20.0f;
     f32  m_Img3DPreviewPitch = -12.0f;
     f32  m_Img3DPreviewZoom = 2.4f;
+
+    // OpenGL resources for Image->3D studio preview rendering
+    u32 m_Img3DPreviewFBO = 0;
+    u32 m_Img3DPreviewColor = 0;
+    u32 m_Img3DPreviewDepth = 0;
+    u32 m_Img3DPreviewW = 1;
+    u32 m_Img3DPreviewH = 1;
+    u32 m_Img3DPreviewShader = 0;
+    u32 m_Img3DPreviewVAO = 0;
+    u32 m_Img3DPreviewVBO = 0;
+    u32 m_Img3DPreviewEBO = 0;
+    Shared<Texture> m_Img3DPreviewTexture;  // texture used in 3D preview render
 
     // ── Subsystem instances ────────────────────────────────────────────────
     MaterialLibrary*  m_MaterialLib = nullptr;

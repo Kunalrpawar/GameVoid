@@ -57,6 +57,7 @@ using namespace gv;
 #include <sstream>
 #include <cstring>
 #include <set>
+#include <unordered_map>
 #ifdef _WIN32
 #include <windows.h>
 #include <commdlg.h>    // GetOpenFileName / GetSaveFileName
@@ -252,6 +253,7 @@ void EditorUI::Shutdown() {
     if (!m_Initialised) return;
     Close3DPlayWindow();
     m_2DViewport.Shutdown();
+    DestroyImageTo3DPreviewRenderResources();
     DestroyViewportFBO();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
@@ -7182,7 +7184,10 @@ void EditorUI::StartImageTo3DGeneration() {
     m_Img3DPreviewReady = false;
     m_Img3DPreviewVerts.clear();
     m_Img3DPreviewNorms.clear();
+    m_Img3DPreviewUVs.clear();
     m_Img3DPreviewIndices.clear();
+    m_Img3DLastExportPath.clear();
+    m_Img3DPreviewTexture.reset();
     m_Img3DLastResult = ImageTo3DResult{};
     m_Img3DStatusMsg = "Generating...";
     m_Img3DProgress = 0.0f;
@@ -7229,6 +7234,10 @@ void EditorUI::UpdateImageTo3DGenerationState() {
         if (result.success) {
             m_Img3DLastObjPath = result.objFilePath;
             m_Img3DLastTexPath = result.textureFilePath;
+            m_Img3DPreviewTexture.reset();
+            if (m_Assets && !result.textureFilePath.empty()) {
+                m_Img3DPreviewTexture = m_Assets->LoadTexture(result.textureFilePath);
+            }
             m_Img3DStatusMsg = "Generated! Preview is ready. Import when you decide.";
             PushLog("[Image3D] Model generated: " + result.objFilePath);
 
@@ -7280,55 +7289,108 @@ bool EditorUI::LoadImageTo3DPreviewMesh(const std::string& objPath) {
         return false;
     }
 
-    std::vector<Vec3> srcVerts;
-    std::vector<u32> indices;
+    std::vector<Vec3> rawPos;
+    std::vector<Vec2> rawUV;
+    std::vector<Vec3> rawNorm;
+    std::vector<u32> outIndices;
+    std::vector<Vec3> outPos;
+    std::vector<Vec2> outUV;
+    std::vector<Vec3> outNorm;
+    std::unordered_map<std::string, u32> cornerMap;
+
+    auto parseObjIndex = [](int idx, int size) -> int {
+        if (idx > 0) return idx - 1;
+        if (idx < 0) return size + idx;
+        return -1;
+    };
+
+    auto parseCorner = [](const std::string& token, int& pi, int& ti, int& ni) {
+        pi = ti = ni = 0;
+        size_t s1 = token.find('/');
+        if (s1 == std::string::npos) {
+            pi = std::atoi(token.c_str());
+            return;
+        }
+        size_t s2 = token.find('/', s1 + 1);
+        std::string a = token.substr(0, s1);
+        std::string b = (s2 == std::string::npos) ? token.substr(s1 + 1) : token.substr(s1 + 1, s2 - s1 - 1);
+        std::string c = (s2 == std::string::npos) ? "" : token.substr(s2 + 1);
+        if (!a.empty()) pi = std::atoi(a.c_str());
+        if (!b.empty()) ti = std::atoi(b.c_str());
+        if (!c.empty()) ni = std::atoi(c.c_str());
+    };
+
     std::string line;
     while (std::getline(in, line)) {
         if (line.size() < 2) continue;
 
-        if (line[0] == 'v' && line[1] == ' ') {
+        if (line.rfind("v ", 0) == 0) {
             std::istringstream ss(line.substr(2));
             Vec3 v;
             ss >> v.x >> v.y >> v.z;
-            srcVerts.push_back(v);
+            rawPos.push_back(v);
             continue;
         }
-
-        if (line[0] == 'f' && line[1] == ' ') {
+        if (line.rfind("vt ", 0) == 0) {
+            std::istringstream ss(line.substr(3));
+            Vec2 uv(0.0f, 0.0f);
+            ss >> uv.x >> uv.y;
+            outUV.reserve(outUV.size() + 1);
+            rawUV.push_back(Vec2(uv.x, 1.0f - uv.y));
+            continue;
+        }
+        if (line.rfind("vn ", 0) == 0) {
+            std::istringstream ss(line.substr(3));
+            Vec3 n;
+            ss >> n.x >> n.y >> n.z;
+            rawNorm.push_back(n);
+            continue;
+        }
+        if (line.rfind("f ", 0) == 0) {
             std::istringstream ss(line.substr(2));
-            std::vector<i32> face;
+            std::vector<std::string> corners;
             std::string tok;
-            while (ss >> tok) {
-                size_t slash = tok.find('/');
-                std::string idxStr = (slash == std::string::npos) ? tok : tok.substr(0, slash);
-                if (idxStr.empty()) continue;
-                i32 idx = std::atoi(idxStr.c_str());
-                if (idx > 0) face.push_back(idx - 1);
-                else if (idx < 0) face.push_back(static_cast<i32>(srcVerts.size()) + idx);
-            }
-            if (face.size() >= 3) {
-                for (size_t i = 1; i + 1 < face.size(); ++i) {
-                    i32 a = face[0], b = face[i], c = face[i + 1];
-                    if (a >= 0 && b >= 0 && c >= 0 &&
-                        a < static_cast<i32>(srcVerts.size()) &&
-                        b < static_cast<i32>(srcVerts.size()) &&
-                        c < static_cast<i32>(srcVerts.size())) {
-                        indices.push_back(static_cast<u32>(a));
-                        indices.push_back(static_cast<u32>(b));
-                        indices.push_back(static_cast<u32>(c));
+            while (ss >> tok) corners.push_back(tok);
+            if (corners.size() < 3) continue;
+
+            for (size_t i = 1; i + 1 < corners.size(); ++i) {
+                const std::string tri[3] = { corners[0], corners[i], corners[i + 1] };
+                for (const std::string& c : tri) {
+                    auto it = cornerMap.find(c);
+                    if (it != cornerMap.end()) {
+                        outIndices.push_back(it->second);
+                        continue;
                     }
+
+                    int p = 0, t = 0, n = 0;
+                    parseCorner(c, p, t, n);
+                    int pi = parseObjIndex(p, static_cast<int>(rawPos.size()));
+                    int ti = parseObjIndex(t, static_cast<int>(rawUV.size()));
+                    int ni = parseObjIndex(n, static_cast<int>(rawNorm.size()));
+                    if (pi < 0 || pi >= static_cast<int>(rawPos.size())) {
+                        continue;
+                    }
+
+                    outPos.push_back(rawPos[pi]);
+                    outUV.push_back((ti >= 0 && ti < static_cast<int>(rawUV.size())) ? rawUV[ti] : Vec2(0.0f, 0.0f));
+                    outNorm.push_back((ni >= 0 && ni < static_cast<int>(rawNorm.size())) ? rawNorm[ni] : Vec3(0.0f, 0.0f, 0.0f));
+
+                    u32 idx = static_cast<u32>(outPos.size() - 1);
+                    cornerMap[c] = idx;
+                    outIndices.push_back(idx);
                 }
             }
         }
     }
 
-    if (srcVerts.empty() || indices.empty()) {
+    if (outPos.empty() || outIndices.empty()) {
         m_Img3DPreviewReady = false;
         return false;
     }
 
-    Vec3 bmin = srcVerts[0], bmax = srcVerts[0];
-    for (const Vec3& v : srcVerts) {
+    // Normalize mesh to predictable studio preview scale.
+    Vec3 bmin = outPos[0], bmax = outPos[0];
+    for (const Vec3& v : outPos) {
         bmin.x = std::min(bmin.x, v.x); bmin.y = std::min(bmin.y, v.y); bmin.z = std::min(bmin.z, v.z);
         bmax.x = std::max(bmax.x, v.x); bmax.y = std::max(bmax.y, v.y); bmax.z = std::max(bmax.z, v.z);
     }
@@ -7336,41 +7398,274 @@ bool EditorUI::LoadImageTo3DPreviewMesh(const std::string& objPath) {
     Vec3 ext = bmax - bmin;
     f32 maxExt = std::max(ext.x, std::max(ext.y, ext.z));
     if (maxExt < 1e-4f) maxExt = 1.0f;
-
-    m_Img3DPreviewVerts = srcVerts;
-    for (Vec3& v : m_Img3DPreviewVerts) {
+    for (Vec3& v : outPos) {
         v = (v - center) * (1.8f / maxExt);
     }
-    m_Img3DPreviewIndices = std::move(indices);
 
-    // Compute per-vertex normals for flat shading
-    m_Img3DPreviewNorms.resize(m_Img3DPreviewVerts.size(), Vec3(0, 0, 0));
-    for (size_t i = 0; i + 2 < m_Img3DPreviewIndices.size(); i += 3) {
-        u32 ia = m_Img3DPreviewIndices[i];
-        u32 ib = m_Img3DPreviewIndices[i + 1];
-        u32 ic = m_Img3DPreviewIndices[i + 2];
-        if (ia >= m_Img3DPreviewVerts.size() || ib >= m_Img3DPreviewVerts.size() || ic >= m_Img3DPreviewVerts.size()) continue;
-        Vec3 e1 = m_Img3DPreviewVerts[ib] - m_Img3DPreviewVerts[ia];
-        Vec3 e2 = m_Img3DPreviewVerts[ic] - m_Img3DPreviewVerts[ia];
-        Vec3 fn(e1.y * e2.z - e1.z * e2.y,
-                e1.z * e2.x - e1.x * e2.z,
-                e1.x * e2.y - e1.y * e2.x);
-        f32 len = std::sqrt(fn.x * fn.x + fn.y * fn.y + fn.z * fn.z);
-        if (len > 1e-8f) { fn.x /= len; fn.y /= len; fn.z /= len; }
-        m_Img3DPreviewNorms[ia] = m_Img3DPreviewNorms[ia] + fn;
-        m_Img3DPreviewNorms[ib] = m_Img3DPreviewNorms[ib] + fn;
-        m_Img3DPreviewNorms[ic] = m_Img3DPreviewNorms[ic] + fn;
+    // If normals are missing, compute them from faces.
+    bool hasAnyNormal = false;
+    for (const Vec3& n : outNorm) {
+        if (std::fabs(n.x) > 1e-6f || std::fabs(n.y) > 1e-6f || std::fabs(n.z) > 1e-6f) {
+            hasAnyNormal = true;
+            break;
+        }
     }
-    for (Vec3& n : m_Img3DPreviewNorms) {
+    if (!hasAnyNormal) {
+        std::fill(outNorm.begin(), outNorm.end(), Vec3(0, 0, 0));
+        for (size_t i = 0; i + 2 < outIndices.size(); i += 3) {
+            u32 ia = outIndices[i];
+            u32 ib = outIndices[i + 1];
+            u32 ic = outIndices[i + 2];
+            Vec3 e1 = outPos[ib] - outPos[ia];
+            Vec3 e2 = outPos[ic] - outPos[ia];
+            Vec3 fn(e1.y * e2.z - e1.z * e2.y,
+                    e1.z * e2.x - e1.x * e2.z,
+                    e1.x * e2.y - e1.y * e2.x);
+            outNorm[ia] = outNorm[ia] + fn;
+            outNorm[ib] = outNorm[ib] + fn;
+            outNorm[ic] = outNorm[ic] + fn;
+        }
+    }
+    for (Vec3& n : outNorm) {
         f32 len = std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
         if (len > 1e-8f) { n.x /= len; n.y /= len; n.z /= len; }
         else { n = Vec3(0, 0, 1); }
     }
 
+    m_Img3DPreviewVerts = outPos;
+    m_Img3DPreviewNorms = outNorm;
+    m_Img3DPreviewUVs = outUV;
+    m_Img3DPreviewIndices = outIndices;
+
+    if (!EnsureImageTo3DPreviewRenderResources()) {
+        m_Img3DPreviewReady = false;
+        return false;
+    }
+
+    struct GPUV {
+        f32 px, py, pz;
+        f32 nx, ny, nz;
+        f32 u, v;
+    };
+
+    std::vector<GPUV> gpuVerts;
+    gpuVerts.reserve(m_Img3DPreviewVerts.size());
+    for (size_t i = 0; i < m_Img3DPreviewVerts.size(); ++i) {
+        const Vec3& p = m_Img3DPreviewVerts[i];
+        const Vec3& n = m_Img3DPreviewNorms[i];
+        Vec2 uv = (i < m_Img3DPreviewUVs.size()) ? m_Img3DPreviewUVs[i] : Vec2(0.0f, 0.0f);
+        gpuVerts.push_back({ p.x, p.y, p.z, n.x, n.y, n.z, uv.x, uv.y });
+    }
+
+    glBindVertexArray(m_Img3DPreviewVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_Img3DPreviewVBO);
+    glBufferData(GL_ARRAY_BUFFER,
+                 static_cast<GLsizeiptr>(gpuVerts.size() * sizeof(GPUV)),
+                 gpuVerts.data(), GL_STATIC_DRAW);
+
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_Img3DPreviewEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                 static_cast<GLsizeiptr>(m_Img3DPreviewIndices.size() * sizeof(u32)),
+                 m_Img3DPreviewIndices.data(), GL_STATIC_DRAW);
+
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(GPUV), reinterpret_cast<void*>(0));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(GPUV), reinterpret_cast<void*>(3 * sizeof(f32)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(GPUV), reinterpret_cast<void*>(6 * sizeof(f32)));
+    glBindVertexArray(0);
+
     m_Img3DPreviewReady = true;
     m_Img3DPreviewYaw = 20.0f;
     m_Img3DPreviewPitch = -12.0f;
     m_Img3DPreviewZoom = 2.4f;
+    return true;
+}
+
+bool EditorUI::EnsureImageTo3DPreviewRenderResources() {
+    if (m_Img3DPreviewShader == 0) {
+        const char* vsrc =
+            "#version 330 core\n"
+            "layout(location=0) in vec3 aPos;\n"
+            "layout(location=1) in vec3 aNormal;\n"
+            "layout(location=2) in vec2 aUV;\n"
+            "uniform mat4 u_View;\n"
+            "uniform mat4 u_Proj;\n"
+            "out vec3 vN;\n"
+            "out vec2 vUV;\n"
+            "void main(){\n"
+            "  vN = aNormal;\n"
+            "  vUV = aUV;\n"
+            "  gl_Position = u_Proj * u_View * vec4(aPos, 1.0);\n"
+            "}\n";
+        const char* fsrc =
+            "#version 330 core\n"
+            "in vec3 vN;\n"
+            "in vec2 vUV;\n"
+            "uniform vec3 u_LightDir;\n"
+            "uniform bool u_HasTex;\n"
+            "uniform sampler2D u_Tex;\n"
+            "out vec4 FragColor;\n"
+            "void main(){\n"
+            "  vec3 N = normalize(vN);\n"
+            "  float diff = max(dot(N, normalize(u_LightDir)), 0.0);\n"
+            "  vec3 base = u_HasTex ? texture(u_Tex, vUV).rgb : vec3(0.55, 0.75, 0.95);\n"
+            "  vec3 c = base * (0.25 + 0.75 * diff);\n"
+            "  FragColor = vec4(c, 1.0);\n"
+            "}\n";
+
+        auto compile = [](GLenum type, const char* src) -> u32 {
+            u32 shader = glCreateShader(type);
+            glShaderSource(shader, 1, &src, nullptr);
+            glCompileShader(shader);
+            GLint ok = 0;
+            glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+            if (!ok) {
+                char log[1024] = {};
+                glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
+                GV_LOG_ERROR(std::string("Image3D preview shader compile failed: ") + log);
+                glDeleteShader(shader);
+                return 0;
+            }
+            return shader;
+        };
+
+        u32 vs = compile(GL_VERTEX_SHADER, vsrc);
+        u32 fs = compile(GL_FRAGMENT_SHADER, fsrc);
+        if (!vs || !fs) {
+            if (vs) glDeleteShader(vs);
+            if (fs) glDeleteShader(fs);
+            return false;
+        }
+
+        m_Img3DPreviewShader = glCreateProgram();
+        glAttachShader(m_Img3DPreviewShader, vs);
+        glAttachShader(m_Img3DPreviewShader, fs);
+        glLinkProgram(m_Img3DPreviewShader);
+        glDeleteShader(vs);
+        glDeleteShader(fs);
+
+        GLint linked = 0;
+        glGetProgramiv(m_Img3DPreviewShader, GL_LINK_STATUS, &linked);
+        if (!linked) {
+            char log[1024] = {};
+            glGetProgramInfoLog(m_Img3DPreviewShader, sizeof(log), nullptr, log);
+            GV_LOG_ERROR(std::string("Image3D preview shader link failed: ") + log);
+            glDeleteProgram(m_Img3DPreviewShader);
+            m_Img3DPreviewShader = 0;
+            return false;
+        }
+    }
+
+    if (m_Img3DPreviewVAO == 0) glGenVertexArrays(1, &m_Img3DPreviewVAO);
+    if (m_Img3DPreviewVBO == 0) glGenBuffers(1, &m_Img3DPreviewVBO);
+    if (m_Img3DPreviewEBO == 0) glGenBuffers(1, &m_Img3DPreviewEBO);
+    return true;
+}
+
+void EditorUI::DestroyImageTo3DPreviewRenderResources() {
+    if (m_Img3DPreviewFBO) { glDeleteFramebuffers(1, &m_Img3DPreviewFBO); m_Img3DPreviewFBO = 0; }
+    if (m_Img3DPreviewColor) { glDeleteTextures(1, &m_Img3DPreviewColor); m_Img3DPreviewColor = 0; }
+    if (m_Img3DPreviewDepth) { glDeleteRenderbuffers(1, &m_Img3DPreviewDepth); m_Img3DPreviewDepth = 0; }
+    if (m_Img3DPreviewVAO) { glDeleteVertexArrays(1, &m_Img3DPreviewVAO); m_Img3DPreviewVAO = 0; }
+    if (m_Img3DPreviewVBO) { glDeleteBuffers(1, &m_Img3DPreviewVBO); m_Img3DPreviewVBO = 0; }
+    if (m_Img3DPreviewEBO) { glDeleteBuffers(1, &m_Img3DPreviewEBO); m_Img3DPreviewEBO = 0; }
+    if (m_Img3DPreviewShader) { glDeleteProgram(m_Img3DPreviewShader); m_Img3DPreviewShader = 0; }
+}
+
+bool EditorUI::EnsureImageTo3DPreviewFBO(u32 width, u32 height) {
+    if (width < 1) width = 1;
+    if (height < 1) height = 1;
+
+    if (m_Img3DPreviewFBO && m_Img3DPreviewW == width && m_Img3DPreviewH == height) {
+        return true;
+    }
+
+    if (m_Img3DPreviewFBO) { glDeleteFramebuffers(1, &m_Img3DPreviewFBO); m_Img3DPreviewFBO = 0; }
+    if (m_Img3DPreviewColor) { glDeleteTextures(1, &m_Img3DPreviewColor); m_Img3DPreviewColor = 0; }
+    if (m_Img3DPreviewDepth) { glDeleteRenderbuffers(1, &m_Img3DPreviewDepth); m_Img3DPreviewDepth = 0; }
+
+    m_Img3DPreviewW = width;
+    m_Img3DPreviewH = height;
+
+    glGenTextures(1, &m_Img3DPreviewColor);
+    glBindTexture(GL_TEXTURE_2D, m_Img3DPreviewColor);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, static_cast<GLsizei>(width), static_cast<GLsizei>(height), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    glGenRenderbuffers(1, &m_Img3DPreviewDepth);
+    glBindRenderbuffer(GL_RENDERBUFFER, m_Img3DPreviewDepth);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
+    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+
+    glGenFramebuffers(1, &m_Img3DPreviewFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_Img3DPreviewFBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_Img3DPreviewColor, 0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, m_Img3DPreviewDepth);
+
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        GV_LOG_ERROR("Image3D preview FBO incomplete! Status: " + std::to_string(status));
+        return false;
+    }
+
+    return true;
+}
+
+bool EditorUI::RenderImageTo3DPreviewFBO(u32 width, u32 height) {
+    if (!m_Img3DPreviewReady || m_Img3DPreviewIndices.empty()) return false;
+    if (!EnsureImageTo3DPreviewRenderResources()) return false;
+    if (!EnsureImageTo3DPreviewFBO(width, height)) return false;
+
+    GLint prevFBO = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, m_Img3DPreviewFBO);
+    glViewport(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
+    glEnable(GL_DEPTH_TEST);
+    glClearColor(0.08f, 0.10f, 0.14f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    const f32 DEG2RAD = 3.14159265f / 180.0f;
+    f32 yaw = m_Img3DPreviewYaw * DEG2RAD;
+    f32 pitch = m_Img3DPreviewPitch * DEG2RAD;
+    f32 cp = std::cos(pitch);
+    Vec3 eye(std::sin(yaw) * cp * m_Img3DPreviewZoom,
+             -std::sin(pitch) * m_Img3DPreviewZoom,
+             std::cos(yaw) * cp * m_Img3DPreviewZoom);
+
+    Mat4 view = Mat4::LookAt(eye, Vec3(0, 0, 0), Vec3(0, 1, 0));
+    Mat4 proj = Mat4::Perspective(45.0f * DEG2RAD,
+                                  static_cast<f32>(width) / static_cast<f32>(std::max<u32>(1, height)),
+                                  0.05f, 20.0f);
+
+    glUseProgram(m_Img3DPreviewShader);
+    glUniformMatrix4fv(glGetUniformLocation(m_Img3DPreviewShader, "u_View"), 1, GL_FALSE, view.m);
+    glUniformMatrix4fv(glGetUniformLocation(m_Img3DPreviewShader, "u_Proj"), 1, GL_FALSE, proj.m);
+    glUniform3f(glGetUniformLocation(m_Img3DPreviewShader, "u_LightDir"), 0.45f, 0.75f, 0.50f);
+
+    bool hasTex = (m_Img3DPreviewTexture && m_Img3DPreviewTexture->GetID() != 0);
+    glUniform1i(glGetUniformLocation(m_Img3DPreviewShader, "u_HasTex"), hasTex ? 1 : 0);
+    glUniform1i(glGetUniformLocation(m_Img3DPreviewShader, "u_Tex"), 0);
+    if (hasTex) {
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, m_Img3DPreviewTexture->GetID());
+    }
+
+    glBindVertexArray(m_Img3DPreviewVAO);
+    glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(m_Img3DPreviewIndices.size()), GL_UNSIGNED_INT, nullptr);
+    glBindVertexArray(0);
+    if (hasTex) glBindTexture(GL_TEXTURE_2D, 0);
+    glUseProgram(0);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<u32>(prevFBO));
+    if (m_Window) {
+        glViewport(0, 0, static_cast<GLsizei>(m_Window->GetWidth()), static_cast<GLsizei>(m_Window->GetHeight()));
+    }
     return true;
 }
 
@@ -7386,9 +7681,7 @@ void EditorUI::DrawImageTo3DPreviewCanvas(const ImVec2& size) {
     const ImVec2 p0 = ImGui::GetCursorScreenPos();
     const ImVec2 p1 = ImVec2(p0.x + avail.x, p0.y + avail.y);
 
-    // Dark gradient background
     dl->AddRectFilled(p0, p1, IM_COL32(16, 19, 26, 255), 6.0f);
-    dl->AddRectFilled(p0, ImVec2(p1.x, p0.y + avail.y * 0.5f), IM_COL32(22, 26, 35, 255), 6.0f);
     dl->AddRect(p0, p1, IM_COL32(60, 70, 90, 255), 6.0f, 0, 1.0f);
 
     if (!m_Img3DPreviewReady || m_Img3DPreviewVerts.empty() || m_Img3DPreviewIndices.empty()) {
@@ -7421,86 +7714,11 @@ void EditorUI::DrawImageTo3DPreviewCanvas(const ImVec2& size) {
         }
     }
 
-    const f32 DEG2RAD = 3.14159265f / 180.0f;
-    const f32 cy = std::cos(m_Img3DPreviewYaw * DEG2RAD);
-    const f32 sy = std::sin(m_Img3DPreviewYaw * DEG2RAD);
-    const f32 cx = std::cos(m_Img3DPreviewPitch * DEG2RAD);
-    const f32 sx = std::sin(m_Img3DPreviewPitch * DEG2RAD);
-
-    // Light from upper-right-front
-    Vec3 lightDir(0.4f, 0.7f, 0.5f);
-    f32 ll = std::sqrt(lightDir.x * lightDir.x + lightDir.y * lightDir.y + lightDir.z * lightDir.z);
-    if (ll > 0.0f) { lightDir.x /= ll; lightDir.y /= ll; lightDir.z /= ll; }
-
-    std::vector<ImVec2> projected(m_Img3DPreviewVerts.size());
-    std::vector<f32> depthBuf(m_Img3DPreviewVerts.size(), 0.0f);
-    const f32 scrScale = std::min(avail.x, avail.y) * 0.42f;
-    const ImVec2 screenCenter = ImVec2((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f);
-
-    for (size_t i = 0; i < m_Img3DPreviewVerts.size(); ++i) {
-        Vec3 v = m_Img3DPreviewVerts[i];
-        f32 xzX = v.x * cy - v.z * sy;
-        f32 xzZ = v.x * sy + v.z * cy;
-        f32 yzY = v.y * cx - xzZ * sx;
-        f32 yzZ = v.y * sx + xzZ * cx;
-        f32 z = yzZ + m_Img3DPreviewZoom;
-        if (z < 0.1f) z = 0.1f;
-        f32 inv = 1.0f / z;
-        projected[i] = ImVec2(screenCenter.x + (xzX * inv) * scrScale,
-                              screenCenter.y - (yzY * inv) * scrScale);
-        depthBuf[i] = z;
-    }
-
-    // Depth-sort triangles for painter's algorithm
-    struct TriSort { size_t idx; f32 z; };
-    size_t triCount = m_Img3DPreviewIndices.size() / 3;
-    std::vector<TriSort> triOrder(triCount);
-    for (size_t i = 0; i < triCount; ++i) {
-        u32 ia = m_Img3DPreviewIndices[i * 3];
-        u32 ib = m_Img3DPreviewIndices[i * 3 + 1];
-        u32 ic = m_Img3DPreviewIndices[i * 3 + 2];
-        triOrder[i].idx = i;
-        triOrder[i].z = (ia < depthBuf.size() && ib < depthBuf.size() && ic < depthBuf.size())
-            ? (depthBuf[ia] + depthBuf[ib] + depthBuf[ic]) / 3.0f : 999.0f;
-    }
-    std::sort(triOrder.begin(), triOrder.end(),
-              [](const TriSort& a, const TriSort& b) { return a.z > b.z; });
-
-    // Flat-shaded filled triangles
-    bool hasNorms = !m_Img3DPreviewNorms.empty() && m_Img3DPreviewNorms.size() == m_Img3DPreviewVerts.size();
-    for (const auto& tri : triOrder) {
-        size_t i3 = tri.idx * 3;
-        u32 ia = m_Img3DPreviewIndices[i3];
-        u32 ib = m_Img3DPreviewIndices[i3 + 1];
-        u32 ic = m_Img3DPreviewIndices[i3 + 2];
-        if (ia >= projected.size() || ib >= projected.size() || ic >= projected.size()) continue;
-
-        // Backface culling
-        ImVec2 ab(projected[ib].x - projected[ia].x, projected[ib].y - projected[ia].y);
-        ImVec2 ac(projected[ic].x - projected[ia].x, projected[ic].y - projected[ia].y);
-        if (ab.x * ac.y - ab.y * ac.x > 0.0f) continue;
-
-        f32 shade = 0.45f;
-        if (hasNorms) {
-            Vec3 avgN;
-            avgN.x = (m_Img3DPreviewNorms[ia].x + m_Img3DPreviewNorms[ib].x + m_Img3DPreviewNorms[ic].x) / 3.0f;
-            avgN.y = (m_Img3DPreviewNorms[ia].y + m_Img3DPreviewNorms[ib].y + m_Img3DPreviewNorms[ic].y) / 3.0f;
-            avgN.z = (m_Img3DPreviewNorms[ia].z + m_Img3DPreviewNorms[ib].z + m_Img3DPreviewNorms[ic].z) / 3.0f;
-            f32 nxzX = avgN.x * cy - avgN.z * sy;
-            f32 nxzZ = avgN.x * sy + avgN.z * cy;
-            f32 nyzY = avgN.y * cx - nxzZ * sx;
-            f32 nyzZ = avgN.y * sx + nxzZ * cx;
-            f32 nl = std::sqrt(nxzX * nxzX + nyzY * nyzY + nyzZ * nyzZ);
-            if (nl > 1e-6f) { nxzX /= nl; nyzY /= nl; nyzZ /= nl; }
-            shade = 0.2f + 0.8f * std::max(0.0f, nxzX * lightDir.x + nyzY * lightDir.y + nyzZ * lightDir.z);
-        }
-        shade = std::max(0.15f, std::min(1.0f, shade));
-
-        int r = std::min(255, static_cast<int>(90 * shade + 40));
-        int g = std::min(255, static_cast<int>(140 * shade + 50));
-        int b_c = std::min(255, static_cast<int>(200 * shade + 55));
-        dl->AddTriangleFilled(projected[ia], projected[ib], projected[ic], IM_COL32(r, g, b_c, 240));
-        dl->AddTriangle(projected[ia], projected[ib], projected[ic], IM_COL32(r / 2, g / 2, b_c / 2, 60), 0.5f);
+    bool rendered = RenderImageTo3DPreviewFBO(static_cast<u32>(std::max(1.0f, avail.x)),
+                                               static_cast<u32>(std::max(1.0f, avail.y)));
+    if (rendered && m_Img3DPreviewColor != 0) {
+        ImGui::SetCursorScreenPos(p0);
+        ImGui::Image(static_cast<ImTextureID>(m_Img3DPreviewColor), avail, ImVec2(0, 1), ImVec2(1, 0));
     }
 
     char hud[128];
@@ -7511,7 +7729,7 @@ void EditorUI::DrawImageTo3DPreviewCanvas(const ImVec2& size) {
     ImGui::EndChild();
 }
 
-void EditorUI::ExportImageTo3DOutputs() {
+void EditorUI::ExportImageTo3DOutputs(const std::string& format) {
     if (!m_Img3DLastResult.success) {
         m_Img3DStatusMsg = "Generate a model first before exporting.";
         return;
@@ -7535,44 +7753,26 @@ void EditorUI::ExportImageTo3DOutputs() {
     }
 #endif
 
-    auto fileNameFromPath = [](const std::string& p) -> std::string {
-        size_t slash = p.find_last_of("/\\");
-        return (slash == std::string::npos) ? p : p.substr(slash + 1);
-    };
+    std::string fmt = format;
+    if (fmt.empty()) fmt = "obj";
+    std::transform(fmt.begin(), fmt.end(), fmt.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
 
-    auto copyIfExists = [&](const std::string& srcPath) -> bool {
-        if (srcPath.empty()) return false;
-        std::ifstream in(srcPath.c_str(), std::ios::binary);
-        if (!in.good()) return false;
-        in.close();
-        std::string dstPath = outDir + "\\" + fileNameFromPath(srcPath);
-#ifdef _WIN32
-        return CopyFileA(srcPath.c_str(), dstPath.c_str(), FALSE) != 0;
-#else
-        std::ifstream src(srcPath.c_str(), std::ios::binary);
-        std::ofstream dst(dstPath.c_str(), std::ios::binary);
-        dst << src.rdbuf();
-        return src.good() && dst.good();
-#endif
-    };
+    ModelExportResult ex = m_ImageTo3D.ExportModel(
+        m_Img3DLastResult.objFilePath,
+        m_Img3DLastResult.textureFilePath,
+        fmt,
+        outDir
+    );
 
-    int copied = 0;
-    if (copyIfExists(m_Img3DLastResult.objFilePath)) copied++;
-    if (copyIfExists(m_Img3DLastResult.textureFilePath)) copied++;
-
-    std::string mtlPath = m_Img3DLastResult.objFilePath;
-    size_t dotPos = mtlPath.rfind('.');
-    if (dotPos != std::string::npos) {
-        mtlPath = mtlPath.substr(0, dotPos) + ".mtl";
-        if (copyIfExists(mtlPath)) copied++;
-    }
-
-    if (copied > 0) {
-        m_Img3DStatusMsg = "Exported " + std::to_string(copied) + " files to: " + outDir;
-        PushLog("[Image3D] Exported generated assets to " + outDir);
+    if (ex.success && !ex.exportPath.empty()) {
+        m_Img3DLastExportPath = ex.exportPath;
+        m_Img3DStatusMsg = "Exported " + fmt + " to: " + ex.exportPath;
+        PushLog("[Image3D] Exported " + fmt + " to " + ex.exportPath);
     } else {
-        m_Img3DStatusMsg = "Export failed: output files not found.";
-        PushLog("[Image3D] Export failed: source outputs were not found on disk.");
+        m_Img3DStatusMsg = "Export failed: " + (ex.errorMessage.empty() ? std::string("unknown error") : ex.errorMessage);
+        PushLog("[Image3D] Export failed: " + ex.errorMessage);
     }
 }
 
@@ -7832,19 +8032,33 @@ void EditorUI::DrawImageTo3DWorkspace() {
                 ImGui::PopStyleColor(2);
 
                 ImGui::SameLine();
-                const char* exportFormats[] = { "OBJ", "GLTF" };
+                const char* exportFormats[] = { "OBJ", "GLTF", "GLB" };
                 ImGui::SetNextItemWidth(85.0f);
-                ImGui::Combo("##Img3DExportFmt", &m_Img3DExportFormat, exportFormats, 2);
+                ImGui::Combo("##Img3DExportFmt", &m_Img3DExportFormat, exportFormats, 3);
                 ImGui::SameLine();
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.45f, 0.35f, 0.15f, 1.0f));
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.60f, 0.45f, 0.20f, 1.0f));
-                if (ImGui::Button(m_Img3DExportFormat == 0 ? "Export OBJ + Texture" : "Export GLTF", ImVec2(160, 30))) {
-                    if (m_Img3DExportFormat == 1) {
-                        m_Img3DStatusMsg = "GLTF export is not wired yet; exported OBJ + texture instead.";
-                    }
-                    ExportImageTo3DOutputs();
+                const char* exportBtnLabel = (m_Img3DExportFormat == 0) ? "Export OBJ + Texture"
+                                            : (m_Img3DExportFormat == 1) ? "Export GLTF"
+                                                                        : "Export GLB";
+                if (ImGui::Button(exportBtnLabel, ImVec2(160, 30))) {
+                    const char* fmt = (m_Img3DExportFormat == 0) ? "obj"
+                                    : (m_Img3DExportFormat == 1) ? "gltf"
+                                                                  : "glb";
+                    ExportImageTo3DOutputs(fmt);
                 }
                 ImGui::PopStyleColor(2);
+
+                if (!m_Img3DLastExportPath.empty()) {
+                    ImGui::SameLine();
+                    ImGui::Button("Drag to Viewport", ImVec2(120, 30));
+                    if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+                        ImGui::SetDragDropPayload("GV_ASSET_PATH", m_Img3DLastExportPath.c_str(), m_Img3DLastExportPath.size() + 1);
+                        ImGui::Text("Drop into viewport to import");
+                        ImGui::TextWrapped("%s", m_Img3DLastExportPath.c_str());
+                        ImGui::EndDragDropSource();
+                    }
+                }
 
                 ImGui::SameLine();
                 if (ImGui::Button("Re-generate", ImVec2(100, 30))) { StartImageTo3DGeneration(); }
@@ -7974,7 +8188,7 @@ void EditorUI::DrawImageTo3DPanel() {
             }
         }
         ImGui::PopStyleColor();
-        if (ImGui::Button("Export Outputs", ImVec2(-1, 24))) { ExportImageTo3DOutputs(); }
+        if (ImGui::Button("Export Outputs", ImVec2(-1, 24))) { ExportImageTo3DOutputs("obj"); }
     } else if (!m_Img3DLastResult.errorMessage.empty()) {
         ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "Last Error:");
         ImGui::TextWrapped("%s", m_Img3DLastResult.errorMessage.c_str());

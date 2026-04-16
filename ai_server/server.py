@@ -17,6 +17,7 @@ import json
 import time
 import uuid
 import argparse
+import shutil
 from pathlib import Path
 
 from flask import Flask, request, jsonify
@@ -147,6 +148,86 @@ def _prepare_work_image(image_path: str, data: dict) -> str:
             print(f"[Server] SAM pre-segmentation failed ({e}); falling back")
 
     return _crop_from_normalized_selection(image_path, data)
+
+
+def _export_model_file(obj_path: str, texture_path: str, export_format: str, output_dir: str = ""):
+    """Export generated OBJ model into requested format (obj/gltf/glb)."""
+    fmt = (export_format or "obj").strip().lower()
+    if fmt not in ("obj", "gltf", "glb"):
+        raise ValueError(f"Unsupported export format: {export_format}")
+
+    obj_path = os.path.normpath(obj_path)
+    if not os.path.exists(obj_path):
+        raise FileNotFoundError(f"OBJ not found: {obj_path}")
+
+    src_dir = os.path.dirname(obj_path)
+    stem = Path(obj_path).stem
+    dst_dir = os.path.normpath(output_dir) if output_dir else src_dir
+    os.makedirs(dst_dir, exist_ok=True)
+
+    if fmt == "obj":
+        exported = []
+        obj_out = os.path.join(dst_dir, f"{stem}.obj")
+        if os.path.normcase(obj_out) != os.path.normcase(obj_path):
+            shutil.copy2(obj_path, obj_out)
+        else:
+            obj_out = obj_path
+        exported.append(obj_out)
+
+        mtl_src = os.path.splitext(obj_path)[0] + ".mtl"
+        if os.path.exists(mtl_src):
+            mtl_out = os.path.join(dst_dir, os.path.basename(mtl_src))
+            if os.path.normcase(mtl_out) != os.path.normcase(mtl_src):
+                shutil.copy2(mtl_src, mtl_out)
+            else:
+                mtl_out = mtl_src
+            exported.append(mtl_out)
+
+        if texture_path and os.path.exists(texture_path):
+            tex_out = os.path.join(dst_dir, os.path.basename(texture_path))
+            if os.path.normcase(tex_out) != os.path.normcase(texture_path):
+                shutil.copy2(texture_path, tex_out)
+            else:
+                tex_out = texture_path
+            exported.append(tex_out)
+
+        return obj_out, exported
+
+    # GLTF/GLB conversion via trimesh scene export
+    import trimesh
+
+    loaded = trimesh.load(obj_path, force="scene", process=False)
+    scene = loaded if isinstance(loaded, trimesh.Scene) else trimesh.Scene(loaded)
+
+    out_path = os.path.join(dst_dir, f"{stem}.{fmt}")
+    if fmt == "glb":
+        glb_data = scene.export(file_type="glb")
+        with open(out_path, "wb") as f:
+            f.write(glb_data)
+        return out_path, [out_path]
+
+    # gltf export may create multiple files (json + bin + textures)
+    export_result = scene.export(file_type="gltf")
+    exported_paths = []
+    if isinstance(export_result, dict):
+        for rel_name, blob in export_result.items():
+            target = os.path.join(dst_dir, rel_name)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            mode = "wb"
+            with open(target, mode) as f:
+                f.write(blob)
+            exported_paths.append(target)
+        gltf_candidates = [p for p in exported_paths if p.lower().endswith(".gltf")]
+        primary = gltf_candidates[0] if gltf_candidates else (exported_paths[0] if exported_paths else "")
+        return primary, exported_paths
+
+    # Some trimesh versions may return text JSON for gltf.
+    with open(out_path, "w", encoding="utf-8") as f:
+        if isinstance(export_result, bytes):
+            f.write(export_result.decode("utf-8"))
+        else:
+            f.write(str(export_result))
+    return out_path, [out_path]
 
 
 # ── Segmentation Endpoints ───────────────────────────────────────────────────
@@ -574,6 +655,35 @@ def generate_from_path():
             "success": False,
             "error": result.get("error", "Generation failed"),
         }), 500
+
+
+@app.route("/export_model", methods=["POST"])
+def export_model():
+    """Export a generated OBJ model into obj/gltf/glb format."""
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"success": False, "error": "No JSON body provided"}), 400
+
+    obj_path = data.get("obj_path", "")
+    texture_path = data.get("texture_path", "")
+    export_format = data.get("format", "obj")
+    output_dir = data.get("output_dir", "")
+
+    if not obj_path:
+        return jsonify({"success": False, "error": "obj_path is required"}), 400
+
+    try:
+        primary_path, exported_paths = _export_model_file(obj_path, texture_path, export_format, output_dir)
+        return jsonify({
+            "success": True,
+            "format": export_format.lower(),
+            "export_path": primary_path,
+            "files": exported_paths,
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
