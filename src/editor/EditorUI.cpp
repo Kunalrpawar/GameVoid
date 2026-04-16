@@ -7832,9 +7832,18 @@ void EditorUI::DrawImageTo3DWorkspace() {
                 ImGui::PopStyleColor(2);
 
                 ImGui::SameLine();
+                const char* exportFormats[] = { "OBJ", "GLTF" };
+                ImGui::SetNextItemWidth(85.0f);
+                ImGui::Combo("##Img3DExportFmt", &m_Img3DExportFormat, exportFormats, 2);
+                ImGui::SameLine();
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.45f, 0.35f, 0.15f, 1.0f));
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.60f, 0.45f, 0.20f, 1.0f));
-                if (ImGui::Button("Export OBJ + Texture", ImVec2(160, 30))) { ExportImageTo3DOutputs(); }
+                if (ImGui::Button(m_Img3DExportFormat == 0 ? "Export OBJ + Texture" : "Export GLTF", ImVec2(160, 30))) {
+                    if (m_Img3DExportFormat == 1) {
+                        m_Img3DStatusMsg = "GLTF export is not wired yet; exported OBJ + texture instead.";
+                    }
+                    ExportImageTo3DOutputs();
+                }
                 ImGui::PopStyleColor(2);
 
                 ImGui::SameLine();

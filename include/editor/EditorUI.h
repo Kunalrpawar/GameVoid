@@ -491,6 +491,7 @@ private:
     std::string m_Img3DLastObjPath;         // last generated OBJ path
     std::string m_Img3DLastTexPath;         // last generated texture path
     i32  m_Img3DMethod          = 0;        // 0=Auto, 1=TripoSR, 2=MiDaS
+    i32  m_Img3DExportFormat    = 0;        // 0=OBJ, 1=GLTF (OBJ fallback for now)
     ImageTo3DRequest m_Img3DReq;            // stored request
     ImageTo3DResult m_Img3DLastResult;      // last generation result
     Shared<Texture> m_Img3DSourceTexture;   // preview texture for selected source image
