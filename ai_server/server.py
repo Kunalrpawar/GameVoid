@@ -230,6 +230,34 @@ def _export_model_file(obj_path: str, texture_path: str, export_format: str, out
     return out_path, [out_path]
 
 
+def _export_backend_status() -> dict:
+    """Return lightweight backend availability for export formats."""
+    status = {
+        "obj": {"available": True, "error": ""},
+        "gltf": {"available": True, "error": ""},
+        "glb": {"available": True, "error": ""},
+    }
+
+    try:
+        import trimesh  # noqa: F401
+    except Exception as e:
+        msg = f"trimesh unavailable: {e}"
+        status["gltf"] = {"available": False, "error": msg}
+        status["glb"] = {"available": False, "error": msg}
+        return status
+
+    # Optional helper package; report but do not hard-fail if absent.
+    try:
+        import pygltflib  # noqa: F401
+    except Exception as e:
+        if status["gltf"]["available"]:
+            status["gltf"]["error"] = f"pygltflib missing (optional): {e}"
+        if status["glb"]["available"]:
+            status["glb"]["error"] = f"pygltflib missing (optional): {e}"
+
+    return status
+
+
 # ── Segmentation Endpoints ───────────────────────────────────────────────────
 
 
@@ -351,6 +379,7 @@ def segment_preview():
 def health():
     """Health check — returns server status and capabilities."""
     api_key = _load_api_key()
+    export_status = _export_backend_status()
     return jsonify({
         "status": "ok",
         "version": "1.0.0",
@@ -359,7 +388,11 @@ def health():
             "analyze": bool(api_key),
             "generate_triposr": True,
             "generate_midas": True,
+            "export_obj": export_status["obj"]["available"],
+            "export_gltf": export_status["gltf"]["available"],
+            "export_glb": export_status["glb"]["available"],
         },
+        "export_status": export_status,
         "output_dir": OUTPUT_DIR,
         "api_key_configured": bool(api_key),
     })
@@ -684,6 +717,69 @@ def export_model():
         import traceback
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/export_self_test", methods=["GET"])
+def export_self_test():
+    """Run a quick export capability self-test for obj/gltf/glb.
+
+    The test writes a tiny temporary triangle OBJ in uploads/ and attempts
+    conversion/export across all supported formats.
+    """
+    test_root = os.path.join(UPLOAD_DIR, f"export_test_{uuid.uuid4().hex[:8]}")
+    os.makedirs(test_root, exist_ok=True)
+
+    obj_path = os.path.join(test_root, "probe.obj")
+    mtl_path = os.path.join(test_root, "probe.mtl")
+
+    # Minimal valid textured triangle OBJ/MTL.
+    with open(mtl_path, "w", encoding="utf-8") as f:
+        f.write("newmtl probe_material\n")
+        f.write("Ka 1.0 1.0 1.0\n")
+        f.write("Kd 1.0 1.0 1.0\n")
+        f.write("Ks 0.0 0.0 0.0\n")
+        f.write("Ns 1.0\n")
+
+    with open(obj_path, "w", encoding="utf-8") as f:
+        f.write("mtllib probe.mtl\n")
+        f.write("usemtl probe_material\n")
+        f.write("v 0.0 0.0 0.0\n")
+        f.write("v 1.0 0.0 0.0\n")
+        f.write("v 0.0 1.0 0.0\n")
+        f.write("vt 0.0 0.0\n")
+        f.write("vt 1.0 0.0\n")
+        f.write("vt 0.0 1.0\n")
+        f.write("vn 0.0 0.0 1.0\n")
+        f.write("f 1/1/1 2/2/1 3/3/1\n")
+
+    results = {}
+    all_ok = True
+    for fmt in ("obj", "gltf", "glb"):
+        try:
+            out_path, files = _export_model_file(obj_path, "", fmt, test_root)
+            exists = bool(out_path) and os.path.exists(out_path)
+            ok = exists and len(files) > 0
+            results[fmt] = {
+                "ok": ok,
+                "export_path": out_path,
+                "files": files,
+                "error": "",
+            }
+            all_ok = all_ok and ok
+        except Exception as e:
+            results[fmt] = {
+                "ok": False,
+                "export_path": "",
+                "files": [],
+                "error": str(e),
+            }
+            all_ok = False
+
+    return jsonify({
+        "success": all_ok,
+        "test_dir": test_root,
+        "results": results,
+    })
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────

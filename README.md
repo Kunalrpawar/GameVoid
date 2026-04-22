@@ -127,6 +127,14 @@ You can also configure your API key from inside the editor via the **AI** menu.
 | `--height <H>` | Window height (default: 720) |
 | `--help` / `-h` | Show help |
 
+### AI Server Export Diagnostics
+
+When the AI server is running (`ai_server/server.py`), you can verify model export readiness without generating a full model:
+
+- `GET /health` now includes `capabilities.export_obj`, `capabilities.export_gltf`, `capabilities.export_glb` and detailed `export_status`.
+- `GET /export_self_test` runs a tiny built-in OBJ->OBJ/GLTF/GLB probe and returns per-format pass/fail with output paths.
+- `POST /export_model` exports an existing generated OBJ to `obj`, `gltf`, or `glb`.
+
 ---
 
 ## Editor Shortcuts
