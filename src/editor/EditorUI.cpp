@@ -376,6 +376,26 @@ void EditorUI::Close3DPlayWindow() {
     m_PlayInputTurn3D = 0.0f;
 }
 
+void EditorUI::SyncPlayCameraToEditorView() {
+    if (!m_Scene) return;
+
+    Camera* cam = m_Scene->GetActiveCamera();
+    if (!cam) {
+        if (auto* mainCamObj = m_Scene->FindByName("MainCamera")) {
+            cam = mainCamObj->GetComponent<Camera>();
+            if (cam) m_Scene->SetActiveCamera(cam);
+        }
+    }
+
+    if (!cam || !cam->GetOwner()) {
+        PushLog("[Editor] No active camera found to sync play view.");
+        return;
+    }
+
+    m_EditorCam.ApplyToTransform(cam->GetOwner()->GetTransform());
+    PushLog("[Editor] Play camera synced to current view.");
+}
+
 // ── Main Render ────────────────────────────────────────────────────────────
 
 void EditorUI::Render(f32 dt) {
@@ -902,6 +922,17 @@ void EditorUI::DrawToolbar() {
     ImGui::SameLine(); ImGui::Separator(); ImGui::SameLine();
 
     if (!m_Playing) {
+        if (ImGui::Button("Play From View")) {
+            SyncPlayCameraToEditorView();
+            m_Playing = true;
+            Ensure3DPlayWindow();
+            PushLog("[Editor] Play mode from current view.");
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Copy the current editor camera into the active play camera, then start playing.");
+        }
+
+        ImGui::SameLine();
         if (ImGui::Button("  Play  ")) {
             m_Playing = true;
             Ensure3DPlayWindow();

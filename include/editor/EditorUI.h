@@ -157,6 +157,7 @@ private:
     void DrawGridSnapSettings();       // grid & snap settings popup
     void DrawImportAssetDialog();      // native file dialog to import models/textures/audio
     void DrawBuildPanel();             // game build/export configuration panel
+    void SyncPlayCameraToEditorView();  // copy current editor view into the active play camera
 
     // ── Inspector sub-sections ─────────────────────────────────────────────
     void DrawInspectorMaterial();       // Material component editor in inspector
